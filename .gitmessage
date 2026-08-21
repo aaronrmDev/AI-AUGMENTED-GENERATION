@@ -1,0 +1,17 @@
+# <type>(<scope>): <subject>  (max 72 chars, imperative mood, no trailing period)
+#
+# <body>
+# Explain WHAT changed and WHY, not how — the diff already shows how.
+# Wrap at 72 chars. Leave a blank line between subject and body.
+#
+# <footer>
+# Reference issues/ADRs if relevant, e.g. "Refs ADR-0003" or "Closes #12".
+#
+# --- Conventional Commit types (from CLAUDE.md) ---
+# feat:     a new feature
+# fix:      a bug fix
+# docs:     documentation only changes
+# test:     adding or correcting tests
+# refactor: code change that neither fixes a bug nor adds a feature
+# perf:     a performance improvement
+# chore:    tooling, dependencies, or maintenance
