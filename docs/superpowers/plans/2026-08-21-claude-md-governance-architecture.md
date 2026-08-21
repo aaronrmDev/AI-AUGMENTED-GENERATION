@@ -759,6 +759,97 @@ If no fixes were needed, skip this step — there's nothing to commit.
 
 ---
 
+## Phase D — Git Workflow Extensions (added mid-execution; see ledger ruling)
+
+Added after the original 20-task plan was already mid-execution, per an explicit request from the repo owner (AFK, granted full execution authority) to add "full Atlassian Gitflow practices" and "intelligent rebase capabilities." Neither term was given further definition. The controller's interpretation of both, and the reasoning for choosing a conservative, reviewable scope over guessing at unsupervised automation, is recorded in the SDD ledger (`.superpowers/sdd/2026-08-21-claude-md-governance-architecture/progress.md`) as a ruling. These two tasks run after Task 20's verification pass, using the same implementer → review → fix-loop process as every other task in this plan.
+
+### Task 21: Write the Gitflow branch-workflow doc
+
+**Files:**
+- Create: `docs/governance/GIT_WORKFLOW.md`
+- Modify: `CLAUDE.md` (the git-native directive currently states a simple branch-naming convention and squash-merge-to-main rule — point it at this new doc instead of restating the rule inline)
+- Modify: `docs/README.md` (add the new doc to the governance group, same markdown-link format as the other entries)
+- Read: `docs/governance/WRITING_STANDARDS.md` (follow it)
+- Read: `CLAUDE.md` (current git-native section, to know exactly what's being extended)
+
+**Interfaces:**
+- Produces: `docs/governance/GIT_WORKFLOW.md`; updates `CLAUDE.md`'s doc map and `docs/README.md` to reference it (the same pattern Task 19 already established for adding a doc-map entry after the fact).
+
+- [ ] **Step 1: Read the current git-native rule and the writing standard**
+
+Read `CLAUDE.md`'s git-native directive (conventional commits, branch naming `feat/123-short-desc` etc., squash-merge to main) and `docs/governance/WRITING_STANDARDS.md`.
+
+- [ ] **Step 2: Write the document**
+
+Cover, as connected prose following the writing standard:
+
+- The full Atlassian Gitflow branch model: `main` (always production-ready), `develop` (integration branch where finished features accumulate), `feature/*` branches (cut from `develop`, merged back into `develop` when done), `release/*` branches (cut from `develop` when preparing a production release, used for final stabilization and version tagging, merged into both `main` and back into `develop`), and `hotfix/*` branches (cut from `main` for urgent production fixes, merged into both `main` and `develop`) — explain the lifecycle and purpose of each branch type, not just list them.
+- Explicitly reconcile this model with the project's existing squash-merge-to-main convention: state, as a deliberate ruling, that `feature/*` branches squash-merge into `develop` (keeping `develop`'s history clean, consistent with the existing convention), while `release/*` and `hotfix/*` branches merge into `main` and `develop` with real merge commits (not squashed), because Gitflow's branch-history guarantees — being able to trace which release a hotfix landed in, keeping `main`'s tag history meaningful — depend on those merge commits existing. Say plainly that this is a synthesis of the existing convention and the Gitflow model, not something Atlassian's documentation or this project's prior rules independently already stated.
+- How this applies to the current repo state: today there is only `main` (one branch, pre-code) — explain that `develop` gets created as part of adopting this model, and that until real feature work begins, this doc describes the target workflow rather than a currently-populated branch set (flag this per the citation-discipline rule — "design intent, not yet verified" — consistent with how other governance docs in this repo handle forward-looking content).
+- Versioning and tagging: releases are tagged on `main` at the point a `release/*` branch merges in, using semantic versioning.
+- How this interacts with commit and PR conventions already established elsewhere in this repo (`.gitmessage`, the PR template) — point to them rather than restating.
+
+- [ ] **Step 3: Verify no placeholder text remains and the squash-vs-merge reconciliation is stated explicitly as a ruling, not asserted as an unremarked fact**
+
+- [ ] **Step 4: Update CLAUDE.md's doc map and docs/README.md**
+
+Add a markdown-link line for `docs/governance/GIT_WORKFLOW.md` to both, matching the existing format. Update CLAUDE.md's git-native directive to point to this doc instead of restating the branch-naming rule inline.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add docs/governance/GIT_WORKFLOW.md CLAUDE.md docs/README.md
+git commit -m "docs: add Gitflow branch-workflow doc, reconciled with existing squash-merge convention"
+```
+
+---
+
+### Task 22: Build the intelligent-rebase skill and its contract
+
+**Files:**
+- Create: `docs/governance/INTELLIGENT_REBASE.md` (contract doc, structured the same way Task 5's `AUTOLEARNING.md` is — what it does, when it runs, what it never does)
+- Create: `.claude/skills/smart-rebase/SKILL.md` (and any supporting files `skill-creator` generates)
+- Modify: `docs/governance/SKILL_ROUTING.md` (add a routing rule: rebasing a feature/release/hotfix branch onto its target routes to this skill)
+- Modify: `docs/README.md` (add the new contract doc to the governance group)
+- Read: `docs/governance/AUTOLEARNING.md` (the closest existing precedent for this doc's shape and for the human-approval-gate framing)
+- Read: `docs/governance/GIT_WORKFLOW.md` (Task 21 — this skill operates within that branch model; must reference it accurately)
+
+**Interfaces:**
+- Consumes: the branch model from Task 21's `GIT_WORKFLOW.md` (must describe rebasing in terms of that model — e.g. rebasing a `feature/*` branch onto `develop` — not a generic/hypothetical branch setup).
+- Produces: `docs/governance/INTELLIGENT_REBASE.md`, which Step 2 below must implement faithfully; a working project-level skill invocable as `smart-rebase`.
+
+- [ ] **Step 1: Read the precedent and the branch model**
+
+Read `docs/governance/AUTOLEARNING.md` and `docs/governance/GIT_WORKFLOW.md` in full.
+
+- [ ] **Step 2: Write the contract document**
+
+Cover, as connected prose following the writing standard:
+
+- What "intelligent" means here concretely: when a branch has diverged from its rebase target (a `feature/*` branch from `develop`, a `release/*` or `hotfix/*` branch from `main`) and conflicts exist, the skill reads both sides of each conflicting hunk, reasons about what each side was trying to accomplish, and proposes a resolution with its reasoning — rather than leaving raw conflict markers for a human to puzzle through unaided.
+- What it never does, stated as plainly and emphatically as `AUTOLEARNING.md` states its own hard constraint: it never force-pushes, never finalizes a rebase, never rewrites branch history that's already been pushed/shared, without the human explicitly reviewing and approving each proposed resolution first. Explain why this matters here specifically — rebasing rewrites commit history, which is exactly the kind of hard-to-reverse action that justifies a stricter gate than, say, proposing a documentation edit.
+- What it does when it's NOT confident in a resolution: it says so and escalates to the human rather than guessing — a wrong conflict resolution is worse than no resolution.
+- When it's invoked: on-demand, when a feature/release/hotfix branch (per `GIT_WORKFLOW.md`'s model) needs to be brought up to date with its target branch.
+
+- [ ] **Step 3: Verify no placeholder text remains and the hard human-approval constraint is unambiguous**
+
+- [ ] **Step 4: Invoke skill-creator**
+
+Invoke the `skill-creator` skill (via the Skill tool) to create a new project-level skill named `smart-rebase`, implementing the contract from Step 2. Confirm it installs as a project skill under `.claude/skills/`, not a personal skill.
+
+- [ ] **Step 5: Update docs/governance/SKILL_ROUTING.md and docs/README.md**
+
+Add a routing rule to `SKILL_ROUTING.md`: rebasing work routes to `smart-rebase`, following the same pattern as the other routing rules (what it's for, why routing beats freehanding a rebase). Add a markdown-link line for `INTELLIGENT_REBASE.md` to `docs/README.md`'s governance group.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add docs/governance/INTELLIGENT_REBASE.md .claude/skills/smart-rebase/ docs/governance/SKILL_ROUTING.md docs/README.md
+git commit -m "feat: add smart-rebase skill and its human-approval-gated contract"
+```
+
+---
+
 ## Summary
 
-20 tasks across 3 phases: Phase A (Tasks 1-11) builds the governance structure sequentially since later pieces depend on earlier ones existing. Phase B (Tasks 12-15) restores technical depth into four independent, parallelizable documents. Phase C (Tasks 16-20) assembles the final pointer structure and verifies it end-to-end.
+22 tasks across 4 phases: Phase A (Tasks 1-11) builds the governance structure sequentially since later pieces depend on earlier ones existing. Phase B (Tasks 12-15) restores technical depth into four independent, parallelizable documents. Phase C (Tasks 16-20) assembles the final pointer structure and verifies it end-to-end. Phase D (Tasks 21-22), added mid-execution per the ledger's ruling, documents a full Gitflow branch model and builds a human-approval-gated skill for assisted rebasing.
