@@ -46,7 +46,7 @@ Domain → Bounded Context → Module → Class → Test File is meant to be map
 
 ### Git-native workflow
 
-Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `chore:`) using the template at [.gitmessage](.gitmessage); branches follow `feat/123-short-desc` / `fix/456-bug-desc` naming; git history is the audit trail for every epic, task, and decision. That last part only holds if a commit message is written to be read later, not just to satisfy a hook.
+Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `chore:`) using the template at [.gitmessage](.gitmessage), and git history is meant to be the audit trail for every epic, task, and decision — which only holds if a commit message is written to be read later, not just to satisfy a hook. Day-to-day branch naming (`feat/123-short-desc`, `fix/456-bug-desc`) sits inside a fuller Gitflow branch model — `main`, `develop`, `feature/*`, `release/*`, `hotfix/*` — adopted alongside this project's existing squash-merge-to-main convention rather than in place of it; the full branch lifecycle, the ruling that reconciles Gitflow's merge-commit convention with squash-merging, and what any of it means while this repository is still pre-code are in [docs/governance/GIT_WORKFLOW.md](docs/governance/GIT_WORKFLOW.md).
 
 ### The AI protocol
 
@@ -107,6 +107,7 @@ One line per file under `docs/`, grouped the same way [docs/README.md](docs/READ
 - [docs/governance/TOKEN_ECONOMY.md](docs/governance/TOKEN_ECONOMY.md) — the context-budget policy summarized above.
 - [docs/governance/SKILL_ROUTING.md](docs/governance/SKILL_ROUTING.md) — the full skill-routing table summarized above.
 - [docs/governance/AUTOLEARNING.md](docs/governance/AUTOLEARNING.md) — the `claude-md-sync` contract summarized above.
+- [docs/governance/GIT_WORKFLOW.md](docs/governance/GIT_WORKFLOW.md) — the Gitflow branch model (main/develop/feature/release/hotfix) and how it reconciles with this project's squash-merge-to-main convention.
 
 ### inputs/concepts/
 
