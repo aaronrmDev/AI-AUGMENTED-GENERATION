@@ -1,7 +1,7 @@
 ---
 name: claude-md-sync
 description: Checks whether CLAUDE.md and the docs/ tree have drifted out of sync with what the repository actually contains, by comparing their current claims against git history since the last time either was touched. Use this whenever a user asks to check CLAUDE.md for staleness, sync the docs, verify the documentation still matches reality, or audit the doc map/ADRs/routing rules against recent commits. Also invoke it proactively, on your own judgment and without being asked, immediately after finishing any significant piece of work in this repository — standing up a new module or package, changing an architectural decision, reversing or superseding an ADR, or adding a new document the doc map doesn't yet account for — so that any claim CLAUDE.md or a linked doc makes about that area doesn't go unverified. Do not invoke it for trivial changes (typo fixes, formatting, one-line clarifications) that don't move the ground any doc is standing on. This skill is strictly read-only: it never edits CLAUDE.md, never edits anything under docs/, and never commits — it only produces a numbered list of proposed edits, each with a file, a claim, evidence, and a fix, for a human to review and apply by hand.
-allowed-tools: Read, Grep, Glob, Bash(git log:*), Bash(git show:*), Bash(git diff:*), Bash(git status:*), Bash(git ls-files:*), Bash(git ls-tree:*), Bash(git rev-parse:*), Bash(git blame:*), Bash(bash .claude/skills/claude-md-sync/scripts/find-sync-point.sh:*)
+allowed-tools: Read, Grep, Glob, Bash(git ls-files:*), Bash(bash .claude/skills/claude-md-sync/scripts/find-sync-point.sh:*), Bash(bash .claude/skills/claude-md-sync/scripts/show-commit.sh:*)
 ---
 
 # claude-md-sync
@@ -29,16 +29,27 @@ just accumulates because nothing is watching for it. This skill is that watch.
   skill's `allowed-tools`, so this session cannot invoke them even if it wanted to.
 - Never run a state-changing git command: no `git add`, `git commit`, `git push`,
   `git checkout` (write form), `git stash`, or anything else that changes the working tree,
-  the index, or repo history. This is enforced at the tool-permission layer, not just in
-  prose: `allowed-tools` in this skill's frontmatter scopes `Bash` to eight specific
-  read-only git subcommands (`git log`, `git show`, `git diff`, `git status`,
-  `git ls-files`, `git ls-tree`, `git rev-parse`, `git blame`) plus one exact invocation of
-  the bundled helper script — nothing else is permitted to run, so a stray `git commit` or
-  `sed -i CLAUDE.md` isn't just discouraged, it's outside what this skill's session is
-  allowed to execute at all. Don't try to route around that by inventing a Bash command
-  that isn't one of those eight subcommands (there is no legitimate reason to need one for
-  this skill's job) — if the job seems to need something outside that list, that's a sign
-  to stop and report the limitation rather than to broaden what you reach for.
+  the index, or repo history. This skill's `allowed-tools` grants exactly three things:
+  `git ls-files` (unscoped arguments — it hard-errors on anything resembling a write flag,
+  confirmed empirically, not assumed), and two bundled scripts,
+  `find-sync-point.sh` and `show-commit.sh`, invoked as exact commands. **Deliberately
+  absent: any open-ended `git log`, `git show`, `git diff`, or `git blame` grant.** All four
+  of those accept an `--output=<file>` flag that redirects their output to overwrite an
+  arbitrary file — `git blame --output=<file>` even truncates the target file to zero bytes
+  with no error — and a wildcard grant like `Bash(git show:*)` cannot exclude that flag; the
+  trailing `*` lets it through no matter what else is intended. (This was tested and
+  confirmed against this exact repo, not theorized — see the fix history in this skill's
+  git log if you want the receipts.) That's why every place this skill needs to look at a
+  specific commit routes through `show-commit.sh` instead: the script validates its
+  argument as a bare hex commit hash *before* it ever builds a git command line, so
+  `--output=...` (or any other flag) can't reach git regardless of what text follows the
+  script's path in the Bash permission grant — the enforcement point is the script's own
+  validation, not the permission wildcard. Don't invent a raw `git log`/`git show`/`git
+  diff`/`git blame` call to route around this, and don't loosen either script's input
+  validation to make an edge case more convenient — both defeat the reason this shape
+  exists. If the job seems to need something the two scripts and `git ls-files` don't
+  cover, that's a sign to stop and report the limitation, not to reach for an unscoped git
+  command.
 - Never hand off the writing step to something else that could do it unsupervised (another
   skill, a subagent, a background task). The output of this skill is always a list handed
   back to the human running this session — not an action taken on their behalf.
@@ -89,9 +100,18 @@ bash .claude/skills/claude-md-sync/scripts/find-sync-point.sh
 
 It prints the sync-point commit, the full list of commits since it (oldest first), and a
 diffstat of everything that changed. For any commit in that list whose subject or file list
-suggests it might contradict something CLAUDE.md or a doc claims, follow up with
-`git show <hash>` or `git show <hash> -- <path>` to read the actual change — the diffstat
-alone tells you *that* something changed, not *what* it now says.
+suggests it might contradict something CLAUDE.md or a doc claims, follow up with the other
+bundled script to read the actual change — the diffstat alone tells you *that* something
+changed, not *what* it now says:
+
+```bash
+bash .claude/skills/claude-md-sync/scripts/show-commit.sh <hash>
+bash .claude/skills/claude-md-sync/scripts/show-commit.sh <hash> <path>   # scoped to one file
+```
+
+Use this script, not a raw `git show` — see the hard-constraint section above for why a raw
+`git show` isn't available here at all. Pass the hash exactly as `find-sync-point.sh` printed
+it; the script rejects anything that isn't a bare hex commit hash.
 
 For steps 3 and 4, read `CLAUDE.md` directly and use `Glob`/`Read` to see the current
 `docs/` tree — don't rely on memory of what either looked like earlier in the session, and
