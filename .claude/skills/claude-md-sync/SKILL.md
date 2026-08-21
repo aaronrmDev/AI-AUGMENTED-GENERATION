@@ -1,7 +1,7 @@
 ---
 name: claude-md-sync
 description: Checks whether CLAUDE.md and the docs/ tree have drifted out of sync with what the repository actually contains, by comparing their current claims against git history since the last time either was touched. Use this whenever a user asks to check CLAUDE.md for staleness, sync the docs, verify the documentation still matches reality, or audit the doc map/ADRs/routing rules against recent commits. Also invoke it proactively, on your own judgment and without being asked, immediately after finishing any significant piece of work in this repository — standing up a new module or package, changing an architectural decision, reversing or superseding an ADR, or adding a new document the doc map doesn't yet account for — so that any claim CLAUDE.md or a linked doc makes about that area doesn't go unverified. Do not invoke it for trivial changes (typo fixes, formatting, one-line clarifications) that don't move the ground any doc is standing on. This skill is strictly read-only: it never edits CLAUDE.md, never edits anything under docs/, and never commits — it only produces a numbered list of proposed edits, each with a file, a claim, evidence, and a fix, for a human to review and apply by hand.
-allowed-tools: Read, Grep, Glob, Bash
+allowed-tools: Read, Grep, Glob, Bash(git log:*), Bash(git show:*), Bash(git diff:*), Bash(git status:*), Bash(git ls-files:*), Bash(git ls-tree:*), Bash(git rev-parse:*), Bash(git blame:*), Bash(bash .claude/skills/claude-md-sync/scripts/find-sync-point.sh:*)
 ---
 
 # claude-md-sync
@@ -26,14 +26,19 @@ just accumulates because nothing is watching for it. This skill is that watch.
 
 - Never use `Edit`, `Write`, or `NotebookEdit` on `CLAUDE.md` or on anything under `docs/`
   (or anywhere else) as part of this skill. Those tools are deliberately absent from this
-  skill's `allowed-tools`, but do not route around that through Bash either
-  (e.g. `sed -i`, heredoc redirection, `>` truncation) — the restriction is about the
-  outcome, not the tool name.
+  skill's `allowed-tools`, so this session cannot invoke them even if it wanted to.
 - Never run a state-changing git command: no `git add`, `git commit`, `git push`,
   `git checkout` (write form), `git stash`, or anything else that changes the working tree,
-  the index, or repo history. Only read-only git commands are in scope:
-  `git log`, `git show`, `git diff`, `git status`, `git ls-files`, `git ls-tree`,
-  `git rev-parse`, `git blame`.
+  the index, or repo history. This is enforced at the tool-permission layer, not just in
+  prose: `allowed-tools` in this skill's frontmatter scopes `Bash` to eight specific
+  read-only git subcommands (`git log`, `git show`, `git diff`, `git status`,
+  `git ls-files`, `git ls-tree`, `git rev-parse`, `git blame`) plus one exact invocation of
+  the bundled helper script — nothing else is permitted to run, so a stray `git commit` or
+  `sed -i CLAUDE.md` isn't just discouraged, it's outside what this skill's session is
+  allowed to execute at all. Don't try to route around that by inventing a Bash command
+  that isn't one of those eight subcommands (there is no legitimate reason to need one for
+  this skill's job) — if the job seems to need something outside that list, that's a sign
+  to stop and report the limitation rather than to broaden what you reach for.
 - Never hand off the writing step to something else that could do it unsupervised (another
   skill, a subagent, a background task). The output of this skill is always a list handed
   back to the human running this session — not an action taken on their behalf.
