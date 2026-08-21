@@ -1,0 +1,46 @@
+# Writing Standards
+
+This document sets the bar every other file under `docs/` — and `CLAUDE.md` itself — has to clear. The repo owner asked for documentation that is fully humanized and pedagogically sound for anyone who opens it, documentation where a reader can work out what a thing is, who it's for, why it exists, when it applies, where it lives, how it works, and what it costs without ever being handed a labeled checklist that walks through those categories one by one. That request is easy to agree with and hard to check against, which is exactly why this document exists: to turn it into something a writer can follow and a reviewer can verify, rather than a vibe everyone nods at and no one can pin down. What follows is itself written under the rule it describes, so if a paragraph below reads as stiff or checklist-shaped, that is a bug in this document, not a demonstration of the standard.
+
+## Write so the reader has to read, not scan
+
+Every section that describes a real thing — a feature, a component, an architectural decision — carries seven questions inside it whether or not anyone labels them: what the thing is, who it serves or owns it, why it exists, when or under what conditions it applies, where it lives in the system, how it actually works, and how much it costs in latency, effort, or resources. The rule is that a reader has to be able to answer all seven by reading the paragraph once, the way they'd follow an explanation from a colleague who actually understands the system — not by scanning down a list of bolded field names looking for the one they need. If a paragraph can be fully understood by skimming its labels and ignoring the sentences between them, the sentences aren't doing any work, and the paragraph isn't finished.
+
+This is a stricter bar than it sounds, because the checklist format is seductive: it's fast to write, it never leaves out a category, and it looks thorough. It's also exactly what produces documentation nobody reads twice — a form to fill in rather than an explanation to understand. The fix is not to memorize seven bullet points and narrate them in sentence form (that's still a checklist, just with the labels sanded off); it's to explain the thing the way you'd actually explain it to someone, letting the answers to those seven questions fall out of the explanation because they're the parts that matter to understanding it.
+
+### A worked example
+
+Here is the same fact about this project — how CAG's prefix caching works — written twice. First, the labeled-checklist way this standard forbids:
+
+> **Prefix Caching**
+> - **What:** Reuses previously computed KV-cache tensors for a request's shared prefix instead of recomputing them.
+> - **Who:** Used by the CAG layer's serving engine (vLLM).
+> - **Why:** Recomputing the prefill for an identical prefix on every request wastes GPU compute.
+> - **When:** Applies whenever two or more requests share an identical leading sequence of tokens — for example, the same system prompt.
+> - **Where:** Implemented via vLLM's PagedAttention block manager.
+> - **How:** The KV tensors for the prefix are computed and stored once; later requests with the same prefix skip prefill and append only their new tokens.
+> - **How much:** Time-to-first-token drops sharply on a cache hit, since prefill — typically the most expensive step — is skipped entirely.
+
+Now the same content, rewritten as connected prose:
+
+> Many requests hitting this system share a prefix — the same system prompt, the same few-shot examples, the same RAG documents — and recomputing the KV cache for that shared prefix on every single request is pure waste, the model-serving equivalent of re-reading a tool's instructions from scratch each time it's called. Prefix caching, implemented through vLLM's PagedAttention block manager, is how the CAG layer avoids that: the first request with a given prefix runs the full prefill and its KV tensors get stored; every later request that starts with the identical token sequence skips prefill entirely and appends only its new tokens onto the cached block. Because prefill is typically the most expensive part of serving a request, the payoff lands exactly where a user would notice it — time-to-first-token drops sharply on a cache hit (`docs/inputs/concepts/advanced_cag_concepts.md`, Concept 3) — which is why prefix caching is treated as the highest-ROI optimization in the CAG layer, and why this system's static, pre-loaded context is deliberately shaped to maximize how often requests actually share a prefix.
+
+Both versions contain the same seven answers — what it is, that vLLM's block manager owns it, why it exists, when it triggers, where it lives, how it operates, and what it buys in latency — but only the second one is written for a person. The first can be produced by anyone who has the facts and a template; the second requires actually understanding how the pieces connect to each other, which is the entire point of documentation like this existing at all. When you write a section for this repo, write the second kind, then check it against the seven questions as a private test — never present the checklist itself.
+
+## Tables and bullets: a tool, not a default
+
+None of this bans tables or bullet lists outright — it bans using them as a substitute for explanation. A table earns its place when the content is genuinely tabular: version numbers and their purposes, a schema's field names and types, a side-by-side comparison where the whole value is in scanning a column, an environment-variable reference. In those cases prose would actively hurt readability by forcing a reader to hold rows of unrelated facts in their head as one continuous sentence, so the table stays a table.
+
+The crutch case is different: reaching for a table or a bullet list to explain how something works, why a decision was made, or what tradeoff it carries. That content has internal logic — this happens, which causes that, which is why the alternative was rejected — and logic like that lives in prose, where cause and effect can actually be connected with words like "because," "which means," and "unlike." A table of "Decision / Rationale / Status" fields, the format the original inline ADRs in `CLAUDE.md` used before Task 1 rewrote them into Context/Decision/Consequences prose, is the canonical failure mode: it stores the pieces of a decision without ever explaining how they fit together. If you find yourself building a table to explain a mechanism or a rationale, that's the signal to write a paragraph instead.
+
+## Write for a colleague who just joined
+
+Assume the reader is competent — they can follow a technical argument — but new to this specific codebase, so they don't yet know its vocabulary or its history. Define an unfamiliar term the first time it's used, in the same sentence that uses it, rather than assuming prior exposure or pushing the definition into a glossary the reader has to go find. When a concept is dense enough that a plain definition won't land — PagedAttention's block-based memory management, or why alternative attention breaks four of the eight CAG techniques but not the other four — reach for a concrete example or an analogy that makes the mechanism tangible, the way the prefix-caching example above leans on "re-reading a tool's instructions from scratch." Write the way you'd actually answer a colleague who stopped by with a real question, not the way a specification addresses a machine: warmly precise, not formally exhaustive.
+
+## Every claim needs a trace
+
+"Everything tested, everything proved" is a project value, and for documentation it becomes a citation discipline: any claim about behavior, performance, or a tradeoff has to trace back to something concrete. That something is one of three things — a test that verifies the claim, a citation to the source concept documents under `docs/inputs/concepts/` (or another primary source) that established it, or, for anything not yet built or benchmarked, an explicit "design intent, not yet verified" flag stated in the text itself. What's not acceptable is a fourth option: stating a number, a behavior, or a tradeoff as settled fact because it sounds right or because an earlier draft of `CLAUDE.md` said so. The prefix-caching example above does this deliberately — it cites the source concept document by name rather than inventing a specific millisecond figure that no test in this repository has produced. Any later task that writes about latency, throughput, accuracy, or compatibility should follow the same pattern: cite the source, or flag the claim as unverified design intent, never assert it bare.
+
+## Scope
+
+This standard applies to every document under `docs/`, and to `CLAUDE.md` itself, including any future edit to either — there is no grandfather clause for content written before this file existed, and no exemption for a quick addition later. If a future change to any governed document can't satisfy the core rule, the tables rule, the tone rule, and the citation-discipline rule above, the change isn't done yet.
