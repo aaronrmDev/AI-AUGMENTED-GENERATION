@@ -42,7 +42,7 @@ The `docs/` tree mapped at the bottom of this file is meant to track the system 
 
 ### The context graph
 
-Domain → Bounded Context → Module → Class → Test File is meant to be mapped as a Mermaid diagram maintained via `graphify`, so the relationships between this codebase's pieces are queryable instead of something every session reconstructs from scratch by re-reading source files. That diagram is generated output and does not exist yet as of this writing — it will live at `docs/architecture/CONTEXT_GRAPH.md` once a `graphify` pass produces it. [docs/governance/SKILL_ROUTING.md](docs/governance/SKILL_ROUTING.md) covers when to reach for `graphify` in the meantime.
+Domain → Bounded Context → Module → Class → Test File is meant to be mapped as a Mermaid diagram maintained via `graphify`, so the relationships between this codebase's pieces are queryable instead of something every session reconstructs from scratch by re-reading source files. That diagram is generated output, and it now lives at [docs/architecture/CONTEXT_GRAPH.md](docs/architecture/CONTEXT_GRAPH.md): a first `graphify` pass over this documentation tree, redrawn as the five-level convention this section describes. This repository is still pre-code, so that file's Domain and Bounded Context levels are real while Module, Class, and Test File stay named-but-unpopulated placeholders tied to the Phase 1 module blueprint in [docs/architecture/OVERVIEW.md](docs/architecture/OVERVIEW.md) until actual code exists to fill them in. [docs/governance/SKILL_ROUTING.md](docs/governance/SKILL_ROUTING.md) covers when to reach for `graphify` beyond that initial pass.
 
 ### Git-native workflow
 
@@ -78,6 +78,7 @@ One line per file under `docs/`, grouped the same way [docs/README.md](docs/READ
 - [docs/architecture/RAG.md](docs/architecture/RAG.md) — the five-stage RAG pipeline, six chunking strategies, HyDE, reranking, CRAG, Self-RAG, and the technique compatibility matrix.
 - [docs/architecture/CAG.md](docs/architecture/CAG.md) — the nine CAG techniques mapped onto the serving pipeline: eviction, compression, offloading, speculative decoding, and the attention-compatibility split ADR-0003 establishes.
 - [docs/architecture/MAG.md](docs/architecture/MAG.md) — the three-tier memory hierarchy, episodic and semantic memory, six retrieval strategies, memory graphs, gating, and evolution.
+- [docs/architecture/CONTEXT_GRAPH.md](docs/architecture/CONTEXT_GRAPH.md) — the Domain → Bounded Context → Documentation Concern graph generated via `graphify`, with the Module/Class/Test File levels it names but leaves unpopulated until Phase 1 begins.
 
 ### decisions/adr/
 
