@@ -50,6 +50,29 @@ just accumulates because nothing is watching for it. This skill is that watch.
   exists. If the job seems to need something the two scripts and `git ls-files` don't
   cover, that's a sign to stop and report the limitation, not to reach for an unscoped git
   command.
+- **On shell redirection (`>`, `>>`, `2>`) — what's proven versus what's inferred.** Every
+  exploit attempt actually run against `find-sync-point.sh` and `show-commit.sh` during this
+  skill's build and its review (flag injection via `--output=`, path traversal,
+  `$(...)`/`;`/`&&` shell-metacharacter injection, nonexistent-ref bypass) was run from a
+  session with broader-than-`claude-md-sync` permissions, because there is no way to launch a
+  session genuinely restricted to this skill's own `allowed-tools` and then attack it from the
+  outside. That means one specific angle — `bash .../show-commit.sh <hash> > some/file`,
+  `git ls-files > some/file`, or `2>`/`>>` redirecting any of these commands' own
+  stdout/stderr onto an arbitrary path — has never been empirically exercised against a truly
+  restricted session, by anyone who has worked on this skill. What's true instead is
+  documented: current Claude Code documentation describes output redirection as gated through
+  a separate mechanism from the subcommand decomposition that blocks `&&`/`;`/`|` chaining — a
+  redirect is checked as a file write against `Edit` allow/deny rules, not against the `Bash`
+  grant alone, and `claude-md-sync` grants zero `Edit` permission of any kind (see the point
+  above). Unlike `smart-rebase`, this skill's `allowed-tools` does include one raw git
+  subcommand, `git ls-files` — a read-only listing with no file-content or ref-mutation
+  capability of its own — so the redirect question applies to it too, not only to the two
+  bundled scripts. If that documentation is accurate, a redirect attempt against any of the
+  three should require explicit human approval rather than silently succeeding. That is
+  **documented-as-safe, not tested-as-safe**, and this file says so plainly rather than either
+  overclaiming a verified guarantee or quietly leaving the gap unmentioned — the same citation
+  discipline `docs/governance/WRITING_STANDARDS.md` requires of every claim in this
+  repository: trace it to a test, a source, or flag it as unverified, never assert it bare.
 - Never hand off the writing step to something else that could do it unsupervised (another
   skill, a subagent, a background task). The output of this skill is always a list handed
   back to the human running this session — not an action taken on their behalf.
