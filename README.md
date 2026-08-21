@@ -1,2 +1,7 @@
-# AI-AUGMENTED-GENERATION
-TBD
+# AI-Augmented Generation
+
+This repository is building a full-stack AI system that treats retrieval, caching, and memory as three separate answers to the same question: where should a given piece of knowledge live so a language model can use it well? RAG reaches outside the model for knowledge that changes on its own schedule; CAG freezes knowledge that barely changes into the model's own KV cache so reusing it costs almost nothing; MAG keeps track of what a session itself has learned, so the system gets more useful the longer it talks to the same user. An orchestration layer sits above all three and decides, per query, which paradigm actually answers — because no single paradigm can see what the other two already know.
+
+The project is still pre-code — there's no `src/` yet. What exists today is the architecture this repository is committed to building toward: the three paradigms, the orchestration layer that routes between them, and the non-negotiable rules for how the codebase gets built, worked out in enough depth that implementation can start from a settled design instead of from scratch. If you're here to build the system, review its design, or just understand what "unified RAG × CAG × MAG" means in practice, this is where that design lives — a human reading this front door, or an AI agent about to make a change, both start in the same place.
+
+For the rules that govern how work actually happens here — database-first schema changes, spec-first testing, the hexagonal/CQRS backend split, the security checklist, and the rest of what a contributor or an AI agent working in this codebase is expected to follow — start at [CLAUDE.md](CLAUDE.md). For the full documentation tree — every architecture deep-dive, the ADRs behind each technology choice, the database schema, and the original source material it was all synthesized from — start at [docs/README.md](docs/README.md).
