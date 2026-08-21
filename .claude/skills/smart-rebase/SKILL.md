@@ -51,6 +51,25 @@ never rewrites shared history — full stop, no exception for confidence or conv
   doesn't cleanly apply to history that's already been rewritten and shared elsewhere. That
   asymmetry — a wrong doc edit is trivially reversible, a bad rewrite may not be — is why this
   skill's tool grant removes the capability entirely instead of trying to scope it carefully.
+- **On shell redirection (`>`, `>>`, `2>`) — what's proven versus what's inferred.** Every
+  exploit attempt actually run against these scripts during this skill's build and its review
+  (flag injection via `--output=`, path traversal, `$(...)`/`;`/`&&` shell-metacharacter
+  injection, non-conflicted-path bypass, nonexistent-ref bypass) was run from a session with
+  broader-than-`smart-rebase` permissions, because there is no way to launch a session
+  genuinely restricted to this skill's own `allowed-tools` and then attack it from the
+  outside. That means one specific angle — `bash .../rebase-state.sh > some/file` or `2>` or
+  `>>` redirecting a wrapper script's own stdout/stderr onto an arbitrary path — has never
+  been empirically exercised against a truly restricted session, by anyone who has worked on
+  this skill. What's true instead is documented: current Claude Code documentation describes
+  output redirection as gated through a separate mechanism from the subcommand decomposition
+  that blocks `&&`/`;`/`|` chaining — a redirect is checked as a file write against `Edit`
+  allow/deny rules, not against the `Bash` grant alone, and `smart-rebase` grants zero `Edit`
+  permission of any kind (see the point above). If that documentation is accurate, a redirect
+  attempt should require explicit human approval rather than silently succeeding. That is
+  **documented-as-safe, not tested-as-safe**, and this file says so plainly rather than
+  either overclaiming a verified guarantee or quietly leaving the gap unmentioned — the same
+  citation discipline `docs/governance/WRITING_STANDARDS.md` requires of every claim in this
+  repository: trace it to a test, a source, or flag it as unverified, never assert it bare.
 - The three wrapper scripts this skill can run — `rebase-state.sh`, `diverge-summary.sh`, and
   `show-conflict.sh` — are read-only by construction and validate every argument before it
   ever reaches git (see each script's own header comment for the specific exploit it closes,
