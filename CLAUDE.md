@@ -48,6 +48,10 @@ Domain → Bounded Context → Module → Class → Test File is meant to be map
 
 Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `chore:`) using the template at [.gitmessage](.gitmessage), and git history is meant to be the audit trail for every epic, task, and decision — which only holds if a commit message is written to be read later, not just to satisfy a hook. Day-to-day branch naming sits inside a fuller Gitflow branch model — `main`, `develop`, `feature/*`, `release/*`, `hotfix/*` — adopted alongside this project's existing squash-merge-to-main convention rather than in place of it: a Gitflow feature branch is named `feature/123-short-desc`, which supersedes the `feat/123-short-desc` form this section named before Gitflow was adopted, while an ad hoc `fix/456-bug-desc` branch outside that model is unaffected, since Gitflow has no `fix/*` type for it to collide with. The full branch lifecycle, the ruling that reconciles Gitflow's merge-commit convention with squash-merging, and what any of it means while this repository is still pre-code are in [docs/governance/GIT_WORKFLOW.md](docs/governance/GIT_WORKFLOW.md).
 
+### Board automation
+
+The six GitHub Project boards (`rag-management`, `cag-management`, `mag-management`, and the three cross-paradigm boards) run a six-stage Status field — Backlog → Ready for Dev → In Progress → Code Review → QA/Testing → Done — with issue creation, closing, and PR merges driving that field automatically rather than by hand-moved cards. Two of the six stage transitions (PR-opened → In Progress, review-requested → Code Review) sit outside what GitHub's Projects v2 API exposes for configuration and were left as a documented manual step rather than silently skipped. What was automated, what was verified by testing rather than assumed, and the exact manual steps left are in [docs/governance/KANBAN_AUTOMATION.md](docs/governance/KANBAN_AUTOMATION.md).
+
 ### The AI protocol
 
 Load context, check the schema, write the spec, implement, test, document, commit — in that order, every time. If a schema or a spec is missing, the answer is to ask, never to guess or hallucinate a table structure or an API contract; [docs/README.md](docs/README.md) is where to start looking before asking.
@@ -110,6 +114,7 @@ One line per documentation file under `docs/` — `docs/superpowers/` is deliber
 - [docs/governance/AUTOLEARNING.md](docs/governance/AUTOLEARNING.md) — the `claude-md-sync` contract summarized above.
 - [docs/governance/GIT_WORKFLOW.md](docs/governance/GIT_WORKFLOW.md) — the Gitflow branch model (main/develop/feature/release/hotfix) and how it reconciles with this project's squash-merge-to-main convention.
 - [docs/governance/INTELLIGENT_REBASE.md](docs/governance/INTELLIGENT_REBASE.md) — the `smart-rebase` contract summarized above: reading both sides of a rebase conflict and reasoning about intent before proposing a resolution, and the hard rule that only a human ever finalizes the rebase or force-pushes.
+- [docs/governance/KANBAN_AUTOMATION.md](docs/governance/KANBAN_AUTOMATION.md) — what the GitHub API can and can't configure on the six project boards' Workflows panel, the six-stage Status field expansion actually applied, and the exact manual steps left for the transitions the API can't reach.
 
 ### evaluation/
 

@@ -51,7 +51,13 @@ jobs:
       - name: Scan deliverable docs for unresolved placeholders
         run: |
           set -euo pipefail
-          hits=$(grep -rniE '\bTBD\b|\bTODO\b|\bFIXME\b|placeholder' CLAUDE.md README.md docs/ --include='*.md' 2>/dev/null | grep -vE 'docs/inputs/concepts/|docs/superpowers/' || true)
+          # TBD/TODO/FIXME are matched case-sensitively (all-caps, the
+          # conventional marker form) so legitimate lowercase/mixed-case
+          # prose isn't flagged — e.g. GitHub's own default Kanban field
+          # option is literally named "Todo", which is not a placeholder.
+          # "placeholder" stays case-insensitive since real usage of that
+          # word as a marker is more free-form.
+          hits=$( { grep -rnE '\bTBD\b|\bTODO\b|\bFIXME\b' CLAUDE.md README.md docs/ --include='*.md' 2>/dev/null; grep -rniE 'placeholder' CLAUDE.md README.md docs/ --include='*.md' 2>/dev/null; } | grep -vE 'docs/inputs/concepts/|docs/superpowers/' || true)
           if [ -n "$hits" ]; then
             echo "Found unresolved placeholder text:" >&2
             echo "$hits" >&2
