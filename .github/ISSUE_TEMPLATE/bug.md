@@ -2,7 +2,7 @@
 name: Bug
 about: A defect report — may link to a parent Story, or stand alone for hotfixes
 title: "[BUG] "
-labels: bug, needs-triage
+labels: type:bug, needs-triage
 assignees: ''
 ---
 

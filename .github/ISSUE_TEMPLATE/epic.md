@@ -2,7 +2,7 @@
 name: Epic
 about: A scope-based strategic deliverable that spans multiple Stories
 title: "[EPIC] "
-labels: epic, needs-triage
+labels: type:epic, needs-triage
 assignees: ''
 ---
 

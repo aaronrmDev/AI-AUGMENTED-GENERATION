@@ -2,7 +2,7 @@
 name: Task
 about: A concrete, assignable unit of implementation work with a parent Story or Epic
 title: "[TASK] "
-labels: task, needs-triage
+labels: type:task, needs-triage
 assignees: ''
 ---
 

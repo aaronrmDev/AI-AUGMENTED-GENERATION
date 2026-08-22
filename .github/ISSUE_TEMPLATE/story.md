@@ -2,7 +2,7 @@
 name: Story
 about: A user-facing unit of value, linked to a parent Epic
 title: "[STORY] "
-labels: story, needs-triage
+labels: type:story, needs-triage
 assignees: ''
 ---
 

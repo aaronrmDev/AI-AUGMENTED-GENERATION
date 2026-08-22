@@ -24,7 +24,7 @@ src/
 ├── identity/
 │   ├── domain/
 │   │   ├── entities.py      # User, RefreshToken value objects — no framework imports
-│   │   ├── ports.py         # PasswordHasher, TokenIssuer, UserRepository, RefreshTokenStore (all ABCs)
+│   │   ├── ports.py         # PasswordHasher, TokenIssuer, UserRepository, RefreshTokenStore, RateLimiter (all ABCs)
 │   │   └── errors.py        # InvalidCredentials, TokenExpired, TokenAlreadyUsed, etc.
 │   ├── application/
 │   │   ├── register_user.py
@@ -35,7 +35,8 @@ src/
 │       ├── postgres_user_repository.py   # SQLAlchemy, implements UserRepository
 │       ├── argon2_password_hasher.py     # implements PasswordHasher
 │       ├── jwt_token_issuer.py           # implements TokenIssuer
-│       └── redis_refresh_token_store.py  # implements RefreshTokenStore
+│       ├── redis_refresh_token_store.py  # implements RefreshTokenStore
+│       └── redis_rate_limiter.py         # implements RateLimiter
 │
 alembic/
 ├── env.py
