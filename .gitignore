@@ -29,3 +29,6 @@ Thumbs.db
 *.log
 .coverage
 htmlcov/
+
+# Subagent-driven-development scratch workspace (ledgers, briefs, reports)
+.superpowers/

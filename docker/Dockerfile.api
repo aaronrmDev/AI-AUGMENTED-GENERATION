@@ -1,0 +1,30 @@
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir uv
+
+# uv.lock is copied alongside pyproject.toml, and `--frozen` is what makes it
+# count: without the lockfile in the build context uv re-resolves every
+# dependency from scratch, so the image can silently ship different versions
+# than the ones the test suite actually ran against. --frozen additionally
+# refuses to update the lockfile, so a pyproject.toml edit that was never
+# re-locked fails the build loudly here instead of resolving to something new
+# and untested.
+COPY pyproject.toml uv.lock ./
+
+# The source is copied before `uv sync` because this project is itself an
+# installable package (setuptools, src layout) — syncing first meant uv
+# installing the project into the environment before src/ existed in the
+# image. The layer-cache cost is real but bounded: dependency resolution is
+# still keyed on pyproject.toml + uv.lock, which change far less often than
+# src/, and this ordering is the one that is actually correct.
+COPY src/ src/
+COPY alembic.ini .
+COPY alembic/ alembic/
+
+RUN uv sync --frozen --no-dev
+
+EXPOSE 8000
+
+CMD ["uv", "run", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

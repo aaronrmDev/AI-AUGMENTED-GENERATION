@@ -1,0 +1,61 @@
+[project]
+name = "unified-rag-cag-mag"
+version = "0.1.0"
+description = "Unified RAG x CAG x MAG AI System"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "argon2-cffi>=23.1",
+    "pyjwt>=2.8",
+    "redis>=5.0",
+    "email-validator>=2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    # >=0.24, not >=0.23: tests/integration/test_auth_endpoints.py uses
+    # `pytest.mark.asyncio(loop_scope="module")`, and `loop_scope` was only
+    # introduced in 0.24 — a 0.23.x resolution would fail at collection time.
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "httpx>=0.27",
+    "testcontainers>=4.5",
+    "mypy>=1.10",
+    "ruff>=0.5",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom is a function call in a default argument
+# (`session: AsyncSession = Depends(get_raw_db_session)`), which B008 flags by
+# design. The rule exists to catch a mutable default evaluated once at import
+# time; FastAPI's markers are inert value objects the framework resolves per
+# request, so the hazard the rule guards against does not apply. Suppress it for
+# these specific callables rather than refactoring working DI to appease a lint.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+exclude = ["tests/"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: unified_ai
+      POSTGRES_PASSWORD: unified_ai
+      POSTGRES_DB: unified_ai
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U unified_ai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    environment:
+      # DATABASE_URL is the bootstrap superuser connection — used only for
+      # `alembic upgrade head` below, which needs to CREATE TABLE/EXTENSION
+      # and provision the app_user role itself. APP_DATABASE_URL is what
+      # src/api/dependencies.py actually connects with at runtime: a
+      # non-superuser, non-owner role, because PostgreSQL exempts both a
+      # superuser and a table owner from row-level security regardless of
+      # how correct the policy is (docs/superpowers/plans/2026-08-22-auth-
+      # foundation.md, Task 5). Running the API itself as the superuser
+      # would make every RLS policy in this system silently inert.
+      DATABASE_URL: postgresql+asyncpg://unified_ai:unified_ai@postgres:5432/unified_ai
+      APP_DATABASE_URL: postgresql+asyncpg://app_user:${APP_DB_PASSWORD}@postgres:5432/unified_ai
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      # This compose file publishes the API on plain HTTP (see `ports:` below).
+      # The refresh-token cookie defaults to Secure, which browsers and HTTP
+      # clients alike withhold on a plain-http:// connection — without this
+      # override, /auth/refresh never receives the cookie it just set and the
+      # smoke test (tests/integration/test_docker_compose_smoke.py) fails at
+      # that step. Never set this to false behind a real TLS-terminating proxy.
+      COOKIE_SECURE: "false"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "uv run alembic upgrade head && uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000"
