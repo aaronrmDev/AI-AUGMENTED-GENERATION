@@ -1,0 +1,97 @@
+name: Repo hygiene
+
+# This project is pre-code (no src/, no dependencies, no Dockerfile, no
+# deployed service yet) — see docs/architecture/OVERVIEW.md's Phase 1
+# blueprint. This workflow checks the things that are actually real right
+# now: doc-map link integrity, placeholder text, and staged secrets.
+# Dependency scanning (Dependabot) is enabled at the repo-settings level,
+# not here. Container scanning (Trivy) and DAST (OWASP ZAP), per
+# docs/security/SECURITY.md points 14 and 20, are deliberately not stubbed
+# in here — there is no Dockerfile and no running service to scan yet, and
+# an empty workflow for either would be exactly the "scaffolding for what
+# doesn't exist" this project has avoided everywhere else. Add both once
+# Phase 1 produces a container and a deployed environment to point them at.
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+jobs:
+  link-check:
+    name: Doc-map link integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify every markdown link in CLAUDE.md and docs/README.md resolves
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in CLAUDE.md docs/README.md; do
+            paths=$(grep -ohE '\(docs/[^)]+\.md[^)]*\)|\(\.github/[^)]+\)|\(\.gitmessage\)|\(\.githooks/[^)]+\)' "$f" | tr -d '()' | sort -u)
+            for p in $paths; do
+              if [ ! -f "$p" ]; then
+                echo "MISSING: $f references '$p', which does not exist" >&2
+                missing=1
+              fi
+            done
+          done
+          if [ "$missing" -eq 1 ]; then
+            echo "One or more doc-map links are broken." >&2
+            exit 1
+          fi
+          echo "All doc-map links resolve."
+
+  placeholder-scan:
+    name: Placeholder / TBD scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan deliverable docs for unresolved placeholders
+        run: |
+          set -euo pipefail
+          hits=$(grep -rniE '\bTBD\b|\bTODO\b|\bFIXME\b|placeholder' CLAUDE.md README.md docs/ --include='*.md' 2>/dev/null | grep -vE 'docs/inputs/concepts/|docs/superpowers/' || true)
+          if [ -n "$hits" ]; then
+            echo "Found unresolved placeholder text:" >&2
+            echo "$hits" >&2
+            exit 1
+          fi
+          echo "No unresolved placeholders found."
+
+  secret-scan:
+    name: Secret pattern scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan the PR diff for API-key-shaped values
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          PATTERNS='sk-ant-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|[A-Za-z_][A-Za-z0-9_]*(API_KEY|SECRET|TOKEN)[A-Za-z0-9_]*[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_-]{20,}'
+          # Fall back to scanning the full tree on the initial commit of a branch,
+          # where BASE_REF may not be resolvable.
+          if git rev-parse "$BASE_REF" >/dev/null 2>&1; then
+            DIFF_CONTENT=$(git diff -U0 "$BASE_REF" "$HEAD_REF" -- . ':(exclude).github/workflows/repo-hygiene.yml' ':(exclude).githooks/pre-commit' ':(exclude)docs/security/SECRETS_MANAGEMENT.md' ':(exclude).env.example')
+          else
+            DIFF_CONTENT=$(git show "$HEAD_REF" -- . ':(exclude).github/workflows/repo-hygiene.yml' ':(exclude).githooks/pre-commit' ':(exclude)docs/security/SECRETS_MANAGEMENT.md' ':(exclude).env.example')
+          fi
+          ADDED_LINES=$(echo "$DIFF_CONTENT" | grep -E '^\+' | grep -vE '^\+\+\+' || true)
+          if echo "$ADDED_LINES" | grep -qE "$PATTERNS"; then
+            echo "A change in this PR looks like it contains a real API key or secret:" >&2
+            echo "$ADDED_LINES" | grep -E "$PATTERNS" | sed 's/^/  /' >&2
+            exit 1
+          fi
+          echo "No secret-shaped values found in this diff."
+      - name: Fail if a .env file is present in the tree
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -qE '(^|/)\.env$'; then
+            echo ".env is tracked in this repository. Real secrets must never be committed — see docs/security/SECRETS_MANAGEMENT.md." >&2
+            exit 1
+          fi
+          echo "No tracked .env file found."
