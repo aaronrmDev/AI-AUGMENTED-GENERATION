@@ -29,3 +29,6 @@ Thumbs.db
 *.log
 .coverage
 htmlcov/
+
+# Local worktrees (superpowers:using-git-worktrees)
+.worktrees/
