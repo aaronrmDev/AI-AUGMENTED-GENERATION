@@ -34,6 +34,7 @@ Each ADR records one architectural decision as Context, Decision, and Consequenc
 ## security/
 
 - [docs/security/SECURITY.md](docs/security/SECURITY.md) — CLAUDE.md's 20-point security checklist rewritten as what each control actually prevents and the concrete test, scan, or configuration review that will verify it once there's a system to check. Reach for this before implementing auth, tenant isolation, rate limiting, or any data-protection control.
+- [docs/security/SECRETS_MANAGEMENT.md](docs/security/SECRETS_MANAGEMENT.md) — the actual protocol for this project's API keys (Anthropic, Gemini, DeepSeek): where they live, the loading and rotation procedure, what to do if one leaks, and the real pre-commit hook (`.githooks/pre-commit`) that blocks a commit containing one. Reach for this before touching `.env` or anything that reads a provider key.
 
 ## testing/
 

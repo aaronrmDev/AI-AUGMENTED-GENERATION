@@ -96,6 +96,7 @@ One line per documentation file under `docs/` — `docs/superpowers/` is deliber
 ### security/
 
 - [docs/security/SECURITY.md](docs/security/SECURITY.md) — the 20-point security checklist, what each control actually prevents, and how it gets verified.
+- [docs/security/SECRETS_MANAGEMENT.md](docs/security/SECRETS_MANAGEMENT.md) — the real protocol for this project's API keys: where they live, rotation, leak response, and the working pre-commit hook (`.githooks/pre-commit`) that blocks a commit containing one.
 
 ### testing/
 
