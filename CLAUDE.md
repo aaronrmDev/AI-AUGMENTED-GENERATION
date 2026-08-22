@@ -110,6 +110,12 @@ One line per documentation file under `docs/` — `docs/superpowers/` is deliber
 - [docs/governance/GIT_WORKFLOW.md](docs/governance/GIT_WORKFLOW.md) — the Gitflow branch model (main/develop/feature/release/hotfix) and how it reconciles with this project's squash-merge-to-main convention.
 - [docs/governance/INTELLIGENT_REBASE.md](docs/governance/INTELLIGENT_REBASE.md) — the `smart-rebase` contract summarized above: reading both sides of a rebase conflict and reasoning about intent before proposing a resolution, and the hard rule that only a human ever finalizes the rebase or force-pushes.
 
+### evaluation/
+
+- [docs/evaluation/COMPARISON_METHODOLOGY.md](docs/evaluation/COMPARISON_METHODOLOGY.md) — the self-versus-self ablation design for proving RAG/CAG/MAG's actual effect, and the model roster (self-hosted Gemma 4 and Qwen3.8-27B; API-based DeepSeek V4, Claude, and Gemini) behind the "Served models" table in `docs/architecture/OVERVIEW.md`.
+- [docs/evaluation/quantitative-template.md](docs/evaluation/quantitative-template.md) — the reusable token/latency/task-success comparison table.
+- [docs/evaluation/qualitative-rubric.md](docs/evaluation/qualitative-rubric.md) — the four-dimension judge rubric for reproducible quality scoring.
+
 ### inputs/concepts/
 
 - [docs/inputs/concepts/advanced_rag_concepts.md](docs/inputs/concepts/advanced_rag_concepts.md) — the source extraction behind `docs/architecture/RAG.md`.

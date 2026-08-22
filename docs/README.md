@@ -48,6 +48,14 @@ Each ADR records one architectural decision as Context, Decision, and Consequenc
 - [docs/governance/GIT_WORKFLOW.md](docs/governance/GIT_WORKFLOW.md) — the full Gitflow branch model (`main`, `develop`, `feature/*`, `release/*`, `hotfix/*`), the ruling that reconciles Gitflow's merge-commit convention with this project's existing squash-merge-to-main rule, versioning and tagging on `main`, and what adopting the model means for a repository where only `main` exists today.
 - [docs/governance/INTELLIGENT_REBASE.md](docs/governance/INTELLIGENT_REBASE.md) — the contract for `smart-rebase`, the skill that helps bring a `feature/*`, `release/*`, or `hotfix/*` branch up to date with its Gitflow target: what "intelligent" means (reading both sides of a conflict and reasoning about intent before proposing a resolution), what it does when it isn't confident, and the hard rule that it only ever proposes resolutions for a human to approve, never finalizes a rebase or force-pushes on its own.
 
+## evaluation/
+
+These files are the ablation-study methodology used to prove, rather than assert, that RAG/CAG/MAG earn their complexity — self-hosted model versus itself, with each paradigm switched on and off, not model-versus-model.
+
+- [docs/evaluation/COMPARISON_METHODOLOGY.md](docs/evaluation/COMPARISON_METHODOLOGY.md) — why the comparison is self-versus-self, the model roster (Gemma 4 and Qwen3.8-27B self-hosted; DeepSeek V4, Claude, and Gemini as API reference/judge models) with cited specs, and how a run's results feed back into a GitHub issue's Definition of Done. Reach for this before running any comparison.
+- [docs/evaluation/quantitative-template.md](docs/evaluation/quantitative-template.md) — the reusable token-count/latency/task-success table, one filled-in copy per model per Story.
+- [docs/evaluation/qualitative-rubric.md](docs/evaluation/qualitative-rubric.md) — the four-dimension judge rubric (coherence, relevance, completeness, groundedness) that makes a quality comparison reproducible instead of a one-time impression.
+
 ## inputs/concepts/
 
 These five files are the original source material every deep-dive under `docs/architecture/` was synthesized from, kept in the repository rather than discarded so that any claim in the architecture docs can be traced back to where it came from.

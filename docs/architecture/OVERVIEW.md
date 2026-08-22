@@ -119,6 +119,20 @@ The stack below is what the original project brief's §3.1–§3.8 already commi
 | Lint/Format | ruff | latest | Linting + formatting |
 | Package Manager | uv / poetry | latest | Dependencies |
 
+### Served models and hardware target
+
+The stack table above and the CAG ecosystem table below both assume NVIDIA/CUDA, because that's what `fullstack_unified_ai_system.md` assumes throughout — Triton, `flash-attn`, and the CUDA toolkit version are all NVIDIA-specific. This project's actual initial deployment target is different: **vLLM on ROCm**, running on an AMD Radeon 7900 XTX (24GB VRAM), because that's the hardware actually available for this project's own experimentation. This is stated here as an explicit reconciliation, the same way the React 18+ correction earlier in this section and `docs/governance/GIT_WORKFLOW.md`'s squash-versus-merge ruling are — vLLM does have official ROCm support, so the serving-engine choice (ADR-0001) doesn't change, but the CUDA-specific kernel entries in the CAG ecosystem table below (`triton`, `flash-attn`) need ROCm equivalents that haven't been selected or benchmarked yet, which is flagged here as design intent, not yet verified, rather than left as a silent assumption that CUDA is available.
+
+Two models are served locally against this hardware, and three more are called through their APIs as reference points rather than self-hosted — the full reasoning for why each one is in which category, and the citations behind every figure below, live in `docs/evaluation/COMPARISON_METHODOLOGY.md`; this table is the inventory, that document is the "why."
+
+| Model | Role | Context | Notes |
+|---|---|---|---|
+| Gemma 4 (12B / 26B-A4B / 31B) | Self-hosted, vLLM on ROCm | 256K native | Apache 2.0; chosen first, ahead of the context comparison |
+| Qwen3.8-27B | Self-hosted, vLLM on ROCm | 262,144 native, extensible to 1M (YaRN) | Apache 2.0; single-GPU by design; stronger of the two on coding benchmarks and native context |
+| DeepSeek V4 (V4-Pro / V4-Flash) | API reference | 1M, 384K max output | MIT-licensed weights, but not realistically self-hostable on one 24GB card |
+| Claude (Sonnet 5 / Opus 5) | API reference, primary qualitative judge | 1M | Not one of the models being ablated — see `docs/evaluation/qualitative-rubric.md` |
+| Gemini (3.1 Pro / 3.6 Flash) | API reference, secondary qualitative judge | ~1.05M | Independent model family from both the self-hosted models and the primary judge |
+
 ### Data storage
 
 | Component | Technology | Purpose |
