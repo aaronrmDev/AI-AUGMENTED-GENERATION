@@ -24,7 +24,14 @@ services:
       retries: 10
 
   qdrant:
-    image: qdrant/qdrant:v1.9.0
+    # v1.9.0 predates Qdrant's unified Query API (introduced in v1.10) that
+    # qdrant_client.query_points() (used by QdrantVectorStore.search) relies
+    # on — a client running that call against a v1.9 server gets a bare 404,
+    # discovered during Task 15's live Docker Compose smoke test. v1.16.2
+    # matches the version testcontainers.qdrant.QdrantContainer's default
+    # image already used throughout every real integration test in this
+    # sub-project (Task 6), so this pin is the version actually validated.
+    image: qdrant/qdrant:v1.16.2
     ports:
       - "6333:6333"
     healthcheck:
