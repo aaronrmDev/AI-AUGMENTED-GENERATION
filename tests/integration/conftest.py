@@ -43,21 +43,20 @@ def redis_url(redis_container: RedisContainer) -> str:
 
 @pytest_asyncio.fixture(autouse=True)
 async def _clean_redis_between_all_integration_tests(redis_url: str):
-    # test_auth_endpoints.py defines an identical, module-local fixture of the
-    # same name for the same reason documented there: the rate limiter and the
-    # refresh-token store both key off state that lives in this session-scoped
-    # Redis container, so one test's writes (most visibly
-    # test_sixth_request_in_a_window_is_rate_limited deliberately exhausting
-    # the /auth/login rate limit) otherwise leak into whichever test runs
-    # next -- and with Redis shared across the whole session rather than
-    # scoped per file, that now means *any* later file that calls
-    # /auth/login, not just later tests within test_auth_endpoints.py itself.
-    # Task 14's test_documents_endpoints.py became the first such file
-    # (via its own _register_and_login helper), which is what surfaced this.
-    # Generalizing the flush here, rather than duplicating it into every new
-    # test file, covers every integration test uniformly; a test module can
-    # still shadow this with its own same-named fixture (as
-    # test_auth_endpoints.py already does) with no conflict.
+    # The rate limiter and the refresh-token store both key off state that
+    # lives in this session-scoped Redis container, so one test's writes
+    # (most visibly test_sixth_request_in_a_window_is_rate_limited in
+    # test_auth_endpoints.py, which deliberately exhausts the /auth/login
+    # rate limit) otherwise leak into whichever test runs next -- and with
+    # Redis shared across the whole session rather than scoped per file, that
+    # means *any* later file that calls /auth/login, not just later tests
+    # within test_auth_endpoints.py itself. Task 14's
+    # test_documents_endpoints.py became the first such file (via its own
+    # _register_and_login helper), which is what surfaced this. This fixture
+    # replaces what used to be a module-local, same-purpose fixture defined
+    # only inside test_auth_endpoints.py -- generalizing it here, rather than
+    # duplicating it into every new test file, covers every integration test
+    # uniformly with a single flush per test.
     client = redis.from_url(redis_url)
     await client.flushdb()
     yield

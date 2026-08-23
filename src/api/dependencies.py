@@ -12,6 +12,11 @@ from src.identity.infrastructure.jwt_token_issuer import JWTTokenIssuer
 from src.identity.infrastructure.postgres_user_repository import PostgresUserRepository
 from src.identity.infrastructure.redis_rate_limiter import RedisRateLimiter
 from src.identity.infrastructure.redis_refresh_token_store import RedisRefreshTokenStore
+from src.rag.infrastructure.claude_chat_model import ClaudeChatModel
+from src.rag.infrastructure.fixed_size_chunker import FixedSizeChunker
+from src.rag.infrastructure.qdrant_vector_store import QdrantVectorStore
+from src.rag.infrastructure.sentence_transformers_embedder import SentenceTransformersEmbedder
+from src.rag.infrastructure.text_extractor import TextExtractor
 
 _engine = get_engine(os.environ["APP_DATABASE_URL"])
 _sessionmaker = get_sessionmaker(_engine)
@@ -78,14 +83,6 @@ def get_user_repository_scoped(
 ) -> PostgresUserRepository:
     return PostgresUserRepository(session)
 
-
-from pathlib import Path
-
-from src.rag.infrastructure.claude_chat_model import ClaudeChatModel
-from src.rag.infrastructure.fixed_size_chunker import FixedSizeChunker
-from src.rag.infrastructure.qdrant_vector_store import QdrantVectorStore
-from src.rag.infrastructure.sentence_transformers_embedder import SentenceTransformersEmbedder
-from src.rag.infrastructure.text_extractor import TextExtractor
 
 _embedding_model = SentenceTransformersEmbedder()
 _vector_store = QdrantVectorStore(os.environ["QDRANT_URL"])

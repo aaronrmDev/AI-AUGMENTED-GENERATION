@@ -2,8 +2,6 @@
 import os
 
 import pytest
-import pytest_asyncio
-import redis.asyncio as redis
 from httpx import ASGITransport, AsyncClient
 
 # src.api.dependencies builds its Postgres engine (and asyncpg connection pool)
@@ -20,19 +18,11 @@ from httpx import ASGITransport, AsyncClient
 # mirroring how a real uvicorn process runs on a single, persistent event loop.
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
-
-@pytest_asyncio.fixture(autouse=True)
-async def _clean_redis_between_tests(redis_url):
-    # The rate limiter keys by client IP, and every test in this file calls
-    # /auth/login from the same test-client IP against the same session-scoped
-    # Redis container — without this, earlier tests' login attempts count
-    # against later tests' rate-limit budget, making test order matter. A full
-    # flushdb before each test is safe here because this Redis instance exists
-    # only for this test session.
-    client = redis.from_url(redis_url)
-    await client.flushdb()
-    yield
-    await client.aclose()
+# Note: Redis is flushed before every test in this file by the autouse
+# _clean_redis_between_all_integration_tests fixture in
+# tests/integration/conftest.py, which covers every integration test file for
+# the same reason this module originally needed its own local version of it
+# (see that fixture's docstring for why) -- no local fixture needed here.
 
 
 @pytest.fixture(autouse=True)
