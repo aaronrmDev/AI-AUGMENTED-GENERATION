@@ -72,3 +72,11 @@ async def db_session(app_database_url: str):
         yield session
         await session.rollback()
     await engine.dispose()
+
+
+from src.rag.infrastructure.sentence_transformers_embedder import SentenceTransformersEmbedder
+
+
+@pytest.fixture(scope="session")
+def embedding_model() -> SentenceTransformersEmbedder:
+    return SentenceTransformersEmbedder()
