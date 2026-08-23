@@ -53,6 +53,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      CHAT_MODEL: ${CHAT_MODEL:-claude-opus-5}
       # This compose file publishes the API on plain HTTP (see `ports:` below).
       # The refresh-token cookie defaults to Secure, which browsers and HTTP
       # clients alike withhold on a plain-http:// connection — without this
