@@ -80,3 +80,29 @@ from src.rag.infrastructure.sentence_transformers_embedder import SentenceTransf
 @pytest.fixture(scope="session")
 def embedding_model() -> SentenceTransformersEmbedder:
     return SentenceTransformersEmbedder()
+
+
+from testcontainers.qdrant import QdrantContainer
+
+
+@pytest.fixture(scope="session")
+def qdrant_container():
+    with QdrantContainer() as container:
+        yield container
+
+
+@pytest.fixture(scope="session")
+def qdrant_url(qdrant_container: QdrantContainer) -> str:
+    # Use 127.0.0.1 explicitly instead of get_client().rest_uri / the
+    # container's own rest_host_address, for two separate reasons:
+    #
+    # 1. The installed qdrant-client (1.19.0) / testcontainers (4.15.0)
+    #    don't expose a `rest_uri` attribute on the `QdrantClient` that
+    #    `get_client()` returns — it exists only on the internal
+    #    `QdrantRemote` transport object, not the public wrapper — so
+    #    `qdrant_container.get_client().rest_uri` raises AttributeError.
+    # 2. `rest_host_address` builds its URL from get_container_host_ip(),
+    #    which returns "localhost" and hits the same Windows/IPv6 problem
+    #    documented on `redis_url` above.
+    port = qdrant_container.get_exposed_port(6333)
+    return f"http://127.0.0.1:{port}"
