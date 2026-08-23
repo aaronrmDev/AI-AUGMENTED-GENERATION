@@ -32,3 +32,6 @@ htmlcov/
 
 # Subagent-driven-development scratch workspace (ledgers, briefs, reports)
 .superpowers/
+
+# Local isolated worktrees for feature work
+.worktrees/
