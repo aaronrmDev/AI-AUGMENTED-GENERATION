@@ -9,6 +9,7 @@ from src.identity.domain.errors import (
     TokenAlreadyUsed,
     TokenExpired,
 )
+from src.rag.domain.errors import UnsupportedFileType
 
 if TYPE_CHECKING:
     # Imported under TYPE_CHECKING only: src.api.routers.auth imports nothing
@@ -37,6 +38,10 @@ async def token_already_used_handler(request: Request, exc: TokenAlreadyUsed) ->
     return JSONResponse(status_code=401, content={"detail": "Invalid credentials"})
 
 
+async def unsupported_file_type_handler(request: Request, exc: UnsupportedFileType) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
 async def rate_limit_exceeded_handler(request: Request, exc: "_RateLimitExceeded") -> JSONResponse:
     # Reads limit/remaining/reset_at off the exception rather than the response:
     # the raise in _enforce_rate_limit happens before any headers are written to
@@ -57,4 +62,5 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(EmailAlreadyRegistered, email_already_registered_handler)  # type: ignore[arg-type]
     app.add_exception_handler(TokenExpired, token_expired_handler)  # type: ignore[arg-type]
     app.add_exception_handler(TokenAlreadyUsed, token_already_used_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(UnsupportedFileType, unsupported_file_type_handler)  # type: ignore[arg-type]
     app.add_exception_handler(_RateLimitExceeded, rate_limit_exceeded_handler)  # type: ignore[arg-type]

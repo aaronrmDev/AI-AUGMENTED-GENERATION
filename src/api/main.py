@@ -13,3 +13,17 @@ app.include_router(auth_router)
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+from src.api.routers.chat import router as chat_router
+from src.api.routers.documents import router as documents_router
+
+app.include_router(documents_router)
+app.include_router(chat_router)
+
+
+@app.on_event("startup")
+async def ensure_qdrant_collection() -> None:
+    from src.api.dependencies import get_vector_store
+
+    await get_vector_store().ensure_collection()

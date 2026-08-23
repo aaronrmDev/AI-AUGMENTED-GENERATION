@@ -21,6 +21,7 @@ dependencies = [
     "pypdf>=4.2",
     "tiktoken>=0.7",
     "anthropic>=0.40",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

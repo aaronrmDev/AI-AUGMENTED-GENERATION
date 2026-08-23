@@ -77,3 +77,38 @@ def get_user_repository_scoped(
     session: AsyncSession = Depends(get_db_session),
 ) -> PostgresUserRepository:
     return PostgresUserRepository(session)
+
+
+from pathlib import Path
+
+from src.rag.infrastructure.claude_chat_model import ClaudeChatModel
+from src.rag.infrastructure.fixed_size_chunker import FixedSizeChunker
+from src.rag.infrastructure.qdrant_vector_store import QdrantVectorStore
+from src.rag.infrastructure.sentence_transformers_embedder import SentenceTransformersEmbedder
+from src.rag.infrastructure.text_extractor import TextExtractor
+
+_embedding_model = SentenceTransformersEmbedder()
+_vector_store = QdrantVectorStore(os.environ["QDRANT_URL"])
+
+
+def get_embedding_model() -> SentenceTransformersEmbedder:
+    return _embedding_model
+
+
+def get_vector_store() -> QdrantVectorStore:
+    return _vector_store
+
+
+def get_chunker() -> FixedSizeChunker:
+    return FixedSizeChunker()
+
+
+def get_extractor() -> TextExtractor:
+    return TextExtractor()
+
+
+def get_chat_model() -> ClaudeChatModel:
+    import anthropic
+
+    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    return ClaudeChatModel(client=client, model_id=os.environ.get("CHAT_MODEL", "claude-opus-5"))
