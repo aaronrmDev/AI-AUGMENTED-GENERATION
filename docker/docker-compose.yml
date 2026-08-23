@@ -62,6 +62,13 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       CHAT_MODEL: ${CHAT_MODEL:-claude-opus-5}
+      # Unset by default -- CHAT_PROVIDER=ollama switches src/api/dependencies.py's
+      # get_chat_model() to the zero-cost local adapter for development (see
+      # .env.example). host.docker.internal is Docker Desktop's standing DNS
+      # name for the Windows host from inside a container -- Ollama itself
+      # runs on the host, not in this compose stack.
+      CHAT_PROVIDER: ${CHAT_PROVIDER:-anthropic}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
       # This compose file publishes the API on plain HTTP (see `ports:` below).
       # The refresh-token cookie defaults to Secure, which browsers and HTTP
       # clients alike withhold on a plain-http:// connection — without this

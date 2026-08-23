@@ -12,9 +12,11 @@ from src.identity.infrastructure.jwt_token_issuer import JWTTokenIssuer
 from src.identity.infrastructure.postgres_user_repository import PostgresUserRepository
 from src.identity.infrastructure.redis_rate_limiter import RedisRateLimiter
 from src.identity.infrastructure.redis_refresh_token_store import RedisRefreshTokenStore
+from src.rag.domain.ports import ChatModel
 from src.rag.infrastructure.claude_chat_model import ClaudeChatModel
 from src.rag.infrastructure.fixed_size_chunker import FixedSizeChunker
 from src.rag.infrastructure.local_file_storage import LocalFileStorage
+from src.rag.infrastructure.ollama_chat_model import OllamaChatModel
 from src.rag.infrastructure.qdrant_vector_store import QdrantVectorStore
 from src.rag.infrastructure.sentence_transformers_embedder import SentenceTransformersEmbedder
 from src.rag.infrastructure.text_extractor import TextExtractor
@@ -109,8 +111,29 @@ def get_file_storage() -> LocalFileStorage:
     return LocalFileStorage()
 
 
-def get_chat_model() -> ClaudeChatModel:
+def get_chat_model() -> ChatModel:
+    # CHAT_PROVIDER exists for cost-free local development (docs/architecture/
+    # OVERVIEW.md's "When you might deviate from this stack" section sanctions
+    # Ollama for "early experimentation or a proof of concept" -- the
+    # *official* ablation measurements that satisfy each
+    # GitHub issue's DoD still go through vLLM-on-ROCm per docs/evaluation/
+    # COMPARISON_METHODOLOGY.md, which this switch does not touch). Defaults
+    # to "anthropic" so every existing deployment (docker-compose, the
+    # original Task 15 smoke test) is unaffected by this switch's addition.
+    provider = os.environ.get("CHAT_PROVIDER", "anthropic")
+
+    if provider == "ollama":
+        import ollama
+
+        ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        ollama_client = ollama.AsyncClient(host=ollama_host)
+        return OllamaChatModel(
+            client=ollama_client, model_id=os.environ.get("CHAT_MODEL", "qwen3.5")
+        )
+
     import anthropic
 
-    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    return ClaudeChatModel(client=client, model_id=os.environ.get("CHAT_MODEL", "claude-opus-5"))
+    anthropic_client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    return ClaudeChatModel(
+        client=anthropic_client, model_id=os.environ.get("CHAT_MODEL", "claude-opus-5")
+    )
