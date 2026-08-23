@@ -16,8 +16,12 @@ class PostgresDocumentRepository(DocumentRepository):
         await self._session.execute(
             text(
                 """
-                INSERT INTO documents (id, tenant_id, filename, mime_type, storage_path, chunk_count, status)
-                VALUES (:id, :tenant_id, :filename, :mime_type, :storage_path, :chunk_count, :status)
+                INSERT INTO documents (
+                    id, tenant_id, filename, mime_type, storage_path, chunk_count, status
+                )
+                VALUES (
+                    :id, :tenant_id, :filename, :mime_type, :storage_path, :chunk_count, :status
+                )
                 """
             ),
             {
@@ -32,9 +36,13 @@ class PostgresDocumentRepository(DocumentRepository):
         )
         await self._session.flush()
 
-    async def update_document_status(self, document_id: uuid.UUID, status: str, chunk_count: int) -> None:
+    async def update_document_status(
+        self, document_id: uuid.UUID, status: str, chunk_count: int
+    ) -> None:
         await self._session.execute(
-            text("UPDATE documents SET status = :status, chunk_count = :chunk_count WHERE id = :id"),
+            text(
+                "UPDATE documents SET status = :status, chunk_count = :chunk_count WHERE id = :id"
+            ),
             {"status": status, "chunk_count": chunk_count, "id": document_id},
         )
         await self._session.flush()
@@ -44,8 +52,12 @@ class PostgresDocumentRepository(DocumentRepository):
             await self._session.execute(
                 text(
                     """
-                    INSERT INTO chunks (id, document_id, content, embedding, parent_id, metadata, tenant_id)
-                    VALUES (:id, :document_id, :content, :embedding, :parent_id, :metadata, :tenant_id)
+                    INSERT INTO chunks (
+                        id, document_id, content, embedding, parent_id, metadata, tenant_id
+                    )
+                    VALUES (
+                        :id, :document_id, :content, :embedding, :parent_id, :metadata, :tenant_id
+                    )
                     """
                 ),
                 {

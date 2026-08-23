@@ -71,6 +71,15 @@ services:
       COOKIE_SECURE: "false"
     ports:
       - "8000:8000"
+    volumes:
+      # The upload path LocalFileStorage writes (storage/{tenant_id}/
+      # {document_id}/{filename}) is relative to the image's WORKDIR, /app.
+      # Left on the container's own writable layer it dies with the container,
+      # while the Documents.storage_path recorded in Postgres survives -- so a
+      # `docker compose down` leaves every stored row pointing at a file that
+      # no longer exists. A named volume gives the bytes the same lifetime as
+      # the rows that reference them.
+      - api_storage:/app/storage
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,3 +89,6 @@ services:
         condition: service_healthy
     command: >
       sh -c "uv run alembic upgrade head && uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  api_storage:

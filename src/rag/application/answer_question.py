@@ -1,12 +1,14 @@
 import uuid
 
+from src.rag.application.search_documents import SearchDocuments
 from src.rag.domain.entities import ChatAnswer
 from src.rag.domain.ports import ChatModel
-from src.rag.application.search_documents import SearchDocuments
 
 
 class AnswerQuestion:
-    def __init__(self, search_documents: SearchDocuments, chat_model: ChatModel, top_k: int) -> None:
+    def __init__(
+        self, search_documents: SearchDocuments, chat_model: ChatModel, top_k: int
+    ) -> None:
         self._search = search_documents
         self._chat_model = chat_model
         self._top_k = top_k

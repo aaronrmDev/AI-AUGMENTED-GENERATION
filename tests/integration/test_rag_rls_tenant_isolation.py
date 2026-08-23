@@ -19,7 +19,12 @@ async def test_rls_returns_zero_cross_tenant_chunks_even_without_an_app_level_fi
     )
     await repo.save_document(doc_a)
     await repo.save_chunks(
-        [Chunk(id=uuid.uuid4(), document_id=doc_a.id, content="tenant a's chunk", embedding=[0.0] * 384)],
+        [
+            Chunk(
+                id=uuid.uuid4(), document_id=doc_a.id, content="tenant a's chunk",
+                embedding=[0.0] * 384,
+            )
+        ],
         tenant_id=tenant_a,
     )
     await db_session.commit()
@@ -31,7 +36,12 @@ async def test_rls_returns_zero_cross_tenant_chunks_even_without_an_app_level_fi
     )
     await repo.save_document(doc_b)
     await repo.save_chunks(
-        [Chunk(id=uuid.uuid4(), document_id=doc_b.id, content="tenant b's chunk", embedding=[0.0] * 384)],
+        [
+            Chunk(
+                id=uuid.uuid4(), document_id=doc_b.id, content="tenant b's chunk",
+                embedding=[0.0] * 384,
+            )
+        ],
         tenant_id=tenant_b,
     )
     await db_session.commit()

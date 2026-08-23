@@ -6,10 +6,12 @@ import redis.asyncio as redis
 from alembic.config import Config
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
+from testcontainers.qdrant import QdrantContainer
 from testcontainers.redis import RedisContainer
 
 from alembic import command
 from src.identity.infrastructure.db import get_engine, get_sessionmaker
+from src.rag.infrastructure.sentence_transformers_embedder import SentenceTransformersEmbedder
 
 # Never used outside a throwaway TestContainers instance.
 _APP_DB_PASSWORD = "test-only-app-user-password"
@@ -126,20 +128,20 @@ async def db_session(app_database_url: str):
     await engine.dispose()
 
 
-from src.rag.infrastructure.sentence_transformers_embedder import SentenceTransformersEmbedder
-
-
 @pytest.fixture(scope="session")
 def embedding_model() -> SentenceTransformersEmbedder:
     return SentenceTransformersEmbedder()
 
 
-from testcontainers.qdrant import QdrantContainer
-
-
 @pytest.fixture(scope="session")
 def qdrant_container():
-    with QdrantContainer() as container:
+    # Pinned explicitly, matching postgres_container/redis_container above and
+    # the qdrant service in docker/docker-compose.yml. Left unpinned, this
+    # fixture takes whatever image testcontainers currently defaults to, so a
+    # routine dependency bump could silently move the integration suite off the
+    # version compose runs -- which is exactly how the query_points-404-against
+    # -an-old-server bug found in Task 15 would come back unnoticed.
+    with QdrantContainer("qdrant/qdrant:v1.16.2") as container:
         yield container
 
 

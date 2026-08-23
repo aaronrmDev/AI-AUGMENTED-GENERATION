@@ -1,21 +1,21 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.rag.domain.entities import Chunk, Document
 from src.rag.domain.errors import UnsupportedFileType
 
 
 def test_document_equality_is_by_all_fields():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     shared_id = uuid.uuid4()
     tenant = uuid.uuid4()
     a = Document(
         id=shared_id, tenant_id=tenant, filename="a.txt", mime_type="text/plain",
-        storage_path="storage/x/a.txt", chunk_count=0, status="processing",
+        storage_path="storage/x/a.txt", chunk_count=0, status="processing", created_at=now,
     )
     b = Document(
         id=shared_id, tenant_id=tenant, filename="a.txt", mime_type="text/plain",
-        storage_path="storage/x/a.txt", chunk_count=0, status="processing",
+        storage_path="storage/x/a.txt", chunk_count=0, status="processing", created_at=now,
     )
     assert a == b
 

@@ -27,8 +27,14 @@ async def test_search_never_returns_another_tenants_chunks(qdrant_url):
 
     tenant_a = uuid.uuid4()
     tenant_b = uuid.uuid4()
-    chunk_a = Chunk(id=uuid.uuid4(), document_id=uuid.uuid4(), content="tenant a's content", embedding=[0.2] * 384)
-    chunk_b = Chunk(id=uuid.uuid4(), document_id=uuid.uuid4(), content="tenant b's content", embedding=[0.2] * 384)
+    chunk_a = Chunk(
+        id=uuid.uuid4(), document_id=uuid.uuid4(), content="tenant a's content",
+        embedding=[0.2] * 384,
+    )
+    chunk_b = Chunk(
+        id=uuid.uuid4(), document_id=uuid.uuid4(), content="tenant b's content",
+        embedding=[0.2] * 384,
+    )
     await store.upsert(chunk_a, tenant_a)
     await store.upsert(chunk_b, tenant_b)
 

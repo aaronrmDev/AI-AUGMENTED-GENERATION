@@ -24,7 +24,7 @@ class Chunk:
     content: str
     embedding: list[float]
     parent_id: uuid.UUID | None = None
-    metadata: dict = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -1,8 +1,14 @@
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from src.api.dependencies import get_chat_model, get_current_user_claims, get_embedding_model, get_vector_store
+from src.api.dependencies import (
+    get_chat_model,
+    get_current_user_claims,
+    get_embedding_model,
+    get_vector_store,
+)
 from src.api.schemas.chat import ChatRequest, ChatResponse, ChatSourceSchema
 from src.rag.application.answer_question import AnswerQuestion
 from src.rag.application.search_documents import SearchDocuments
@@ -15,7 +21,7 @@ _TOP_K = 5
 @router.post("", response_model=ChatResponse)
 async def chat(
     payload: ChatRequest,
-    claims: dict = Depends(get_current_user_claims),
+    claims: dict[str, Any] = Depends(get_current_user_claims),
 ) -> ChatResponse:
     tenant_id = uuid.UUID(claims["tenant_id"])
     search = SearchDocuments(embedding_model=get_embedding_model(), vector_store=get_vector_store())

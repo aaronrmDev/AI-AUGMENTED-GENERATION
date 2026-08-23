@@ -38,12 +38,15 @@ async def _client(app_database_url, redis_url, qdrant_url):
 
 
 async def _register_and_login(client) -> str:
-    await client.post("/auth/register", json={"email": "rag@example.com", "password": "hunter2hunter2"})
-    response = await client.post("/auth/login", json={"email": "rag@example.com", "password": "hunter2hunter2"})
+    credentials = {"email": "rag@example.com", "password": "hunter2hunter2"}
+    await client.post("/auth/register", json=credentials)
+    response = await client.post("/auth/login", json=credentials)
     return response.json()["access_token"]
 
 
-async def test_upload_then_search_finds_the_uploaded_content(app_database_url, redis_url, qdrant_url):
+async def test_upload_then_search_finds_the_uploaded_content(
+    app_database_url, redis_url, qdrant_url
+):
     async with await _client(app_database_url, redis_url, qdrant_url) as client:
         token = await _register_and_login(client)
         headers = {"Authorization": f"Bearer {token}"}
@@ -51,13 +54,21 @@ async def test_upload_then_search_finds_the_uploaded_content(app_database_url, r
         upload_response = await client.post(
             "/documents",
             headers=headers,
-            files={"file": ("notes.txt", b"FastAPI is a modern Python web framework.", "text/plain")},
+            files={
+                "file": (
+                    "notes.txt",
+                    b"FastAPI is a modern Python web framework.",
+                    "text/plain",
+                )
+            },
         )
         assert upload_response.status_code == 201
         assert upload_response.json()["chunk_count"] >= 1
 
         search_response = await client.post(
-            "/documents/search", headers=headers, json={"query": "Python web framework", "top_k": 5}
+            "/documents/search",
+            headers=headers,
+            json={"query": "Python web framework", "top_k": 5},
         )
         assert search_response.status_code == 200
         results = search_response.json()["results"]
@@ -66,7 +77,9 @@ async def test_upload_then_search_finds_the_uploaded_content(app_database_url, r
 
 async def test_upload_without_a_token_returns_401(app_database_url, redis_url, qdrant_url):
     async with await _client(app_database_url, redis_url, qdrant_url) as client:
-        response = await client.post("/documents", files={"file": ("notes.txt", b"content", "text/plain")})
+        response = await client.post(
+            "/documents", files={"file": ("notes.txt", b"content", "text/plain")}
+        )
         assert response.status_code == 401
 
 

@@ -62,6 +62,8 @@ async def test_save_chunks_batch_inserts_all_of_them(db_session):
     # resets at commit, so the tenant context must be re-established before
     # this post-commit verification query.
     await set_tenant_context(db_session, tenant_id)
-    result = await db_session.execute(text("SELECT content FROM chunks WHERE document_id = :id"), {"id": doc.id})
+    result = await db_session.execute(
+        text("SELECT content FROM chunks WHERE document_id = :id"), {"id": doc.id}
+    )
     contents = {row.content for row in result}
     assert contents == {"chunk 0", "chunk 1", "chunk 2"}

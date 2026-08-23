@@ -18,26 +18,40 @@ import httpx
 
 async def _run() -> None:
     async with httpx.AsyncClient(base_url="http://localhost:8000") as client:
-        await client.post("/auth/register", json={"email": "smoke-rag@example.com", "password": "hunter2hunter2"})
-        login = await client.post("/auth/login", json={"email": "smoke-rag@example.com", "password": "hunter2hunter2"})
+        credentials = {"email": "smoke-rag@example.com", "password": "hunter2hunter2"}
+        await client.post("/auth/register", json=credentials)
+        login = await client.post("/auth/login", json=credentials)
         token = login.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
 
         upload = await client.post(
             "/documents",
             headers=headers,
-            files={"file": ("facts.txt", b"The unified RAG x CAG x MAG project targets a 7900 XTX GPU for local serving.", "text/plain")},
+            files={
+                "file": (
+                    "facts.txt",
+                    b"The unified RAG x CAG x MAG project targets a 7900 XTX GPU "
+                    b"for local serving.",
+                    "text/plain",
+                )
+            },
         )
         print("upload:", upload.status_code, upload.json())
         assert upload.status_code == 201
 
         search = await client.post(
-            "/documents/search", headers=headers, json={"query": "what GPU does this project target", "top_k": 5}
+            "/documents/search",
+            headers=headers,
+            json={"query": "what GPU does this project target", "top_k": 5},
         )
         print("search:", search.status_code, search.json())
         assert search.status_code == 200
 
-        chat = await client.post("/chat", headers=headers, json={"question": "What GPU does this project target?"})
+        chat = await client.post(
+            "/chat",
+            headers=headers,
+            json={"question": "What GPU does this project target?"},
+        )
         print("chat:", chat.status_code, chat.json())
         assert chat.status_code == 200
         assert "answer" in chat.json()

@@ -9,8 +9,18 @@ from tests.unit.rag_fakes import FakeChatModel, FakeEmbeddingModel, FakeVectorSt
 async def test_answer_question_grounds_the_answer_in_retrieved_sources():
     vector_store = FakeVectorStore()
     sources = [
-        SearchResult(document_id=uuid.uuid4(), chunk_id=uuid.uuid4(), content="FastAPI is a Python web framework.", score=0.95),
-        SearchResult(document_id=uuid.uuid4(), chunk_id=uuid.uuid4(), content="It has automatic docs.", score=0.87),
+        SearchResult(
+            document_id=uuid.uuid4(),
+            chunk_id=uuid.uuid4(),
+            content="FastAPI is a Python web framework.",
+            score=0.95,
+        ),
+        SearchResult(
+            document_id=uuid.uuid4(),
+            chunk_id=uuid.uuid4(),
+            content="It has automatic docs.",
+            score=0.87,
+        ),
     ]
     vector_store.set_search_results(sources)
     search = SearchDocuments(embedding_model=FakeEmbeddingModel(), vector_store=vector_store)

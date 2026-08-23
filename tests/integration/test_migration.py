@@ -10,7 +10,10 @@ async def test_sessions_table_exists_with_rls_enabled(db_session):
 
 async def test_tenant_isolation_policy_exists_on_sessions(db_session):
     result = await db_session.execute(
-        text("SELECT tablename FROM pg_policies WHERE policyname = 'tenant_isolation' AND tablename = 'sessions'")
+        text(
+            "SELECT tablename FROM pg_policies "
+            "WHERE policyname = 'tenant_isolation' AND tablename = 'sessions'"
+        )
     )
     tables = {row.tablename for row in result}
     assert tables == {"sessions"}
@@ -30,7 +33,10 @@ async def test_users_table_has_no_rls_policy(db_session):
 
 async def test_documents_and_chunks_tables_exist_with_rls_enabled(db_session):
     result = await db_session.execute(
-        text("SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('documents', 'chunks')")
+        text(
+            "SELECT relname, relrowsecurity FROM pg_class "
+            "WHERE relname IN ('documents', 'chunks')"
+        )
     )
     rows = {row.relname: row.relrowsecurity for row in result}
     assert rows == {"documents": True, "chunks": True}

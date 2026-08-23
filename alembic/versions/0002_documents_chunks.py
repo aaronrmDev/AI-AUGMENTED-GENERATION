@@ -5,10 +5,11 @@ Revises: 0001
 Create Date: 2026-08-22
 
 """
-from alembic import op
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "0002"
 down_revision = "0001"
@@ -21,24 +22,49 @@ def upgrade() -> None:
 
     op.create_table(
         "documents",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text("uuid_generate_v4()")),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("uuid_generate_v4()"),
+        ),
         sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("filename", sa.String, nullable=False),
         sa.Column("mime_type", sa.String, nullable=False),
         sa.Column("storage_path", sa.String, nullable=False),
         sa.Column("chunk_count", sa.Integer, nullable=False, server_default="0"),
         sa.Column("status", sa.String, nullable=False, server_default="processing"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
     )
     op.create_index("ix_documents_tenant_id", "documents", ["tenant_id"])
 
     op.create_table(
         "chunks",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text("uuid_generate_v4()")),
-        sa.Column("document_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("documents.id"), nullable=False),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("uuid_generate_v4()"),
+        ),
+        sa.Column(
+            "document_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("documents.id"),
+            nullable=False,
+        ),
         sa.Column("content", sa.Text, nullable=False),
         sa.Column("embedding", Vector(384), nullable=False),
-        sa.Column("parent_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("chunks.id"), nullable=True),
+        sa.Column(
+            "parent_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("chunks.id"),
+            nullable=True,
+        ),
         sa.Column("metadata", postgresql.JSONB, nullable=False, server_default="{}"),
         sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False),
     )

@@ -25,6 +25,15 @@ COPY alembic/ alembic/
 
 RUN uv sync --frozen --no-dev
 
+# src/api/dependencies.py constructs SentenceTransformersEmbedder at module
+# import time, and that constructor downloads all-MiniLM-L6-v2 from Hugging
+# Face on first use. Without this layer that download happens at container
+# boot, every boot, on a fresh container -- so an unreachable Hugging Face
+# turns into a crash-looping API rather than a slow first request. Baking the
+# model into the image's cache here makes startup offline-safe, and pins the
+# weights to build time alongside every other dependency.
+RUN uv run python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
 EXPOSE 8000
 
 CMD ["uv", "run", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

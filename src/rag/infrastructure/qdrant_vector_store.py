@@ -48,16 +48,30 @@ class QdrantVectorStore(VectorStore):
             collection_name=_COLLECTION_NAME,
             query=query_embedding,
             query_filter=qmodels.Filter(
-                must=[qmodels.FieldCondition(key="tenant_id", match=qmodels.MatchValue(value=str(tenant_id)))]
+                must=[
+                    qmodels.FieldCondition(
+                        key="tenant_id", match=qmodels.MatchValue(value=str(tenant_id))
+                    )
+                ]
             ),
             limit=top_k,
         )
-        return [
-            SearchResult(
-                document_id=uuid.UUID(point.payload["document_id"]),
-                chunk_id=uuid.UUID(str(point.id)),
-                content=point.payload["content"],
-                score=point.score,
+        results: list[SearchResult] = []
+        for point in response.points:
+            # Qdrant types a point's payload as optional -- a point can exist
+            # with none at all -- so it can't be indexed directly. Every point
+            # this store writes carries one (see upsert above); skipping a
+            # payload-less point is the honest reading of "not one of ours"
+            # and keeps a foreign point from crashing a tenant's search.
+            payload = point.payload
+            if payload is None:
+                continue
+            results.append(
+                SearchResult(
+                    document_id=uuid.UUID(str(payload["document_id"])),
+                    chunk_id=uuid.UUID(str(point.id)),
+                    content=str(payload["content"]),
+                    score=point.score,
+                )
             )
-            for point in response.points
-        ]
+        return results

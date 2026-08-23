@@ -20,7 +20,10 @@ dependencies = [
     "pgvector>=0.3",
     "pypdf>=4.2",
     "tiktoken>=0.7",
-    "anthropic>=0.40",
+    # >=1.0, not >=0.40: anthropic 1.0.0 is what this sub-project was built and
+    # verified against, and the 0.x -> 1.x major carried breaking API changes,
+    # so a 0.x resolution is not a version this code has ever run on.
+    "anthropic>=1.0",
     "python-multipart>=0.0.9",
 ]
 
@@ -59,7 +62,12 @@ select = ["E", "F", "I", "UP", "B"]
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query"]
 
 [tool.mypy]
-python_version = "3.11"
+# 3.12, not 3.11 (the requires-python floor): numpy — pulled in transitively by
+# sentence-transformers — ships stubs written in 3.12+ syntax, and mypy parses
+# them under whatever python_version is configured. Pinned at "3.11" it fails
+# with a bare syntax error inside numpy before checking a single line of this
+# project's own code, which makes the whole check unrunnable rather than strict.
+python_version = "3.12"
 strict = true
 exclude = ["tests/"]
 
