@@ -1,6 +1,6 @@
 import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class UploadResponse(BaseModel):
@@ -12,7 +12,9 @@ class UploadResponse(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str
-    top_k: int = 5
+    # Bounded so a caller can't ask Qdrant for a million neighbours in one
+    # request; rejected at the schema as a 422 rather than absorbed downstream.
+    top_k: int = Field(default=5, ge=1, le=50)
 
 
 class SearchResultSchema(BaseModel):

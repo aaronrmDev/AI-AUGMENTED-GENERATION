@@ -3,7 +3,16 @@ from src.rag.infrastructure.claude_chat_model import ClaudeChatModel
 
 class _FakeMessage:
     def __init__(self, text: str) -> None:
-        self.content = [type("Block", (), {"text": text})()]
+        # A leading thinking block is what a real response from the configured
+        # model looks like: claude-opus-5 runs adaptive thinking by default
+        # when `thinking` is omitted, and those blocks come first and carry no
+        # .text at all. The adapter has to skip past them, so the fake has to
+        # produce them -- a single text block would regression-test nothing.
+        thinking_block = type(
+            "ThinkingBlock", (), {"type": "thinking", "thinking": "some reasoning"}
+        )()
+        text_block = type("TextBlock", (), {"type": "text", "text": text})()
+        self.content = [thinking_block, text_block]
 
 
 class _FakeMessages:

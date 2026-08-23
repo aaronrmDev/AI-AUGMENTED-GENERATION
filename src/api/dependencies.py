@@ -14,6 +14,7 @@ from src.identity.infrastructure.redis_rate_limiter import RedisRateLimiter
 from src.identity.infrastructure.redis_refresh_token_store import RedisRefreshTokenStore
 from src.rag.infrastructure.claude_chat_model import ClaudeChatModel
 from src.rag.infrastructure.fixed_size_chunker import FixedSizeChunker
+from src.rag.infrastructure.local_file_storage import LocalFileStorage
 from src.rag.infrastructure.qdrant_vector_store import QdrantVectorStore
 from src.rag.infrastructure.sentence_transformers_embedder import SentenceTransformersEmbedder
 from src.rag.infrastructure.text_extractor import TextExtractor
@@ -102,6 +103,10 @@ def get_chunker() -> FixedSizeChunker:
 
 def get_extractor() -> TextExtractor:
     return TextExtractor()
+
+
+def get_file_storage() -> LocalFileStorage:
+    return LocalFileStorage()
 
 
 def get_chat_model() -> ClaudeChatModel:

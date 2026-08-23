@@ -25,6 +25,16 @@ def test_empty_text_produces_no_chunks():
     assert chunker.chunk("") == []
 
 
+def test_an_overlap_ratio_of_one_or_more_is_rejected():
+    import pytest
+
+    # A full-chunk overlap leaves chunk() with a step of zero, so `start` never
+    # advances -- the constructor has to refuse it rather than let chunk() hang.
+    for ratio in (1.0, 1.5):
+        with pytest.raises(ValueError):
+            FixedSizeChunker(chunk_size_tokens=512, overlap_ratio=ratio)
+
+
 def test_every_chunk_is_at_most_the_configured_token_size():
     chunker = FixedSizeChunker(chunk_size_tokens=20, overlap_ratio=0.1)
     text = " ".join(f"word{i}" for i in range(200))

@@ -21,7 +21,9 @@ class FakeVectorStore(VectorStore):
     def set_search_results(self, results: list[SearchResult]) -> None:
         self._search_results = results
 
-    async def search(self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int) -> list[SearchResult]:
+    async def search(
+        self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
+    ) -> list[SearchResult]:
         return self._search_results[:top_k]
 
 
@@ -37,6 +39,26 @@ class FakeChatModel(ChatModel):
         return self._response
 
 
+class FakeFileStorage:
+    """Records what the use case handed the storage adapter, and writes nothing.
+
+    Deliberately does NOT sanitize: sanitizing here would move the defense
+    under test into the test double, so a traversal assertion against this
+    fake would only be proving the fake correct. The real defense lives in
+    LocalFileStorage and is exercised against a real filesystem by
+    test_upload_sanitizes_a_path_traversal_filename.
+    """
+
+    def __init__(self) -> None:
+        self.saved: list[tuple[uuid.UUID, uuid.UUID, str, bytes]] = []
+
+    def save(
+        self, tenant_id: uuid.UUID, document_id: uuid.UUID, filename: str, content: bytes
+    ) -> str:
+        self.saved.append((tenant_id, document_id, filename, content))
+        return f"storage/{tenant_id}/{document_id}/{filename}"
+
+
 class FakeDocumentRepository(DocumentRepository):
     def __init__(self) -> None:
         self.documents: dict[uuid.UUID, Document] = {}
@@ -45,7 +67,9 @@ class FakeDocumentRepository(DocumentRepository):
     async def save_document(self, document: Document) -> None:
         self.documents[document.id] = document
 
-    async def update_document_status(self, document_id: uuid.UUID, status: str, chunk_count: int) -> None:
+    async def update_document_status(
+        self, document_id: uuid.UUID, status: str, chunk_count: int
+    ) -> None:
         doc = self.documents[document_id]
         self.documents[document_id] = Document(
             id=doc.id, tenant_id=doc.tenant_id, filename=doc.filename, mime_type=doc.mime_type,

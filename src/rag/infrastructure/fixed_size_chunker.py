@@ -3,6 +3,12 @@ import tiktoken
 
 class FixedSizeChunker:
     def __init__(self, chunk_size_tokens: int = 512, overlap_ratio: float = 0.1) -> None:
+        # An overlap of 100% or more makes `step` (chunk_size - overlap) zero or
+        # negative in chunk(), so `start` never advances and the loop runs
+        # forever, appending chunks until the process runs out of memory.
+        # Rejecting the ratio at construction turns a hang into an error.
+        if overlap_ratio >= 1.0:
+            raise ValueError("overlap_ratio must be < 1.0")
         self._chunk_size = chunk_size_tokens
         self._overlap = int(chunk_size_tokens * overlap_ratio)
         self._encoding = tiktoken.get_encoding("cl100k_base")

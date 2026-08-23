@@ -23,8 +23,17 @@ def _make_minimal_pdf_bytes(text: str) -> bytes:
 
 def test_txt_content_is_decoded_directly():
     extractor = TextExtractor()
-    result = extractor.extract("notes.txt", "hello world".encode("utf-8"))
+    result = extractor.extract("notes.txt", b"hello world")
     assert result == "hello world"
+
+
+def test_txt_content_that_is_not_valid_utf8_does_not_raise():
+    extractor = TextExtractor()
+    # 0xFF is not a legal UTF-8 byte anywhere -- a strict decode raises
+    # UnicodeDecodeError here, which reaches the client as an unhandled 500.
+    result = extractor.extract("latin1.txt", b"caf\xe9 \xff au lait")
+    assert "caf" in result
+    assert "au lait" in result
 
 
 def test_pdf_content_is_extracted_via_pypdf():

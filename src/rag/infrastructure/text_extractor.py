@@ -10,7 +10,12 @@ class TextExtractor:
         extension = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
         if extension == ".txt":
-            return content.decode("utf-8")
+            # errors="replace", not a strict decode: a .txt file in some other
+            # encoding is a routine upload, not a programming error, and a
+            # strict decode turns it into an unhandled UnicodeDecodeError and
+            # a 500. Substituting U+FFFD for the undecodable bytes keeps the
+            # rest of the document usable.
+            return content.decode("utf-8", errors="replace")
 
         if extension == ".pdf":
             reader = PdfReader(io.BytesIO(content))
