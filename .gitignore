@@ -35,3 +35,6 @@ htmlcov/
 
 # Local isolated worktrees for feature work
 .worktrees/
+
+# Local per-tenant document storage (RAG Pipeline sub-project)
+storage/
