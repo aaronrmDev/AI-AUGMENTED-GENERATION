@@ -1913,7 +1913,14 @@ async def _client(app_database_url, redis_url, qdrant_url):
     os.environ["REDIS_URL"] = redis_url
     os.environ["QDRANT_URL"] = qdrant_url
     os.environ["JWT_SECRET_KEY"] = "test-secret-key"
+    from src.api.dependencies import get_vector_store
     from src.api.main import app
+
+    # httpx's ASGITransport does not invoke the app's startup lifespan, so
+    # main.py's own ensure_qdrant_collection() startup hook never runs here —
+    # call it directly rather than relying on another test file happening to
+    # run first and create the collection as a side effect.
+    await get_vector_store().ensure_collection()
 
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test")
@@ -1981,7 +1988,12 @@ async def _client(app_database_url, redis_url, qdrant_url):
     os.environ["REDIS_URL"] = redis_url
     os.environ["QDRANT_URL"] = qdrant_url
     os.environ["JWT_SECRET_KEY"] = "test-secret-key"
+    from src.api.dependencies import get_vector_store
     from src.api.main import app
+
+    # See the matching comment in test_documents_endpoints.py's _client(): the
+    # ASGITransport path never runs the app's startup lifespan.
+    await get_vector_store().ensure_collection()
 
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test")
