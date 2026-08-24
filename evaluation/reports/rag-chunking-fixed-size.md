@@ -10,6 +10,25 @@
 | Baseline | ✗ | ✗ | ✗ | qwen3.5, Ollama | 0 | 0 | 7587ms / 21860ms | 0% | — | strategy=fixed-size, corpus=docs/architecture/RAG.md, 14 chunks. CAVEAT: qualitative judge is Ollama/qwen3.5, not Claude (no API credit balance at run time) -- same model family judging its own treatment output, a real self-grading-bias risk; re-run with ClaudeJudge once credits exist before treating these judge scores as final. |
 | Treatment | ✓ | ✗ | ✗ | qwen3.5, Ollama | 0 | 0 | 15739ms / 69884ms | 60% | n/a output tokens, +107.5% p50 latency | strategy=fixed-size, corpus=docs/architecture/RAG.md, 14 chunks. CAVEAT: qualitative judge is Ollama/qwen3.5, not Claude (no API credit balance at run time) -- same model family judging its own treatment output, a real self-grading-bias risk; re-run with ClaudeJudge once credits exist before treating these judge scores as final. |
 
+> **Caveat on the qualitative scores below (added after the final whole-branch
+> review found this empirically):** each cell is a single (n=1) draw from a
+> self-grading judge -- Ollama/qwen3.5, the same model family generating the
+> treatment's own answers, not an independent judge -- called once per
+> question, not averaged across this run's repeats. Across all five of this
+> batch's reports the treatment saturated at 5/5/5/5 on the overwhelming
+> majority of question-runs, including cases where the same run's own
+> quantitative task-success check failed for that question -- while the
+> IDENTICAL no-RAG baseline condition (same model, same five questions)
+> scored across nearly the full 1-5 range between different reports. That
+> combination means these qualitative numbers are not statistically usable
+> for ranking chunking strategies against each other, and should not be read
+> as confirming RAG wins on every qualitative dimension -- only the
+> task-success and latency numbers above are trustworthy load-bearing
+> evidence from this batch. A trustworthy qualitative re-measurement needs a
+> run-independent reference context (not the treatment grading itself) and
+> an independent judge model (not the same family as the system under test)
+> -- tracked as follow-up work, not completed in this batch.
+
 ## Qualitative (per question)
 
 ### Question 1
