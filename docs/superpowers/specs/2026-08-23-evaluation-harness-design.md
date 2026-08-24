@@ -69,17 +69,26 @@ class ComparisonResult:
     scenario_name: str
     model_config: str             # e.g. "qwen3.5, Ollama, Q4_K_M" — free text, caller states it
     success_criterion: str        # what "task success" means for this Story, stated up front
+    rag: bool                     # which paradigm(s) the *treatment* run had active —
+    cag: bool                     # quantitative-template.md's RAG/CAG/MAG columns. The baseline
+    mag: bool                     # row is always all-off by definition, so only one set of flags
+                                    # is needed; the renderer hardcodes the baseline row's ✗✗✗.
+    notes: str                    # corpus/input-set used, anything a reader needs to reproduce
+                                    # or doubt the run appropriately — quantitative-template.md's
+                                    # Notes column.
     baseline: RunResult
     treatment: RunResult
-    baseline_judge: JudgeScores
-    treatment_judge: JudgeScores
+    judge_scores: list[tuple[JudgeScores, JudgeScores]]  # one (baseline, treatment) pair per
+                                                            # question — qualitative-rubric.md's
+                                                            # rubric is defined per query/response
+                                                            # pair, not once per whole comparison.
 ```
 
 `Judge` (`evaluation/domain/ports.py`) is a one-method port: `score(query: str, response_a: str, response_b: str) -> tuple[JudgeScores, JudgeScores]`, implemented by `ClaudeJudge` using the Anthropic adapter pattern already established (`ClaudeChatModel` is the direct precedent — same client construction, same "scan for the first text block" response handling). The judge prompt is built exactly per `qualitative-rubric.md`'s five-part structure: query, Response A (baseline, unlabeled as such), Response B (treatment), the four dimensions with their 1-5 definitions, and the hallucination-flag instruction — asking the judge to return structured JSON so the harness can parse scores reliably rather than free-text-parsing a judge's prose.
 
 ## Report generation
 
-`markdown_report.render(result: ComparisonResult) -> str` produces one file matching both templates' exact structure: `quantitative-template.md`'s table (Run/RAG/CAG/MAG/Model/tokens/latency/task success/Δ columns, Baseline row then Treatment row, the delta computed by the renderer not hand-typed) followed by `qualitative-rubric.md`'s scoring block (both responses' four-dimension scores, flagged unverifiable claims). Written to `evaluation/reports/<story-slug>.md`. A second, shorter render (`markdown_report.render_github_comment(result)`) produces just the same content trimmed to what's meant to be pasted into the issue thread per `COMPARISON_METHODOLOGY.md`'s closing section — posted via `gh issue comment <number> --body-file <path>`, run by hand rather than automatically, since deciding *when* a result is ready to close a Story's DoD is a human call, not something this harness should do unattended.
+`markdown_report.render(result: ComparisonResult) -> str` produces one file matching both templates' exact structure: `quantitative-template.md`'s table (Run/RAG/CAG/MAG/Model/tokens/latency/task success/Δ/Notes columns, Baseline row always all-paradigm-off then Treatment row carrying `result.rag`/`result.cag`/`result.mag`, the delta computed by the renderer not hand-typed) followed by `qualitative-rubric.md`'s scoring block, once per question in `result.judge_scores` (both responses' four-dimension scores, flagged unverifiable claims). Written to `evaluation/reports/<story-slug>.md` — that directory doesn't exist yet as of this harness's own build; it's created the first time a real comparison script writes its first report, not by this harness itself. A second render (`markdown_report.render_github_comment(result)`) produces the same quantitative table AND the same qualitative section — both halves, not a trimmed subset — since `COMPARISON_METHODOLOGY.md`'s closing section is explicit that a Story's DoD only closes "once both are present" in the issue thread; the only thing `render_github_comment` omits relative to `render` is the top-level report title, which would be redundant against the issue's own title. Posted via `gh issue comment <number> --body-file <path>`, run by hand rather than automatically, since deciding *when* a result is ready to close a Story's DoD is a human call, not something this harness should do unattended.
 
 ## Testing strategy
 
