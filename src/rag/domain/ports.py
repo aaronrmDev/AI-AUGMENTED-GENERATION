@@ -37,3 +37,8 @@ class DocumentRepository(ABC):
 
     @abstractmethod
     async def save_chunks(self, chunks: list[Chunk], tenant_id: uuid.UUID) -> None: ...
+
+
+class Chunker(ABC):
+    @abstractmethod
+    def chunk(self, text: str) -> list[str]: ...

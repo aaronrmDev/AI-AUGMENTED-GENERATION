@@ -1,8 +1,7 @@
 import uuid
 
 from src.rag.domain.entities import Chunk, Document
-from src.rag.domain.ports import DocumentRepository, EmbeddingModel, VectorStore
-from src.rag.infrastructure.fixed_size_chunker import FixedSizeChunker
+from src.rag.domain.ports import Chunker, DocumentRepository, EmbeddingModel, VectorStore
 from src.rag.infrastructure.local_file_storage import LocalFileStorage
 from src.rag.infrastructure.text_extractor import TextExtractor
 
@@ -13,7 +12,7 @@ class UploadDocument:
         document_repository: DocumentRepository,
         embedding_model: EmbeddingModel,
         vector_store: VectorStore,
-        chunker: FixedSizeChunker,
+        chunker: Chunker,
         extractor: TextExtractor,
         file_storage: LocalFileStorage,
     ) -> None:

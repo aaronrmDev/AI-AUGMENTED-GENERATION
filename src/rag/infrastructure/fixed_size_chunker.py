@@ -1,7 +1,9 @@
 import tiktoken
 
+from src.rag.domain.ports import Chunker
 
-class FixedSizeChunker:
+
+class FixedSizeChunker(Chunker):
     def __init__(self, chunk_size_tokens: int = 512, overlap_ratio: float = 0.1) -> None:
         # An overlap of 100% or more makes `step` (chunk_size - overlap) zero or
         # negative in chunk(), so `start` never advances and the loop runs
