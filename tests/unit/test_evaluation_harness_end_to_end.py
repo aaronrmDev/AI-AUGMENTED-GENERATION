@@ -31,10 +31,14 @@ async def test_full_harness_pipeline_produces_a_readable_report():
         scenario_name=scenario.name,
         model_config="qwen3.5, Ollama",
         success_criterion="see per-question criteria",
+        rag=True,
+        cag=False,
+        mag=False,
         questions=[q.question for q in scenario.questions],
         baseline=baseline,
         treatment=treatment,
         success_check=lambda q, a: True,
+        notes="smoke-test fixture scenario",
     )
 
     report = render(result)

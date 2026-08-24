@@ -35,6 +35,10 @@ class ComparisonResult:
     scenario_name: str
     model_config: str
     success_criterion: str
+    rag: bool
+    cag: bool
+    mag: bool
+    notes: str
     baseline: RunResult
     treatment: RunResult
     judge_scores: list[tuple[JudgeScores, JudgeScores]]

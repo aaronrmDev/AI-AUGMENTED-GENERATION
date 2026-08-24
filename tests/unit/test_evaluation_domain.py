@@ -35,7 +35,12 @@ def test_comparison_result_holds_both_runs_and_judge_scores_per_question():
     scores = JudgeScores(coherence=4, relevance=4, completeness=4, groundedness=4)
     result = ComparisonResult(
         scenario_name="test-scenario", model_config="qwen3.5", success_criterion="exact match",
+        rag=True, cag=False, mag=False, notes="",
         baseline=baseline, treatment=treatment, judge_scores=[(scores, scores)],
     )
     assert result.scenario_name == "test-scenario"
     assert len(result.judge_scores) == 1
+    assert result.rag is True
+    assert result.cag is False
+    assert result.mag is False
+    assert result.notes == ""

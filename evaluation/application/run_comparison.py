@@ -56,10 +56,14 @@ class RunComparison:
         scenario_name: str,
         model_config: str,
         success_criterion: str,
+        rag: bool,
+        cag: bool,
+        mag: bool,
         questions: list[str],
         baseline: Strategy,
         treatment: Strategy,
         success_check: SuccessCheck,
+        notes: str = "",
     ) -> ComparisonResult:
         baseline_result = await self._run_strategy("Baseline", baseline, questions, success_check)
         treatment_result = await self._run_strategy(
@@ -77,6 +81,10 @@ class RunComparison:
             scenario_name=scenario_name,
             model_config=model_config,
             success_criterion=success_criterion,
+            rag=rag,
+            cag=cag,
+            mag=mag,
+            notes=notes,
             baseline=baseline_result,
             treatment=treatment_result,
             judge_scores=judge_scores,

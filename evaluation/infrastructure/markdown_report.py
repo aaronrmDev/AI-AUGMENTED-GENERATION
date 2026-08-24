@@ -10,21 +10,37 @@ def _delta_pct(baseline: float, treatment: float) -> str:
     return f"{pct:+.1f}%"
 
 
+def _mark(active: bool) -> str:
+    return "✓" if active else "✗"
+
+
 def _quantitative_table(result: ComparisonResult) -> list[str]:
     b, t = result.baseline, result.treatment
     output_delta = _delta_pct(b.total_output_tokens, t.total_output_tokens)
     latency_delta = _delta_pct(b.latency_p50_ms, t.latency_p50_ms)
+    header = (
+        "| Run | RAG | CAG | MAG | Model | Input tokens | Output tokens "
+        "| Latency (p50 / p95) | Task success | Δ vs. baseline | Notes |"
+    )
+    baseline_row = (
+        f"| Baseline | {_mark(False)} | {_mark(False)} | {_mark(False)} | {result.model_config} "
+        f"| {b.total_input_tokens} | {b.total_output_tokens} "
+        f"| {b.latency_p50_ms:.0f}ms / {b.latency_p95_ms:.0f}ms | {b.task_success_rate:.0%} "
+        f"| — | {result.notes} |"
+    )
+    treatment_row = (
+        f"| Treatment | {_mark(result.rag)} | {_mark(result.cag)} | {_mark(result.mag)} "
+        f"| {result.model_config} | {t.total_input_tokens} | {t.total_output_tokens} "
+        f"| {t.latency_p50_ms:.0f}ms / {t.latency_p95_ms:.0f}ms | {t.task_success_rate:.0%} "
+        f"| {output_delta} output tokens, {latency_delta} p50 latency | {result.notes} |"
+    )
     return [
         "## Quantitative",
         "",
-        "| Run | Model | Input tokens | Output tokens | Latency (p50 / p95) | Task success "
-        "| Δ vs. baseline |",
-        "|---|---|---|---|---|---|---|",
-        f"| Baseline | {result.model_config} | {b.total_input_tokens} | {b.total_output_tokens} "
-        f"| {b.latency_p50_ms:.0f}ms / {b.latency_p95_ms:.0f}ms | {b.task_success_rate:.0%} | — |",
-        f"| Treatment | {result.model_config} | {t.total_input_tokens} | {t.total_output_tokens} "
-        f"| {t.latency_p50_ms:.0f}ms / {t.latency_p95_ms:.0f}ms | {t.task_success_rate:.0%} "
-        f"| {output_delta} output tokens, {latency_delta} p50 latency |",
+        header,
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+        baseline_row,
+        treatment_row,
         "",
     ]
 
@@ -76,5 +92,6 @@ def render_github_comment(result: ComparisonResult) -> str:
         f"**Model:** {result.model_config}",
         "",
         *_quantitative_table(result),
+        *_qualitative_section(result),
     ]
     return "\n".join(lines)
