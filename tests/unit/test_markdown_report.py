@@ -13,7 +13,10 @@ def _make_result() -> ComparisonResult:
         total_input_tokens=100, total_output_tokens=30, task_success_rate=0.95,
         answers=[Answer(text="treatment answer", input_tokens=100, output_tokens=30)],
     )
-    scores_a = JudgeScores(coherence=4, relevance=4, completeness=3, groundedness=5, unverifiable_claims=["a stray claim"])
+    scores_a = JudgeScores(
+        coherence=4, relevance=4, completeness=3, groundedness=5,
+        unverifiable_claims=["a stray claim"],
+    )
     scores_b = JudgeScores(coherence=5, relevance=5, completeness=5, groundedness=5)
     return ComparisonResult(
         scenario_name="Fixed Size Chunking", model_config="qwen3.5, Ollama, Q4_K_M",

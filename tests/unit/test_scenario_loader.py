@@ -2,7 +2,9 @@ from pathlib import Path
 
 from evaluation.scenarios.loader import load_scenario
 
-_FIXTURE_DIR = Path(__file__).parent.parent.parent / "evaluation" / "scenarios" / "_fixtures" / "smoke-test"
+_FIXTURE_DIR = (
+    Path(__file__).parent.parent.parent / "evaluation" / "scenarios" / "_fixtures" / "smoke-test"
+)
 
 
 def test_load_scenario_reads_name_and_questions():

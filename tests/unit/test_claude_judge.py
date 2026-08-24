@@ -26,8 +26,20 @@ class _FakeAnthropicClient:
 
 
 _VALID_PAYLOAD = {
-    "response_a": {"coherence": 3, "relevance": 4, "completeness": 2, "groundedness": 5, "unverifiable_claims": ["claim x"]},
-    "response_b": {"coherence": 5, "relevance": 5, "completeness": 5, "groundedness": 5, "unverifiable_claims": []},
+    "response_a": {
+        "coherence": 3,
+        "relevance": 4,
+        "completeness": 2,
+        "groundedness": 5,
+        "unverifiable_claims": ["claim x"],
+    },
+    "response_b": {
+        "coherence": 5,
+        "relevance": 5,
+        "completeness": 5,
+        "groundedness": 5,
+        "unverifiable_claims": [],
+    },
 }
 
 
@@ -47,7 +59,9 @@ async def test_score_includes_the_query_and_both_responses_in_the_request():
     fake_client = _FakeAnthropicClient(_VALID_PAYLOAD)
     judge = ClaudeJudge(client=fake_client, model_id="claude-opus-5")
 
-    await judge.score(query="What is FastAPI?", response_a="Response one.", response_b="Response two.")
+    await judge.score(
+        query="What is FastAPI?", response_a="Response one.", response_b="Response two."
+    )
 
     sent = fake_client.messages.last_call_kwargs
     full_prompt = str(sent["messages"])

@@ -62,7 +62,9 @@ class RunComparison:
         success_check: SuccessCheck,
     ) -> ComparisonResult:
         baseline_result = await self._run_strategy("Baseline", baseline, questions, success_check)
-        treatment_result = await self._run_strategy("Treatment", treatment, questions, success_check)
+        treatment_result = await self._run_strategy(
+            "Treatment", treatment, questions, success_check
+        )
 
         judge_scores = [
             await self._judge.score(question, b.text, t.text)

@@ -17,7 +17,8 @@ def _quantitative_table(result: ComparisonResult) -> list[str]:
     return [
         "## Quantitative",
         "",
-        "| Run | Model | Input tokens | Output tokens | Latency (p50 / p95) | Task success | Δ vs. baseline |",
+        "| Run | Model | Input tokens | Output tokens | Latency (p50 / p95) | Task success "
+        "| Δ vs. baseline |",
         "|---|---|---|---|---|---|---|",
         f"| Baseline | {result.model_config} | {b.total_input_tokens} | {b.total_output_tokens} "
         f"| {b.latency_p50_ms:.0f}ms / {b.latency_p95_ms:.0f}ms | {b.task_success_rate:.0%} | — |",
@@ -29,7 +30,10 @@ def _quantitative_table(result: ComparisonResult) -> list[str]:
 
 
 def _score_row(label: str, scores: JudgeScores) -> str:
-    return f"| {label} | {scores.coherence} | {scores.relevance} | {scores.completeness} | {scores.groundedness} |"
+    return (
+        f"| {label} | {scores.coherence} | {scores.relevance} "
+        f"| {scores.completeness} | {scores.groundedness} |"
+    )
 
 
 def _qualitative_section(result: ComparisonResult) -> list[str]:
@@ -43,9 +47,13 @@ def _qualitative_section(result: ComparisonResult) -> list[str]:
         lines.append(_score_row("Treatment (B)", scores_b))
         lines.append("")
         if scores_a.unverifiable_claims:
-            lines.append(f"- Baseline unverifiable claims: {', '.join(scores_a.unverifiable_claims)}")
+            lines.append(
+                f"- Baseline unverifiable claims: {', '.join(scores_a.unverifiable_claims)}"
+            )
         if scores_b.unverifiable_claims:
-            lines.append(f"- Treatment unverifiable claims: {', '.join(scores_b.unverifiable_claims)}")
+            lines.append(
+                f"- Treatment unverifiable claims: {', '.join(scores_b.unverifiable_claims)}"
+            )
         lines.append("")
     return lines
 
