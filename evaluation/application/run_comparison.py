@@ -71,7 +71,12 @@ class RunComparison:
         )
 
         judge_scores = [
-            await self._judge.score(question, b.text, t.text)
+            # The treatment's context is what actually exists to check either
+            # response's claims against -- the baseline had none of its own,
+            # so judging both against the treatment's is what makes a
+            # context-free hallucination actually show up as ungrounded
+            # instead of the judge silently guessing.
+            await self._judge.score(question, b.text, t.text, context=t.context)
             for question, b, t in zip(
                 questions, baseline_result.answers, treatment_result.answers, strict=True
             )

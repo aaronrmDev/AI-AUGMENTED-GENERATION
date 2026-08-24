@@ -7,10 +7,10 @@ class FakeJudge(Judge):
         self._scores = scores or JudgeScores(
             coherence=4, relevance=4, completeness=4, groundedness=4
         )
-        self.calls: list[tuple[str, str, str]] = []
+        self.calls: list[tuple[str, str, str, str]] = []
 
     async def score(
-        self, query: str, response_a: str, response_b: str
+        self, query: str, response_a: str, response_b: str, context: str
     ) -> tuple[JudgeScores, JudgeScores]:
-        self.calls.append((query, response_a, response_b))
+        self.calls.append((query, response_a, response_b, context))
         return self._scores, self._scores

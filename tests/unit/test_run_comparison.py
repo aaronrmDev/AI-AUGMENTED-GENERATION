@@ -69,7 +69,7 @@ async def test_run_comparison_passes_the_right_answers_to_the_judge():
         return Answer(text="base", input_tokens=1, output_tokens=1)
 
     async def treatment(question: str) -> Answer:
-        return Answer(text="treat", input_tokens=1, output_tokens=1)
+        return Answer(text="treat", input_tokens=1, output_tokens=1, context="retrieved chunk")
 
     judge = FakeJudge()
     use_case = RunComparison(judge=judge, repeat_count=1)
@@ -80,7 +80,10 @@ async def test_run_comparison_passes_the_right_answers_to_the_judge():
         success_check=lambda q, a: True,
     )
 
-    assert judge.calls == [("only question", "base", "treat")]
+    # The judge is given the TREATMENT's context (the only side with any),
+    # never the baseline's -- otherwise a context-free baseline's own claims
+    # would have nothing to be checked against at all.
+    assert judge.calls == [("only question", "base", "treat", "retrieved chunk")]
 
 
 async def test_run_comparison_keeps_only_the_last_repeat_runs_answer():

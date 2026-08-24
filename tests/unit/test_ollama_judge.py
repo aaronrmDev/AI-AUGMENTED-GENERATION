@@ -1,28 +1,26 @@
 import json
 
-from evaluation.infrastructure.claude_judge import ClaudeJudge
+from evaluation.infrastructure.ollama_judge import OllamaJudge
 
 
 class _FakeMessage:
-    def __init__(self, payload: dict) -> None:
-        thinking_block = type("ThinkingBlock", (), {"type": "thinking", "thinking": "reasoning"})()
-        text_block = type("TextBlock", (), {"type": "text", "text": json.dumps(payload)})()
-        self.content = [thinking_block, text_block]
+    def __init__(self, text: str) -> None:
+        self.content = text
 
 
-class _FakeMessages:
+class _FakeChatResponse:
+    def __init__(self, text: str) -> None:
+        self.message = _FakeMessage(text)
+
+
+class _FakeOllamaClient:
     def __init__(self, payload: dict) -> None:
         self._payload = payload
         self.last_call_kwargs: dict | None = None
 
-    async def create(self, **kwargs):
+    async def chat(self, **kwargs):
         self.last_call_kwargs = kwargs
-        return _FakeMessage(self._payload)
-
-
-class _FakeAnthropicClient:
-    def __init__(self, payload: dict) -> None:
-        self.messages = _FakeMessages(payload)
+        return _FakeChatResponse(json.dumps(self._payload))
 
 
 _VALID_PAYLOAD = {
@@ -44,8 +42,8 @@ _VALID_PAYLOAD = {
 
 
 async def test_score_parses_both_responses_from_the_judge_json():
-    fake_client = _FakeAnthropicClient(_VALID_PAYLOAD)
-    judge = ClaudeJudge(client=fake_client, model_id="claude-opus-5")
+    fake_client = _FakeOllamaClient(_VALID_PAYLOAD)
+    judge = OllamaJudge(client=fake_client, model_id="qwen3.5")
 
     scores_a, scores_b = await judge.score(query="q", response_a="a", response_b="b", context="c")
 
@@ -56,8 +54,8 @@ async def test_score_parses_both_responses_from_the_judge_json():
 
 
 async def test_score_includes_the_query_and_both_responses_in_the_request():
-    fake_client = _FakeAnthropicClient(_VALID_PAYLOAD)
-    judge = ClaudeJudge(client=fake_client, model_id="claude-opus-5")
+    fake_client = _FakeOllamaClient(_VALID_PAYLOAD)
+    judge = OllamaJudge(client=fake_client, model_id="qwen3.5")
 
     await judge.score(
         query="What is FastAPI?",
@@ -66,7 +64,7 @@ async def test_score_includes_the_query_and_both_responses_in_the_request():
         context="FastAPI is a Python web framework.",
     )
 
-    sent = fake_client.messages.last_call_kwargs
+    sent = fake_client.last_call_kwargs
     full_prompt = str(sent["messages"])
     assert "What is FastAPI?" in full_prompt
     assert "Response one." in full_prompt
@@ -74,11 +72,20 @@ async def test_score_includes_the_query_and_both_responses_in_the_request():
     assert "FastAPI is a Python web framework." in full_prompt
 
 
+async def test_score_requests_json_format():
+    fake_client = _FakeOllamaClient(_VALID_PAYLOAD)
+    judge = OllamaJudge(client=fake_client, model_id="qwen3.5")
+
+    await judge.score(query="q", response_a="a", response_b="b", context="c")
+
+    assert fake_client.last_call_kwargs["format"] == "json"
+
+
 async def test_score_marks_empty_context_explicitly_rather_than_omitting_it():
-    fake_client = _FakeAnthropicClient(_VALID_PAYLOAD)
-    judge = ClaudeJudge(client=fake_client, model_id="claude-opus-5")
+    fake_client = _FakeOllamaClient(_VALID_PAYLOAD)
+    judge = OllamaJudge(client=fake_client, model_id="qwen3.5")
 
     await judge.score(query="q", response_a="a", response_b="b", context="")
 
-    full_prompt = str(fake_client.messages.last_call_kwargs["messages"])
+    full_prompt = str(fake_client.last_call_kwargs["messages"])
     assert "(none provided)" in full_prompt

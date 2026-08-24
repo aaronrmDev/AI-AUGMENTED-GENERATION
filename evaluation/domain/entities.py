@@ -8,6 +8,12 @@ class Answer:
     text: str
     input_tokens: int
     output_tokens: int
+    # What the model actually had available to ground its answer in -- "" for
+    # a no-retrieval baseline, the retrieved chunks (or equivalent) for a
+    # treatment. Defaulted so paradigms with no retrieval concept at all can
+    # skip it; RunComparison passes it straight through to the judge so
+    # groundedness can be checked against something real instead of guessed.
+    context: str = ""
 
 
 @dataclass(frozen=True)
