@@ -34,6 +34,17 @@ def _split_into_sections(text: str) -> list[str]:
     return [s for s in sections if s.strip()]
 
 
+def _split_heading(section: str) -> tuple[str | None, str]:
+    """Pull a leading Markdown heading line off a section, if it has one.
+    Sections built by _split_into_sections always start at a heading's own
+    position, so the heading is exactly the section's first line."""
+    stripped = section.strip()
+    first_line, _, rest = stripped.partition("\n")
+    if _HEADING.match(first_line):
+        return first_line, rest
+    return None, stripped
+
+
 class StructureAwareChunker(Chunker):
     def __init__(self, chunk_size_tokens: int = 512) -> None:
         self._chunk_size = chunk_size_tokens
@@ -47,7 +58,8 @@ class StructureAwareChunker(Chunker):
         sections = _split_into_sections(text)
         chunks: list[str] = []
         for section in sections:
-            if _CODE_FENCE.search(section) or len(self._encoding.encode(section)) <= self._chunk_size:
+            fits = len(self._encoding.encode(section)) <= self._chunk_size
+            if _CODE_FENCE.search(section) or fits:
                 # A section containing a fenced code block is kept whole
                 # even if it exceeds chunk_size_tokens -- a broken code
                 # block is a worse failure than one oversized chunk. This
@@ -61,5 +73,17 @@ class StructureAwareChunker(Chunker):
                 # bypassed it.
                 chunks.append(section.strip())
             else:
-                chunks.extend(self._fallback.chunk(section))
+                # SentenceBasedChunker has no notion of a heading, so
+                # handing it the whole section would leave the heading only
+                # in the first sub-chunk -- every later sub-chunk of a long
+                # section would be an orphaned continuation with no
+                # structural context, defeating the point of a
+                # structure-*aware* strategy. Split the heading off first
+                # and prepend it back onto every sub-chunk explicitly.
+                heading, body = _split_heading(section)
+                sub_chunks = self._fallback.chunk(body)
+                if heading is None:
+                    chunks.extend(sub_chunks)
+                else:
+                    chunks.extend(f"{heading}\n{sub}" for sub in sub_chunks)
         return chunks

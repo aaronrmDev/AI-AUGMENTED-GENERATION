@@ -22,11 +22,32 @@ def test_never_splits_inside_a_fenced_code_block():
     assert "```" in code_chunk.split("```python", 1)[1]  # the closing fence is in the same chunk
 
 
-def test_a_document_with_no_headings_falls_back_to_sentence_based():
+def test_a_headingless_document_that_fits_is_kept_whole():
+    # Not "falls back to sentence-based": a headingless document that fits
+    # within chunk_size_tokens is kept whole by the per-section loop's own
+    # fits-check, the same as a real heading's section would be -- it never
+    # reaches the sentence-based fallback at all.
     chunker = StructureAwareChunker(chunk_size_tokens=512)
     chunks = chunker.chunk("Just a plain paragraph with no headings at all. It has two sentences.")
     assert len(chunks) == 1
     assert "plain paragraph" in chunks[0]
+
+
+def test_an_oversized_fenceless_section_keeps_the_heading_on_every_sub_chunk():
+    # Regression test: SentenceBasedChunker (the fallback for an oversized,
+    # fence-free section) has no notion of a heading, so without explicitly
+    # re-attaching it, only the first sub-chunk of a long section would
+    # carry its heading -- every later sub-chunk would be an orphaned
+    # continuation with no structural context.
+    chunker = StructureAwareChunker(chunk_size_tokens=5)
+    text = (
+        "# Long Section\n"
+        "First sentence here. Second sentence here. "
+        "Third sentence here. Fourth sentence here."
+    )
+    chunks = chunker.chunk(text)
+    assert len(chunks) > 1
+    assert all(c.startswith("# Long Section") for c in chunks)
 
 
 def test_empty_text_produces_no_chunks():
