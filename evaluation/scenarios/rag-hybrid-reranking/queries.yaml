@@ -1,0 +1,47 @@
+name: rag-hybrid-reranking
+questions:
+  - question: >-
+      According to RAG.md, how does Hybrid Search merge the result sets from
+      vector search and BM25, and what method does it name as the typical
+      one?
+    success_criterion: >-
+      Answer states that Hybrid Search runs vector search and BM25 in
+      parallel and merges the two result sets, typically via Reciprocal Rank
+      Fusion (RRF) (RAG.md: "Hybrid Search runs both in parallel — vector
+      search returns its top results, BM25 returns its top results — and
+      merges the two result sets, typically via Reciprocal Rank Fusion
+      (RRF)").
+  - question: >-
+      RAG.md documents three types of reranker. What are they, and how do
+      they compare on accuracy, speed, and cost?
+    success_criterion: >-
+      Answer names Cross-Encoder (High accuracy, Slower, Medium cost),
+      Bi-Encoder + Rerank Model (Balanced on all three axes), and LLM-based
+      Reranker (Highest accuracy, Slowest, Costliest) (RAG.md's Concept 1
+      table: "| Cross-Encoder | High | Slower | Medium |", "| Bi-Encoder +
+      Rerank Model | Balanced | Balanced | Balanced |", "| LLM-based
+      Reranker | Highest | Slowest | Costliest |").
+  - question: >-
+      What is Reranking's expected impact figure, measured in isolation, per
+      RAG.md?
+    success_criterion: >-
+      Answer states a +15-25% gain in answer accuracy (RAG.md: "Reranking's
+      own expected impact, in isolation, is a +15-25% gain in answer
+      accuracy").
+  - question: >-
+      What does RAG.md call the Hybrid Search + Reranking combination, and
+      why does each technique fix the other's weak point?
+    success_criterion: >-
+      Answer states the combination is called "the production standard" and
+      explains that Hybrid Search alone can't rank its own combined results
+      well while Reranking alone can only rank whatever narrow pool it's
+      handed (RAG.md: "Hybrid Search + Reranking — the source calls this
+      'the production standard.' ... Each one fixes the other's weak point:
+      Hybrid Search alone has no way to rank its own combined results well,
+      and Reranking alone can only rank whatever narrow pool it's handed").
+  - question: >-
+      What is Hybrid Search's own expected impact figure, measured in
+      isolation, per RAG.md?
+    success_criterion: >-
+      Answer states a +20-30% recall gain (RAG.md: "Its expected impact in
+      isolation is a +20-30% recall gain").
