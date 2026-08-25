@@ -4,7 +4,8 @@ project's existing test_rag_smoke.py / test_docker_compose_smoke.py pattern
 for scripts that make real model calls and are run by hand.
 
 Usage:
-    uv run python evaluation/scenarios/rag-hybrid-reranking/run_comparison.py <strategy>
+    uv run python evaluation/scenarios/rag-hybrid-reranking/\
+run_hybrid_reranking_comparison.py <strategy>
 
 <strategy> is one of: hybrid, rerank-cross-encoder, rerank-bi-encoder,
 rerank-llm, hybrid-rerank-cross-encoder
@@ -190,9 +191,15 @@ async def _run(strategy: str) -> None:
             # Q5: Hybrid Search's own expected impact figure in isolation --
             # RAG.md: "Its expected impact in isolation is a +20-30% recall
             # gain."
+            # M6 fix: RAG.md states an identical "+20-30% recall gain" figure
+            # for HyDE too (a different technique, same corpus) -- checking
+            # only "20-30" and "recall" would also score a HyDE-flavored
+            # answer as a success. Requiring "hybrid" too anchors the check
+            # to the technique this question actually asks about.
             scenario.questions[4].question: lambda a: (
                 ("20-30%" in a.text or "20–30%" in a.text or "20-30" in a.text)
                 and "recall" in a.text.lower()
+                and "hybrid" in a.text.lower()
             ),
         }
         return checks.get(question, lambda a: False)(answer)
@@ -208,6 +215,33 @@ async def _run(strategy: str) -> None:
     # once credits exist is the correct follow-up.
     judge = OllamaJudge(client=ollama_client, model_id="qwen3.5")
     use_case = RunComparison(judge=judge, repeat_count=3)
+    # candidate_k (20, set on every Retriever/RerankingRetriever/
+    # HybridSearchDocuments instance above) exceeds this corpus's own chunk
+    # count (14 with FixedSizeChunker on docs/architecture/RAG.md) -- so
+    # every retrieval arm in every strategy here always returns the whole
+    # corpus, and "widen the pool, then narrow" never actually narrows
+    # anything upstream of reranking/merging. Disclosed rather than
+    # discovered later: this measures reordering/reranking over the full
+    # corpus, not the recall-union or candidate-filtering properties Hybrid
+    # Search and Reranking are meant to demonstrate at real corpus scale.
+    candidate_pool_note = (
+        "CAVEAT 2: candidate_k=20 exceeds this corpus's 14 chunks, so every "
+        "retrieval arm always returns the full corpus in this run -- Hybrid "
+        "Search's recall-union property and Reranking's candidate-narrowing "
+        "were not exercised at the scale they're meant for; this measures "
+        "reordering over the whole corpus, not filtering a wider pool."
+    )
+    llm_reranker_note = (
+        " CAVEAT 3: this strategy's latency is inflated by qwen3.5's "
+        "reasoning mode -- each scoring call generates ~1.4-2.8K hidden "
+        "thinking tokens that OllamaChatModel discards before returning "
+        "just the score. The technique-cost ranking (LLM reranking costliest "
+        "of the three) is real; the specific magnitude is not a clean "
+        "property of LLM reranking as a technique, it's this model's "
+        "reasoning overhead paid 14 times."
+        if strategy == "rerank-llm"
+        else ""
+    )
     result = await use_case.execute(
         scenario_name=scenario.name,
         model_config=_MODEL_CONFIG,
@@ -215,11 +249,12 @@ async def _run(strategy: str) -> None:
         rag=True, cag=False, mag=False,
         notes=(
             f"strategy={strategy}, corpus=docs/architecture/RAG.md, "
-            f"{document.chunk_count} chunks. CAVEAT: qualitative judge is "
+            f"{document.chunk_count} chunks. CAVEAT 1: qualitative judge is "
             f"Ollama/qwen3.5, not Claude (no API credit balance at run time) -- "
             f"same model family judging its own treatment output, a real "
             f"self-grading-bias risk; re-run with ClaudeJudge once credits "
-            f"exist before treating these judge scores as final."
+            f"exist before treating these judge scores as final. "
+            f"{candidate_pool_note}{llm_reranker_note}"
         ),
         questions=[q.question for q in scenario.questions],
         baseline=baseline,

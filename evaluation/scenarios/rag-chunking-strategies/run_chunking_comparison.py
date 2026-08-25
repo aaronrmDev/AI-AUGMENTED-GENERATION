@@ -4,7 +4,7 @@ project's existing test_rag_smoke.py / test_docker_compose_smoke.py pattern
 for scripts that make real model calls and are run by hand.
 
 Usage:
-    uv run python evaluation/scenarios/rag-chunking-strategies/run_comparison.py <strategy>
+    uv run python evaluation/scenarios/rag-chunking-strategies/run_chunking_comparison.py <strategy>
 
 <strategy> is one of: fixed-size, sentence-based, semantic, sliding-window, structure-aware
 """
@@ -208,6 +208,14 @@ class _NullDocumentRepository(DocumentRepository):
 
     async def save_chunks(self, chunks: list[Chunk], tenant_id: uuid.UUID) -> None:
         pass
+
+    async def get_chunks_for_tenant(self, tenant_id: uuid.UUID) -> list[Chunk]:
+        # DocumentRepository gained this abstract method after this script
+        # was first written (rag-hybrid-reranking batch, BM25's data
+        # source) -- this scenario never uses it (no BM25/Hybrid strategy
+        # here), so an empty list keeps this class instantiable without
+        # changing anything this scenario's own chunkers actually measure.
+        return []
 
 
 if __name__ == "__main__":
