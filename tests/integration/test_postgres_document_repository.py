@@ -97,3 +97,48 @@ async def test_get_chunks_for_tenant_returns_the_saved_chunks_with_no_embedding(
     # back from Postgres (BM25KeywordSearch, its only consumer, never reads
     # .embedding), matching PostgresDocumentRepository.get_chunks_for_tenant.
     assert all(chunk.embedding == [] for chunk in result)
+
+
+async def test_get_chunk_by_id_returns_the_saved_chunk(db_session):
+    from src.identity.infrastructure.db import set_tenant_context
+
+    tenant_id = uuid.uuid4()
+    await set_tenant_context(db_session, tenant_id)
+
+    repo = PostgresDocumentRepository(db_session)
+    doc = _new_document(tenant_id)
+    await repo.save_document(doc)
+
+    parent_id = uuid.uuid4()
+    chunks = [
+        Chunk(id=parent_id, document_id=doc.id, content="parent chunk", embedding=[0.0] * 384),
+        Chunk(
+            id=uuid.uuid4(), document_id=doc.id, content="child chunk",
+            embedding=[0.0] * 384, parent_id=parent_id,
+        ),
+    ]
+    await repo.save_chunks(chunks, tenant_id=tenant_id)
+    await db_session.commit()
+
+    # See the comment in test_save_document_then_update_status: SET LOCAL
+    # resets at commit, so the tenant context must be re-established before
+    # this post-commit read.
+    await set_tenant_context(db_session, tenant_id)
+    result = await repo.get_chunk_by_id(chunks[1].id)
+
+    assert result is not None
+    assert result.content == "child chunk"
+    assert result.parent_id == parent_id
+
+
+async def test_get_chunk_by_id_returns_none_for_an_unknown_id(db_session):
+    from src.identity.infrastructure.db import set_tenant_context
+
+    tenant_id = uuid.uuid4()
+    await set_tenant_context(db_session, tenant_id)
+
+    repo = PostgresDocumentRepository(db_session)
+
+    result = await repo.get_chunk_by_id(uuid.uuid4())
+
+    assert result is None

@@ -90,3 +90,16 @@ class PostgresDocumentRepository(DocumentRepository):
             )
             for row in result
         ]
+
+    async def get_chunk_by_id(self, chunk_id: uuid.UUID) -> Chunk | None:
+        result = await self._session.execute(
+            text("SELECT id, document_id, content, parent_id FROM chunks WHERE id = :id"),
+            {"id": chunk_id},
+        )
+        row = result.first()
+        if row is None:
+            return None
+        return Chunk(
+            id=row.id, document_id=row.document_id, content=row.content,
+            embedding=[], parent_id=row.parent_id,
+        )

@@ -81,3 +81,6 @@ class FakeDocumentRepository(DocumentRepository):
 
     async def get_chunks_for_tenant(self, tenant_id: uuid.UUID) -> list[Chunk]:
         return self.chunks
+
+    async def get_chunk_by_id(self, chunk_id: uuid.UUID) -> Chunk | None:
+        return next((chunk for chunk in self.chunks if chunk.id == chunk_id), None)

@@ -39,3 +39,9 @@ class SearchResult:
 class ChatAnswer:
     answer: str
     sources: list[SearchResult]
+
+
+@dataclass(frozen=True)
+class ParentChildChunks:
+    parents: list[str]
+    children: list[tuple[str, int]]  # (child content, index into parents)
