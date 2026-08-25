@@ -71,3 +71,22 @@ class PostgresDocumentRepository(DocumentRepository):
                 },
             )
         await self._session.flush()
+
+    async def get_chunks_for_tenant(self, tenant_id: uuid.UUID) -> list[Chunk]:
+        result = await self._session.execute(
+            text(
+                "SELECT id, document_id, content, parent_id "
+                "FROM chunks WHERE tenant_id = :tenant_id"
+            ),
+            {"tenant_id": tenant_id},
+        )
+        return [
+            Chunk(
+                id=row.id,
+                document_id=row.document_id,
+                content=row.content,
+                embedding=[],
+                parent_id=row.parent_id,
+            )
+            for row in result
+        ]

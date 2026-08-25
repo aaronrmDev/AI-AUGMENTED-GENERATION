@@ -67,3 +67,33 @@ async def test_save_chunks_batch_inserts_all_of_them(db_session):
     )
     contents = {row.content for row in result}
     assert contents == {"chunk 0", "chunk 1", "chunk 2"}
+
+
+async def test_get_chunks_for_tenant_returns_the_saved_chunks_with_no_embedding(db_session):
+    from src.identity.infrastructure.db import set_tenant_context
+
+    tenant_id = uuid.uuid4()
+    await set_tenant_context(db_session, tenant_id)
+
+    repo = PostgresDocumentRepository(db_session)
+    doc = _new_document(tenant_id)
+    await repo.save_document(doc)
+
+    chunks = [
+        Chunk(id=uuid.uuid4(), document_id=doc.id, content=f"chunk {i}", embedding=[0.0] * 384)
+        for i in range(3)
+    ]
+    await repo.save_chunks(chunks, tenant_id=tenant_id)
+    await db_session.commit()
+
+    # See the comment in test_save_document_then_update_status: SET LOCAL
+    # resets at commit, so the tenant context must be re-established before
+    # this post-commit read.
+    await set_tenant_context(db_session, tenant_id)
+    result = await repo.get_chunks_for_tenant(tenant_id)
+
+    assert {chunk.content for chunk in result} == {"chunk 0", "chunk 1", "chunk 2"}
+    # embedding=[] is deliberate: this reader never fetches the stored vector
+    # back from Postgres (BM25KeywordSearch, its only consumer, never reads
+    # .embedding), matching PostgresDocumentRepository.get_chunks_for_tenant.
+    assert all(chunk.embedding == [] for chunk in result)

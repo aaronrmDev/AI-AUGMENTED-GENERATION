@@ -19,6 +19,7 @@ dependencies = [
     "qdrant-client>=1.9",
     "pgvector>=0.3",
     "pypdf>=4.2",
+    "rank-bm25>=0.2",
     "tiktoken>=0.7",
     # >=1.0, not >=0.40: anthropic 1.0.0 is what this sub-project was built and
     # verified against, and the 0.x -> 1.x major carried breaking API changes,
@@ -73,6 +74,15 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query"]
 python_version = "3.12"
 strict = true
 exclude = ["tests/"]
+
+[[tool.mypy.overrides]]
+# rank_bm25 ships no inline types and no `types-rank-bm25` stub package exists
+# on PyPI (checked at the time this was added), so mypy --strict can't resolve
+# its types no matter how the import is written. Scoped to this one module
+# rather than a blanket ignore_missing_imports, so a real missing-stub problem
+# introduced by some other dependency still fails the check as intended.
+module = "rank_bm25"
+ignore_missing_imports = true
 
 [build-system]
 requires = ["setuptools>=68"]

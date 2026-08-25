@@ -78,3 +78,6 @@ class FakeDocumentRepository(DocumentRepository):
 
     async def save_chunks(self, chunks: list[Chunk], tenant_id: uuid.UUID) -> None:
         self.chunks.extend(chunks)
+
+    async def get_chunks_for_tenant(self, tenant_id: uuid.UUID) -> list[Chunk]:
+        return self.chunks

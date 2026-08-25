@@ -38,7 +38,15 @@ class DocumentRepository(ABC):
     @abstractmethod
     async def save_chunks(self, chunks: list[Chunk], tenant_id: uuid.UUID) -> None: ...
 
+    @abstractmethod
+    async def get_chunks_for_tenant(self, tenant_id: uuid.UUID) -> list[Chunk]: ...
+
 
 class Chunker(ABC):
     @abstractmethod
     def chunk(self, text: str) -> list[str]: ...
+
+
+class Retriever(ABC):
+    @abstractmethod
+    async def execute(self, tenant_id: uuid.UUID, query: str, top_k: int) -> list[SearchResult]: ...

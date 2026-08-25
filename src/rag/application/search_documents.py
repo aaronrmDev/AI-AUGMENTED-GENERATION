@@ -1,10 +1,10 @@
 import uuid
 
 from src.rag.domain.entities import SearchResult
-from src.rag.domain.ports import EmbeddingModel, VectorStore
+from src.rag.domain.ports import EmbeddingModel, Retriever, VectorStore
 
 
-class SearchDocuments:
+class SearchDocuments(Retriever):
     def __init__(self, embedding_model: EmbeddingModel, vector_store: VectorStore) -> None:
         self._embedder = embedding_model
         self._vector_store = vector_store
