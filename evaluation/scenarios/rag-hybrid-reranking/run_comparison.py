@@ -92,11 +92,20 @@ async def _run(strategy: str) -> None:
     chat_model = OllamaChatModel(client=ollama_client, model_id="qwen3.5")
 
     tenant_id = uuid.uuid4()
-    # Single _NullDocumentRepository instance, reused for both the upload
-    # path and the BM25/Hybrid strategies' document_repository param -- see
-    # the class's own docstring below for why this is a known, flagged
-    # limitation rather than an oversight.
-    document_repository = _NullDocumentRepository()
+    # Single _InMemoryDocumentRepository instance, reused for both the upload
+    # path and the BM25/Hybrid strategies' document_repository param. Unlike
+    # the chunking-strategies scenario's _NullDocumentRepository (which this
+    # script started from), save_chunks here actually keeps what it's given
+    # -- BM25KeywordSearch's whole job is reading real chunk content back via
+    # get_chunks_for_tenant, and a null store would silently zero out the
+    # keyword-search arm of every 'hybrid' strategy. A real
+    # PostgresDocumentRepository-backed session was considered and rejected
+    # for this harness: this script's single process, single tenant_id, one-
+    # shot run has no need for real persistence across processes, and adding
+    # Postgres session plumbing here would only be exercising infrastructure
+    # already covered by tests/integration/test_postgres_document_repository.py,
+    # not anything this measurement needs.
+    document_repository = _InMemoryDocumentRepository()
     upload = UploadDocument(
         document_repository=document_repository,
         embedding_model=embedder,
@@ -206,19 +215,11 @@ async def _run(strategy: str) -> None:
         rag=True, cag=False, mag=False,
         notes=(
             f"strategy={strategy}, corpus=docs/architecture/RAG.md, "
-            f"{document.chunk_count} chunks. CAVEAT 1: qualitative judge is "
+            f"{document.chunk_count} chunks. CAVEAT: qualitative judge is "
             f"Ollama/qwen3.5, not Claude (no API credit balance at run time) -- "
             f"same model family judging its own treatment output, a real "
             f"self-grading-bias risk; re-run with ClaudeJudge once credits "
-            f"exist before treating these judge scores as final. CAVEAT 2: "
-            f"this harness's document_repository is an in-memory null "
-            f"implementation that never persists chunks to Postgres (see "
-            f"_NullDocumentRepository below), so for the 'hybrid' and "
-            f"'hybrid-rerank-cross-encoder' strategies the BM25/keyword-search "
-            f"arm retrieves zero results here -- only the vector-search arm is "
-            f"actually live for those two strategies until a real "
-            f"PostgresDocumentRepository-backed session is wired into this "
-            f"script."
+            f"exist before treating these judge scores as final."
         ),
         questions=[q.question for q in scenario.questions],
         baseline=baseline,
@@ -232,7 +233,10 @@ async def _run(strategy: str) -> None:
     print(f"Report written to {report_path}")
 
 
-class _NullDocumentRepository(DocumentRepository):
+class _InMemoryDocumentRepository(DocumentRepository):
+    def __init__(self) -> None:
+        self._chunks: list[Chunk] = []
+
     async def save_document(self, document: Document) -> None:
         pass
 
@@ -242,23 +246,13 @@ class _NullDocumentRepository(DocumentRepository):
         pass
 
     async def save_chunks(self, chunks: list[Chunk], tenant_id: uuid.UUID) -> None:
-        pass
+        self._chunks.extend(chunks)
 
     async def get_chunks_for_tenant(self, tenant_id: uuid.UUID) -> list[Chunk]:
-        # DocumentRepository gained this abstract method in Task 1 of this
-        # plan (BM25KeywordSearch's real data source); returning [] is what
-        # makes this class instantiable again, not a real implementation.
-        # It's fine for this harness's UploadDocument call, which never
-        # reads chunks back. It is NOT fine for BM25/Hybrid retrieval
-        # correctness: this same instance is also passed as the
-        # document_repository for those strategies (see _run above), so
-        # their keyword-search arm will retrieve zero results in a live run
-        # -- flagged explicitly in this scenario's report notes field
-        # (CAVEAT 2) rather than silently assumed to work. A real
-        # PostgresDocumentRepository (already implemented in Task 1 and
-        # wired for real in src/api/routers/documents.py) is what supplies
-        # get_chunks_for_tenant's actual data in production.
-        return []
+        # No tenant filtering: this script only ever uses one tenant_id per
+        # process, so every stored chunk already belongs to the one tenant
+        # that could ask for them.
+        return self._chunks
 
 
 if __name__ == "__main__":
