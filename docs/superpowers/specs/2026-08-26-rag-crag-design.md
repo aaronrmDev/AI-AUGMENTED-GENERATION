@@ -45,14 +45,30 @@ class CorrectiveRetriever(Retriever):
    including questionable content, the opposite direction of Self-RAG's gate (which
    defaulted to retrieving, since skipping a needed retrieval risks a worse failure than
    an unnecessary one — here, including untrustworthy content is the worse failure).
-3. **Decide**: if a strict majority (`> len(results) / 2`) of the retrieved results are
-   relevant, return only the relevant subset (RAG.md's "filtering out the noise").
-4. **Correct** (only if the majority check fails): generate one refined/alternative
-   phrasing of the query via `chat_model.complete()` (same style as HyDE/Multi-Query's
-   prompt templates), then call `inner.execute()` once more with that refined query at
+3. **Decide**: if anything passed relevance review, return the relevant subset (RAG.md's
+   "filtering out the noise"). **Revised after this batch's final review**: the first
+   implementation used a strict-majority threshold (`> len(results) / 2`), which reads
+   RAG.md's "documents that pass get used, and if the set as a whole fails, CRAG
+   triggers a correction" too strictly. Live measurement caught the real consequence —
+   in the ordinary case where a precise factual query's answer lives in exactly one of
+   `top_k` retrieved chunks, a single correct match can never be a majority, so the
+   threshold discarded a correctly-identified answer chunk and replaced it with an
+   unvalidated re-search on 5 of the 7 questions this batch measured. "The set as a
+   whole fails" is the more faithful reading of zero results passing, not
+   less-than-a-majority passing, and returning any non-empty relevant subset is also the
+   simpler, more defensible rule: it never discards a validated, correctly-identified
+   answer chunk it already has in hand.
+4. **Correct** (only when nothing passed relevance review): generate one refined/
+   alternative phrasing of the query via `chat_model.complete()` (same style as
+   HyDE/Multi-Query's prompt templates; falls back to the original query if the
+   completion is blank), then call `inner.execute()` once more with that refined query at
    the same `top_k`, and return those results directly — RAG.md's "trying an alternative
    search." Single-shot: no retry loop, no unbounded correction chain, so latency stays
-   boundable and the behavior stays testable.
+   boundable and the behavior stays testable. The corrected re-search's results are
+   returned as-is, with no second relevance pass — a disclosed scope boundary, not an
+   oversight: verifying the correction actually helped would need a second full
+   evaluate step, doubling worst-case latency for a technique whose cost is already
+   substantial (see the report's latency figures).
 
 `top_k == 0` and an empty inner result list are both edge cases the implementation must
 handle without dividing by zero (an empty result list is, trivially, not a majority

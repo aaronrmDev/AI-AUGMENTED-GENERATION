@@ -20,6 +20,7 @@ treatment arm (a plain vector search wrapped in CorrectiveRetriever), so
 this script takes no CLI argument.
 """
 import asyncio
+import dataclasses
 import uuid
 from pathlib import Path
 
@@ -33,8 +34,8 @@ from evaluation.scenarios.loader import load_scenario
 from src.rag.application.answer_question import AnswerQuestion
 from src.rag.application.search_documents import SearchDocuments
 from src.rag.application.upload_document import UploadDocument
-from src.rag.domain.entities import Chunk, Document
-from src.rag.domain.ports import DocumentRepository
+from src.rag.domain.entities import Chunk, Document, SearchResult
+from src.rag.domain.ports import DocumentRepository, Retriever
 from src.rag.infrastructure.corrective_retriever import CorrectiveRetriever
 from src.rag.infrastructure.fixed_size_chunker import FixedSizeChunker
 from src.rag.infrastructure.local_file_storage import LocalFileStorage
@@ -45,6 +46,31 @@ from src.rag.infrastructure.text_extractor import TextExtractor
 
 _SCENARIO_DIR = Path(__file__).parent
 _MODEL_CONFIG = "qwen3.5, Ollama"
+
+
+class _CorrectionObservingRetriever(Retriever):
+    # Counts how many times the wrapped inner retriever is called per
+    # CorrectiveRetriever.execute() invocation -- 1 means the relevance
+    # filter passed something (no correction), 2 means correction fired
+    # (the initial evaluation pass, then the corrected re-search). This is
+    # the non-invasive, non-production observation technique this project
+    # established in the rag-query-enhancement batch's HyDE query log:
+    # wrap the inner retriever, don't modify CorrectiveRetriever itself just
+    # to expose more. Added after this batch's final review found the
+    # original report never measured how often correction actually fires --
+    # a real gap for a technique whose entire behavior hinges on that rate.
+    def __init__(self, inner: Retriever) -> None:
+        self._inner = inner
+        self.calls_this_question = 0
+
+    async def execute(self, tenant_id: uuid.UUID, query: str, top_k: int) -> list[SearchResult]:
+        self.calls_this_question += 1
+        return await self._inner.execute(tenant_id=tenant_id, query=query, top_k=top_k)
+
+    def take_call_count(self) -> int:
+        count = self.calls_this_question
+        self.calls_this_question = 0
+        return count
 
 
 class _InMemoryDocumentRepository(DocumentRepository):
@@ -98,7 +124,8 @@ async def _run() -> None:
     print(f"Uploaded corpus: {document.chunk_count} chunks")
 
     vector_retriever = SearchDocuments(embedding_model=embedder, vector_store=vector_store)
-    crag_retriever = CorrectiveRetriever(inner=vector_retriever, chat_model=chat_model)
+    observed_inner = _CorrectionObservingRetriever(inner=vector_retriever)
+    crag_retriever = CorrectiveRetriever(inner=observed_inner, chat_model=chat_model)
 
     plain_answerer = AnswerQuestion(
         search_documents=vector_retriever, chat_model=chat_model, top_k=5
@@ -112,8 +139,19 @@ async def _run() -> None:
         context = "\n\n".join(source.content for source in result.sources)
         return Answer(text=result.answer, input_tokens=0, output_tokens=0, context=context)
 
+    # Populated only inside treatment() below -- closed over here rather than
+    # built into the notes= keyword argument passed to RunComparison.execute()
+    # directly, since that argument is evaluated BEFORE execute() ever calls
+    # treatment(). Same ordering-bug precaution as every prior batch's
+    # dataclasses.replace()-after-execute() pattern.
+    correction_fired_log: list[bool] = []
+
     async def treatment(question: str) -> Answer:
         result = await crag_answerer.execute(tenant_id=tenant_id, question=question)
+        call_count = observed_inner.take_call_count()
+        correction_fired = call_count > 1
+        correction_fired_log.append(correction_fired)
+        print(f"[crag correction] {question!r} -> {'FIRED' if correction_fired else 'not fired'}")
         context = "\n\n".join(source.content for source in result.sources)
         return Answer(text=result.answer, input_tokens=0, output_tokens=0, context=context)
 
@@ -173,27 +211,57 @@ async def _run() -> None:
             f"corpus=docs/architecture/RAG.md, {document.chunk_count} chunks. "
             f"Baseline = plain vector search (SearchDocuments), Treatment = "
             f"CorrectiveRetriever-wrapped search (relevance-filters retrieved "
-            f"results, single-shot corrected re-search on a majority failure). "
+            f"results, single-shot corrected re-search when nothing passes). "
             f"CAVEAT 1: qualitative judge is Ollama/qwen3.5, not Claude (no "
             f"API credit balance at run time) -- self-grading-bias risk, same "
             f"as every prior batch in this project. CAVEAT 2: this treatment "
             f"issues one extra complete() call per retrieved result (relevance "
-            f"evaluation) plus, on a correction, one more for the refined "
-            f"query -- expect the same class of latency overhead every prior "
-            f"batch's extra-LLM-call techniques showed. CAVEAT 3: this "
-            f"corpus is a single 14-chunk document, which makes it hard to "
-            f"manufacture genuinely irrelevant top-k results for a "
-            f"well-targeted query -- questions 6-7 are a deliberate stress "
-            f"test of CRAG's value on vague, non-technical phrasing, but a "
-            f"null result there (no measurable difference from baseline) is "
-            f"a legitimate, disclosed finding about this corpus's small "
-            f"size, not evidence CorrectiveRetriever itself is broken."
+            f"evaluation, run concurrently via asyncio.gather) plus, on a "
+            f"correction, one more for the refined query -- expect the same "
+            f"class of latency overhead every prior batch's extra-LLM-call "
+            f"techniques showed. CAVEAT 3: this corpus is a single 14-chunk "
+            f"document, which makes it hard to manufacture genuinely "
+            f"irrelevant top-k results for a well-targeted query -- questions "
+            f"6-7 are a deliberate stress test of CRAG's value on vague, "
+            f"non-technical phrasing, but a null result there (no measurable "
+            f"difference from baseline) is a legitimate, disclosed finding "
+            f"about this corpus's small size, not evidence CorrectiveRetriever "
+            f"itself is broken. CAVEAT 4 (JUDGE HARNESS LIMITATION, PROJECT-"
+            f"WIDE, NOT SPECIFIC TO THIS BATCH): this batch's final review "
+            f"found evaluation/application/run_comparison.py's qualitative "
+            f"judge call scores BOTH the baseline and treatment answers "
+            f"against the TREATMENT's retrieved context only -- so whenever "
+            f"treatment's retrieved chunks differ from baseline's (which "
+            f"CorrectiveRetriever's filtering/correction makes likely by "
+            f"design), the baseline gets penalized on 'groundedness' for "
+            f"citing facts sourced from context it never actually retrieved, "
+            f"while treatment is graded against literally its own input and "
+            f"structurally cannot lose. This affects every report this "
+            f"project has published (treatment flagged for unverifiable "
+            f"claims 0 times in 17 of 18 prior reports), not just this one --"
+            f"any 'treatment has fewer unverifiable claims than baseline' "
+            f"reading from this report's qualitative table should be treated "
+            f"as an artifact of this harness limitation, not a real finding, "
+            f"until the harness itself is fixed."
         ),
         questions=[q.question for q in scenario.questions],
         baseline=baseline,
         treatment=treatment,
         success_check=success_check,
     )
+
+    yes_count = sum(correction_fired_log)
+    total = len(correction_fired_log)
+    correction_note = (
+        f" CORRECTION FIRING RATE: across this run's {total} treatment calls "
+        f"(repeat_count=3 x 7 questions), correction fired {yes_count} times "
+        f"({0 if total == 0 else round(100 * yes_count / total)}%). Real, "
+        f"honest, per-question decisions were printed live as '[crag "
+        f"correction] <question> -> FIRED/not fired'; read that output "
+        f"directly rather than treating this aggregate as the full record."
+    )
+    result = dataclasses.replace(result, notes=result.notes + correction_note)
+
     report_path = Path("evaluation/reports/rag-crag-crag.md")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(render(result), encoding="utf-8")

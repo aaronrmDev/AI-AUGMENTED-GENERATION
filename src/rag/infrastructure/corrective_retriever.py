@@ -1,3 +1,4 @@
+import asyncio
 import re
 import uuid
 
@@ -38,22 +39,49 @@ class CorrectiveRetriever(Retriever):
         if not results:
             return results
 
-        relevant = [r for r in results if await self._is_relevant(query, r)]
-        if len(relevant) > len(results) / 2:
+        # Evaluated concurrently, not sequentially: each check is an
+        # independent LLM round-trip with no ordering dependency, so
+        # asyncio.gather turns top_k serial round-trips into one round-trip
+        # of wall time. This was flagged by this batch's final review as the
+        # bulk of the treatment's measured latency overhead.
+        relevance_flags = await asyncio.gather(
+            *[self._is_relevant(query, r) for r in results]
+        )
+        relevant = [
+            r for r, is_relevant in zip(results, relevance_flags, strict=True) if is_relevant
+        ]
+        # Decision rule: return whatever passed relevance review whenever
+        # ANYTHING passed -- correct only when the set as a whole fails
+        # (zero results pass). This batch's final review caught the original
+        # ">half must pass" threshold as a design defect, not just a stricter
+        # variant: in the ordinary "answer lives in exactly one of top_k
+        # retrieved chunks" case, a single correct match can never be a
+        # majority, so the threshold discarded a correctly-identified answer
+        # chunk and replaced it with an unvalidated re-search on 5 of 7
+        # measured questions. RAG.md's own text supports "any pass" as the
+        # more faithful reading too: "documents that pass get used, and if
+        # the set as a whole fails, CRAG triggers a correction" describes
+        # zero passing as failure, not less-than-a-majority passing.
+        if relevant:
             return relevant
 
-        # Correction: a strict majority of the initial results failed relevance
-        # review. Try one alternative phrasing of the query and re-search --
+        # Correction: nothing in the initial results passed relevance review.
+        # Try one alternative phrasing of the query and re-search --
         # single-shot, no retry loop, so latency stays bounded and behavior
         # stays testable. Returns the corrected search's results directly
         # (RAG.md's "trying an alternative search"), not merged with whatever
-        # passed the first pass.
-        refined_query = await self._chat_model.complete(
-            _REFINE_PROMPT_TEMPLATE.format(query=query)
-        )
-        return await self._inner.execute(
-            tenant_id=tenant_id, query=refined_query.strip(), top_k=top_k
-        )
+        # passed the first pass (there was nothing to merge -- by definition,
+        # nothing passed).
+        refined_query = (
+            await self._chat_model.complete(_REFINE_PROMPT_TEMPLATE.format(query=query))
+        ).strip()
+        # Guard against a degenerate completion (empty, or the model ignoring
+        # "respond with ONLY the alternative query" and returning nothing
+        # usable): fall back to the original query rather than re-searching
+        # with an empty or malformed string.
+        if not refined_query:
+            refined_query = query
+        return await self._inner.execute(tenant_id=tenant_id, query=refined_query, top_k=top_k)
 
     async def _is_relevant(self, query: str, result: SearchResult) -> bool:
         prompt = _RELEVANCE_PROMPT_TEMPLATE.format(query=query, passage=result.content)
