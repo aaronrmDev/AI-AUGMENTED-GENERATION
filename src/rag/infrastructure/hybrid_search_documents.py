@@ -3,8 +3,7 @@ import uuid
 
 from src.rag.domain.entities import SearchResult
 from src.rag.domain.ports import Retriever
-
-_RRF_K = 60
+from src.rag.infrastructure._result_fusion import reciprocal_rank_fusion
 
 
 class HybridSearchDocuments(Retriever):
@@ -20,23 +19,4 @@ class HybridSearchDocuments(Retriever):
             self._vector.execute(tenant_id=tenant_id, query=query, top_k=self._candidate_k),
             self._keyword.execute(tenant_id=tenant_id, query=query, top_k=self._candidate_k),
         )
-
-        rrf_scores: dict[uuid.UUID, float] = {}
-        by_id: dict[uuid.UUID, SearchResult] = {}
-        for result_list in (vector_results, keyword_results):
-            for rank, result in enumerate(result_list):
-                rrf_scores[result.chunk_id] = rrf_scores.get(
-                    result.chunk_id, 0.0
-                ) + 1.0 / (_RRF_K + rank + 1)
-                by_id[result.chunk_id] = result
-
-        merged_ids = sorted(rrf_scores, key=lambda cid: rrf_scores[cid], reverse=True)
-        return [
-            SearchResult(
-                document_id=by_id[cid].document_id,
-                chunk_id=cid,
-                content=by_id[cid].content,
-                score=rrf_scores[cid],
-            )
-            for cid in merged_ids[:top_k]
-        ]
+        return reciprocal_rank_fusion([vector_results, keyword_results], top_k=top_k)
