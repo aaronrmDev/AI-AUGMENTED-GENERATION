@@ -70,10 +70,9 @@ class CorrectiveRetriever(Retriever):
    evaluate step, doubling worst-case latency for a technique whose cost is already
    substantial (see the report's latency figures).
 
-`top_k == 0` and an empty inner result list are both edge cases the implementation must
-handle without dividing by zero (an empty result list is, trivially, not a majority
-failure — nothing to be wrong about — so it short-circuits to "return the empty list,"
-no evaluation calls made).
+`top_k == 0` and an empty inner result list are both edge cases the implementation
+handles by short-circuiting: an empty result list has nothing to evaluate or be wrong
+about, so it returns the empty list directly, with no evaluation calls made.
 
 ## Composability into "combinations" (Batch E work, not this batch)
 
