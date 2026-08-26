@@ -38,7 +38,7 @@ from src.rag.application.answer_question import AnswerQuestion
 from src.rag.application.search_documents import SearchDocuments
 from src.rag.application.self_rag_answer_question import SelfRAGAnswerQuestion
 from src.rag.application.upload_document import UploadDocument
-from src.rag.domain.entities import ChatAnswer, Chunk, Document
+from src.rag.domain.entities import ChatAnswer, Chunk, Document, SearchResult
 from src.rag.domain.ports import ChatModel, DocumentRepository, Retriever
 from src.rag.infrastructure.fixed_size_chunker import FixedSizeChunker
 from src.rag.infrastructure.hyde_retriever import HyDERetriever
@@ -67,8 +67,31 @@ class _Answerer(Protocol):
     async def execute(self, tenant_id: uuid.UUID, question: str) -> ChatAnswer: ...
 
 
+class _LoggingRetriever(Retriever):
+    # Records every query string it's asked to search. Wrapped around the
+    # inner vector retriever HyDERetriever delegates to, this is how the
+    # script observes -- from outside, non-invasively -- what HyDERetriever
+    # actually generated as its hypothetical answer: that string isn't
+    # exposed on ChatAnswer, it's only ever visible as the query this wrapped
+    # retriever receives. Measurement aid only, not production code; added
+    # after this batch's final review caught HyDE silently degrading into a
+    # refusal generator, to give the re-run's report direct, checkable
+    # evidence the fix worked rather than an unverified claim.
+    def __init__(self, inner: Retriever, log: list[str]) -> None:
+        self._inner = inner
+        self._log = log
+
+    async def execute(self, tenant_id: uuid.UUID, query: str, top_k: int) -> list[SearchResult]:
+        self._log.append(query)
+        return await self._inner.execute(tenant_id=tenant_id, query=query, top_k=top_k)
+
+
 def _make_answerer(
-    name: str, vector_retriever: Retriever, chat_model: ChatModel, top_k: int
+    name: str,
+    vector_retriever: Retriever,
+    chat_model: ChatModel,
+    top_k: int,
+    hyde_query_log: list[str],
 ) -> _Answerer:
     # multi-query and hyde: build a Retriever decorator (MultiQueryRetriever /
     # HyDERetriever), wired into a plain AnswerQuestion exactly like every
@@ -77,7 +100,8 @@ def _make_answerer(
         retriever: Retriever = MultiQueryRetriever(inner=vector_retriever, chat_model=chat_model)
         return AnswerQuestion(search_documents=retriever, chat_model=chat_model, top_k=top_k)
     if name == "hyde":
-        retriever = HyDERetriever(inner=vector_retriever, chat_model=chat_model)
+        logged_inner = _LoggingRetriever(inner=vector_retriever, log=hyde_query_log)
+        retriever = HyDERetriever(inner=logged_inner, chat_model=chat_model)
         return AnswerQuestion(search_documents=retriever, chat_model=chat_model, top_k=top_k)
     # self-rag: not a Retriever at all -- construct SelfRAGAnswerQuestion
     # directly over the plain vector SearchDocuments, skipping AnswerQuestion
@@ -145,7 +169,14 @@ async def _run(strategy: str) -> None:
     print(f"Uploaded corpus under strategy {strategy!r}: {document.chunk_count} chunks")
 
     vector_retriever = SearchDocuments(embedding_model=embedder, vector_store=vector_store)
-    answerer = _make_answerer(strategy, vector_retriever, chat_model, top_k=5)
+    # Populated only as HyDERetriever's inner retriever is actually called,
+    # for the hyde strategy -- see _LoggingRetriever's comment. Read only
+    # after use_case.execute() returns, same ordering-bug precaution as
+    # self_rag_gate_log below.
+    hyde_query_log: list[str] = []
+    answerer = _make_answerer(
+        strategy, vector_retriever, chat_model, top_k=5, hyde_query_log=hyde_query_log
+    )
 
     async def baseline(question: str) -> Answer:
         text = await chat_model.generate(question=question, context="")
@@ -164,6 +195,14 @@ async def _run(strategy: str) -> None:
 
     async def treatment(question: str) -> Answer:
         result = await answerer.execute(tenant_id=tenant_id, question=question)
+        if strategy == "hyde":
+            # hyde_query_log's newest entry is the hypothetical answer
+            # HyDERetriever just generated and searched with -- printed live
+            # so the report's evidence is checkable, not just asserted (this
+            # is exactly the class of claim this batch's final review caught
+            # going unverified: HyDE silently searching on a refusal string
+            # instead of a real hypothetical answer).
+            print(f"[hyde query] {question!r} -> {hyde_query_log[-1]!r}")
         # Reconstructs exactly what AnswerQuestion/SelfRAGAnswerQuestion
         # themselves joined internally to build the chat model's context --
         # it isn't returned on ChatAnswer, so this is the only way to get it
@@ -317,6 +356,32 @@ async def _run(strategy: str) -> None:
             f"self-grading-bias risk; re-run with ClaudeJudge once credits "
             f"exist before treating these judge scores as final."
             f"{extra_llm_call_note}"
+            f" CAVEAT 3 (RE-RUN): this batch's final review caught HyDE and "
+            f"Self-RAG's no-context answer silently degrading into a refusal "
+            f"under ChatModel.generate()'s hardcoded RAG-answering system "
+            f"prompt -- the first published measurement for this strategy was "
+            f"invalid. Fixed by adding ChatModel.complete() (no system prompt) "
+            f"and rewiring HyDE, Multi-Query's variant generation, and "
+            f"Self-RAG's gate + no-context answer to use it; this report is "
+            f"the corrected re-run against that fix, not the original."
+            f" CAVEAT 4 (BASELINE METHODOLOGY): this script's baseline() "
+            f"deliberately still calls chat_model.generate(question, "
+            f"context=\"\"), the same RAG-answering-system-prompt call the "
+            f"bug above was found in -- left unchanged rather than fixed, "
+            f"because baseline is meant to measure 'strict context-only "
+            f"answering with nothing retrieved', consistent with every prior "
+            f"batch's baseline in this project. The real, disclosed "
+            f"consequence: baseline is expected to refuse even the 2 "
+            f"general-knowledge questions (Q6, Q7) that a bare, unconstrained "
+            f"model could trivially answer, because the system prompt "
+            f"instructs it to say so when 'the context' (empty) doesn't "
+            f"contain the answer. Baseline's 0% task success and its "
+            f"apparently-high qualitative judge scores on Q6/Q7 both reflect "
+            f"this -- the judge scores a confident, well-formed refusal as "
+            f"coherent and 'grounded' (it makes no false claims), which is a "
+            f"real, separate judge-prompt limitation, not evidence baseline "
+            f"actually answered correctly. Treat baseline as 'no context "
+            f"provided', not 'no model knowledge available'."
         ),
         questions=[q.question for q in scenario.questions],
         baseline=baseline,
@@ -344,6 +409,28 @@ async def _run(strategy: str) -> None:
             f"aggregate as the full record."
         )
         result = dataclasses.replace(result, notes=result.notes + gate_note)
+
+    if strategy == "hyde":
+        # Same ordering precaution as self_rag_gate_log: read only after
+        # execute() has run every treatment() call.
+        refusal_count = sum(
+            1
+            for q in hyde_query_log
+            if "does not contain" in q.lower() or "provided context" in q.lower()
+        )
+        sample = hyde_query_log[0] if hyde_query_log else "(no queries logged)"
+        hyde_note = (
+            f" HYDE QUERY LOG: across this run's {len(hyde_query_log)} "
+            f"treatment calls, {refusal_count} of the generated hypothetical "
+            f"answers looked like a refusal (contained 'does not contain' or "
+            f"'provided context') rather than an actual invented answer -- "
+            f"0 is the expected/healthy value post-fix. Sample generated "
+            f"hypothetical answer: {sample!r}. Full per-question log was "
+            f"printed to stdout as '[hyde query] <question> -> "
+            f"<hypothetical answer used as the search query>' while this run "
+            f"executed."
+        )
+        result = dataclasses.replace(result, notes=result.notes + hyde_note)
 
     report_path = Path(f"evaluation/reports/rag-query-enhancement-{strategy}.md")
     report_path.parent.mkdir(parents=True, exist_ok=True)
