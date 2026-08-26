@@ -1,0 +1,85 @@
+name: rag-combinations
+questions:
+  - question: >-
+      According to RAG.md, what does the source call "Reranking + CRAG," and
+      what specifically happens to a corrected batch of results after CRAG
+      triggers a correction?
+    success_criterion: >-
+      Answer states this pairing is called "double-layer quality assurance"
+      and that reranking runs again on the new (corrected) results (RAG.md:
+      "**Reranking + CRAG** — the source's 'double-layer quality assurance.'
+      CRAG evaluates whether the retrieved documents are actually good; when
+      it rejects a batch and triggers a corrective retrieval loop, reranking
+      runs again on the new results, giving the pipeline two independent
+      passes at quality rather than one.").
+  - question: >-
+      According to RAG.md, what is the Multi-Query + HyDE combination
+      specifically scored for, and what does "dual enrichment" mean in that
+      context?
+    success_criterion: >-
+      Answer states this pairing is scored for "maximum recall for vague
+      queries" and that dual enrichment means covering both "make one query
+      stronger" (HyDE) and "cover more angles" (Multi-Query) at once, rather
+      than choosing between the two strategies (RAG.md: "**Multi-Query +
+      HyDE** — scored for 'maximum recall for vague queries.'" ...
+      "dual enrichment of the same underlying search, covering both 'make
+      one query stronger' and 'cover more angles' at once, rather than
+      choosing between the two strategies.").
+  - question: >-
+      According to RAG.md, which four techniques does the "Production
+      Grade" pipeline archetype chain together, and what does the source
+      call the result?
+    success_criterion: >-
+      Answer names Hybrid Search, Reranking, CRAG, and Context Compression
+      (in that order), and states the source calls it "the gold standard
+      for production RAG systems" (RAG.md: "the source's own named
+      'Production Grade' pipeline archetype chains three of them directly:
+      Hybrid Search casts the wide net, Reranking narrows it to true
+      relevance, CRAG validates the result and triggers correction when
+      needed, and Context Compression optimizes what's left before it
+      reaches the LLM, which the source calls 'the gold standard for
+      production RAG systems.'").
+  - question: >-
+      According to RAG.md, which six concepts does the "Fort Knox" pattern
+      chain together, and what does the source say that combination buys
+      (and cost)?
+    success_criterion: >-
+      Answer names Hybrid Search, Multi-Query, HyDE, Reranking, CRAG, and
+      Parent Document, and states the source describes the result as
+      "unbeatable accuracy" at the cost of high latency and high cost
+      (RAG.md: "its 'Fort Knox' pattern chains six concepts together —
+      Hybrid Search, Multi-Query, HyDE, Reranking, CRAG, and Parent
+      Document — for what it describes as 'unbeatable accuracy' at the cost
+      of high latency and high cost.").
+  - question: >-
+      According to RAG.md, which four techniques does the "Speed Demon"
+      pattern use, and what tradeoff does the source say it makes compared
+      to Fort Knox?
+    success_criterion: >-
+      Answer names Self-RAG, Hybrid Search, Reranking, and Context
+      Compression, and states it trades "slightly lower recall than Fort
+      Knox" for speed and cost (RAG.md: "its 'Speed Demon' pattern
+      (Self-RAG, Hybrid Search, Reranking, Context Compression) is
+      explicitly optimized for speed and cost at the price of 'slightly
+      lower recall than Fort Knox.'").
+  - question: >-
+      According to RAG.md, what is Parent Document Retrieval's actual
+      mechanic -- what happens after a small chunk matches a query?
+    success_criterion: >-
+      Answer states the mechanic searches against small chunks for
+      precision, then maps each top result back to its parent document,
+      page, or section before sending anything to the LLM (RAG.md: "The
+      mechanic is to search against small chunks for precision, then map
+      each top result back to its parent document, page, or section before
+      sending anything to the LLM, so retrieval stays precise while the
+      model still receives complete context.").
+  - question: >-
+      According to RAG.md's own compatibility matrix, how many conflicts
+      exist among its nine concepts, and what are the only real constraints
+      on combining them?
+    success_criterion: >-
+      Answer states there are zero conflicts among all 9 concepts, and that
+      the only constraints are latency, cost, and complexity budgets
+      (RAG.md: "Its conclusion is stated without qualification: 'ALL 9
+      concepts are mutually compatible. There are zero conflicts. Only
+      constraints are latency, cost, and complexity budgets.'").
