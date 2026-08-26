@@ -1,0 +1,73 @@
+# rag-query-enhancement — Comparison Result
+
+**Model:** qwen3.5, Ollama
+**Success criterion:** see evaluation/scenarios/rag-query-enhancement/queries.yaml
+
+## Quantitative
+
+| Run | RAG | CAG | MAG | Model | Input tokens | Output tokens | Latency (p50 / p95) | Task success | Δ vs. baseline | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Baseline | ✗ | ✗ | ✗ | qwen3.5, Ollama | 0 | 0 | 8193ms / 12181ms | 0% | — | strategy=multi-query, corpus=docs/architecture/RAG.md, 14 chunks. CAVEAT 1: qualitative judge is Ollama/qwen3.5, not Claude (no API credit balance at run time) -- same model family judging its own treatment output, a real self-grading-bias risk; re-run with ClaudeJudge once credits exist before treating these judge scores as final. CAVEAT 2: this strategy issues one extra LLM call per query before retrieval even runs (query-variant generation for multi-query, hypothetical-answer generation for hyde), on top of the one generate() call every strategy already pays for the final answer -- the rag-hybrid-reranking batch's rerank-llm finding already showed an extra reasoning-model call in the loop can add substantial latency; expect the same class of effect here. |
+| Treatment | ✓ | ✗ | ✗ | qwen3.5, Ollama | 0 | 0 | 94327ms / 166055ms | 71% | n/a output tokens, +1051.2% p50 latency | strategy=multi-query, corpus=docs/architecture/RAG.md, 14 chunks. CAVEAT 1: qualitative judge is Ollama/qwen3.5, not Claude (no API credit balance at run time) -- same model family judging its own treatment output, a real self-grading-bias risk; re-run with ClaudeJudge once credits exist before treating these judge scores as final. CAVEAT 2: this strategy issues one extra LLM call per query before retrieval even runs (query-variant generation for multi-query, hypothetical-answer generation for hyde), on top of the one generate() call every strategy already pays for the final answer -- the rag-hybrid-reranking batch's rerank-llm finding already showed an extra reasoning-model call in the loop can add substantial latency; expect the same class of effect here. |
+
+## Qualitative (per question)
+
+### Question 1
+
+| Response | Coherence | Relevance | Completeness | Groundedness |
+|---|---|---|---|---|
+| Baseline (A) | 5 | 1 | 1 | 1 |
+| Treatment (B) | 5 | 5 | 5 | 5 |
+
+
+### Question 2
+
+| Response | Coherence | Relevance | Completeness | Groundedness |
+|---|---|---|---|---|
+| Baseline (A) | 5 | 5 | 1 | 1 |
+| Treatment (B) | 5 | 5 | 4 | 5 |
+
+- Baseline unverifiable claims: The provided context does not contain any information about HyDE, what it embeds for searching, or its expected recall-gain figure according to RAG.md.
+
+### Question 3
+
+| Response | Coherence | Relevance | Completeness | Groundedness |
+|---|---|---|---|---|
+| Baseline (A) | 5 | 1 | 1 | 1 |
+| Treatment (B) | 5 | 5 | 5 | 5 |
+
+- Baseline unverifiable claims: The provided context does not contain the answer to this question.
+
+### Question 4
+
+| Response | Coherence | Relevance | Completeness | Groundedness |
+|---|---|---|---|---|
+| Baseline (A) | 5 | 3 | 1 | 5 |
+| Treatment (B) | 5 | 5 | 4 | 4 |
+
+- Treatment unverifiable claims: RAG.md is the document name that contains this information
+
+### Question 5
+
+| Response | Coherence | Relevance | Completeness | Groundedness |
+|---|---|---|---|---|
+| Baseline (A) | 5 | 1 | 1 | 1 |
+| Treatment (B) | 5 | 5 | 5 | 5 |
+
+- Baseline unverifiable claims: The provided context does not contain the answer to this question
+
+### Question 6
+
+| Response | Coherence | Relevance | Completeness | Groundedness |
+|---|---|---|---|---|
+| Baseline (A) | 5 | 5 | 5 | 5 |
+| Treatment (B) | 5 | 5 | 5 | 5 |
+
+
+### Question 7
+
+| Response | Coherence | Relevance | Completeness | Groundedness |
+|---|---|---|---|---|
+| Baseline (A) | 5 | 4 | 3 | 5 |
+| Treatment (B) | 5 | 5 | 3 | 5 |
+
