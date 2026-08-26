@@ -217,6 +217,14 @@ class _NullDocumentRepository(DocumentRepository):
         # changing anything this scenario's own chunkers actually measure.
         return []
 
+    async def get_chunk_by_id(self, chunk_id: uuid.UUID) -> Chunk | None:
+        # DocumentRepository gained this abstract method too (rag-parent-
+        # doc-compression batch, ParentDocumentRetriever's parent lookup) --
+        # this scenario never uses it (no parent-document strategy here),
+        # so None keeps this class instantiable without changing anything
+        # this scenario's own chunkers actually measure.
+        return None
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:

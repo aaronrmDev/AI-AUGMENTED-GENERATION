@@ -289,6 +289,15 @@ class _InMemoryDocumentRepository(DocumentRepository):
         # that could ask for them.
         return self._chunks
 
+    async def get_chunk_by_id(self, chunk_id: uuid.UUID) -> Chunk | None:
+        # DocumentRepository gained this abstract method after this script
+        # was first written (rag-parent-doc-compression batch,
+        # ParentDocumentRetriever's parent lookup) -- this scenario never
+        # uses it (no parent-document strategy here), so a lookup that can
+        # only ever return None keeps this class instantiable without
+        # changing anything this scenario's own strategies actually measure.
+        return next((c for c in self._chunks if c.id == chunk_id), None)
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
