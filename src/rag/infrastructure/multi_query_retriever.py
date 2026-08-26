@@ -21,7 +21,11 @@ class MultiQueryRetriever(Retriever):
 
     async def execute(self, tenant_id: uuid.UUID, query: str, top_k: int) -> list[SearchResult]:
         prompt = _PROMPT_TEMPLATE.format(n=self._num_queries, query=query)
-        response = await self._chat_model.generate(question=prompt, context="")
+        # complete(), not generate(): this is a rephrasing task, not a
+        # "use only the provided context" question -- generate()'s
+        # RAG-answering system prompt is the wrong instruction for it (see
+        # HyDERetriever.execute's comment for the sibling bug this avoided).
+        response = await self._chat_model.complete(prompt)
         variants = [line.strip() for line in response.splitlines() if line.strip()]
         if not variants:
             variants = [query]

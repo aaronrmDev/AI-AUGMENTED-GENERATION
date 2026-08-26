@@ -37,3 +37,18 @@ class ClaudeChatModel(ChatModel):
             if block.type == "text":
                 return cast(str, block.text)
         return ""
+
+    async def complete(self, prompt: str) -> str:
+        # No system prompt: see OllamaChatModel.complete for why generate()'s
+        # RAG-answering _SYSTEM_PROMPT must not be applied to an arbitrary
+        # completion request (HyDE, Self-RAG's gate/no-context branch,
+        # Multi-Query's variant generation all need this).
+        response = await self._client.messages.create(
+            model=self._model_id,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        for block in response.content:
+            if block.type == "text":
+                return cast(str, block.text)
+        return ""

@@ -57,3 +57,27 @@ async def test_generate_returns_empty_string_when_content_is_none():
     answer = await model.generate(question="q", context="c")
 
     assert answer == ""
+
+
+async def test_complete_returns_the_response_text():
+    fake_client = _FakeOllamaClient("a direct completion")
+    model = OllamaChatModel(client=fake_client, model_id="qwen3.5")
+
+    answer = await model.complete("Write a hypothetical answer to: what is FastAPI?")
+
+    assert answer == "a direct completion"
+
+
+async def test_complete_sends_no_system_prompt():
+    # The bug this batch's final review caught: generate()'s RAG-answering
+    # system prompt ("if the context doesn't contain the answer, say so")
+    # made the model refuse HyDE/Self-RAG/Multi-Query's non-QA prompts.
+    # complete() must never send that system prompt.
+    fake_client = _FakeOllamaClient("irrelevant")
+    model = OllamaChatModel(client=fake_client, model_id="qwen3.5")
+
+    await model.complete("some prompt")
+
+    sent = fake_client.last_call_kwargs
+    assert sent["messages"] == [{"role": "user", "content": "some prompt"}]
+    assert all(m["role"] != "system" for m in sent["messages"])

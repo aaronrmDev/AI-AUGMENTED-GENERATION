@@ -1,3 +1,4 @@
+import re
 import uuid
 
 from src.rag.domain.entities import ChatAnswer
@@ -12,6 +13,19 @@ _GATE_PROMPT_TEMPLATE = (
     "nothing else.\n\nQuestion: {question}"
 )
 
+# Whole-word match, unbounded (not a fixed-length prefix): the prior
+# `"no" not in response.strip().lower()[:10]` both false-negatived on a
+# compliant "NO" appearing after character 10 (e.g. "Based on my knowledge,
+# NO") and false-positived on "no" appearing as a substring of an unrelated
+# word inside the first 10 characters (e.g. "Unknown"). \b(yes|no)\b takes
+# the first standalone yes/no token in the response, which is what the gate
+# prompt actually asks the model to produce. A response containing neither
+# word (or negating one, e.g. "NOT needed" -- rare given the prompt's "ONLY
+# YES or NO" instruction) defaults to needs_retrieval=True: retrieving when
+# it wasn't strictly necessary costs latency, but skipping a retrieval that
+# was needed risks a hallucinated answer, so the safe default is to retrieve.
+_GATE_ANSWER_PATTERN = re.compile(r"\b(yes|no)\b", re.IGNORECASE)
+
 
 class SelfRAGAnswerQuestion:
     def __init__(self, search_documents: Retriever, chat_model: ChatModel, top_k: int) -> None:
@@ -21,15 +35,22 @@ class SelfRAGAnswerQuestion:
 
     async def execute(self, tenant_id: uuid.UUID, question: str) -> ChatAnswer:
         gate_prompt = _GATE_PROMPT_TEMPLATE.format(question=question)
-        gate_response = await self._chat_model.generate(question=gate_prompt, context="")
-        # Tolerant parse, same convention as LLMReranker's score parsing:
-        # check the first ~10 characters for "no" before "yes", since a
-        # response starting "NO, this is..." should never be read as
-        # containing "yes" from somewhere later in the sentence.
-        needs_retrieval = "no" not in gate_response.strip().lower()[:10]
+        # complete(), not generate(): see HyDERetriever.execute's comment --
+        # this is a classification prompt, not a "use only the provided
+        # context" question, and generate()'s RAG-answering system prompt is
+        # the wrong instruction for it.
+        gate_response = await self._chat_model.complete(gate_prompt)
+        match = _GATE_ANSWER_PATTERN.search(gate_response)
+        needs_retrieval = True if match is None else match.group(1).lower() == "yes"
 
         if not needs_retrieval:
-            answer = await self._chat_model.generate(question=question, context="")
+            # complete(), not generate(): answering directly from the
+            # model's own knowledge is exactly the case generate()'s system
+            # prompt refuses ("if the context doesn't contain the answer,
+            # say so") when context="" -- every live NO-gate answer degraded
+            # into a refusal under generate() until this was caught by this
+            # batch's final review.
+            answer = await self._chat_model.complete(question)
             return ChatAnswer(answer=answer, sources=[])
 
         sources = await self._search.execute(tenant_id=tenant_id, query=question, top_k=self._top_k)

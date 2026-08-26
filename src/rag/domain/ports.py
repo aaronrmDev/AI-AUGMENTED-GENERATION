@@ -25,6 +25,9 @@ class ChatModel(ABC):
     @abstractmethod
     async def generate(self, question: str, context: str) -> str: ...
 
+    @abstractmethod
+    async def complete(self, prompt: str) -> str: ...
+
 
 class DocumentRepository(ABC):
     @abstractmethod

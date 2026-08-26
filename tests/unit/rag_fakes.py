@@ -32,10 +32,15 @@ class FakeChatModel(ChatModel):
         self._response = response
         self.last_question: str | None = None
         self.last_context: str | None = None
+        self.last_prompt: str | None = None
 
     async def generate(self, question: str, context: str) -> str:
         self.last_question = question
         self.last_context = context
+        return self._response
+
+    async def complete(self, prompt: str) -> str:
+        self.last_prompt = prompt
         return self._response
 
 

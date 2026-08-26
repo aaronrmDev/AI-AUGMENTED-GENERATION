@@ -30,3 +30,21 @@ class OllamaChatModel(ChatModel):
         # is always the plain answer, even for a reasoning-capable model, so
         # there's no block-type scan needed here.
         return response.message.content or ""
+
+    async def complete(self, prompt: str) -> str:
+        # No system prompt: generate()'s _SYSTEM_PROMPT ("...say so plainly
+        # rather than guessing") is a RAG-answering instruction that actively
+        # fights any caller that wants a direct completion of an arbitrary
+        # prompt with no document context -- HyDE's "invent a hypothetical
+        # answer", Self-RAG's retrieval-gate check and its own no-context
+        # "answer from your own knowledge" branch, and Multi-Query's "generate
+        # query variants" all need the model to actually do the thing asked,
+        # not refuse for lack of context. A real bug from exactly this
+        # conflict (HyDE and Self-RAG's NO branch both silently degraded into
+        # refusal generators under generate()) was caught by this batch's
+        # final review.
+        response = await self._client.chat(
+            model=self._model_id,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.message.content or ""

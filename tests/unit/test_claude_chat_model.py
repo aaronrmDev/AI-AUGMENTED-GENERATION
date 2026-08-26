@@ -50,3 +50,26 @@ async def test_generate_includes_both_question_and_context_in_the_request():
     full_prompt = str(sent["messages"])
     assert "What is FastAPI?" in full_prompt
     assert "FastAPI is a Python web framework." in full_prompt
+
+
+async def test_complete_returns_the_response_text():
+    fake_client = _FakeAnthropicClient("a direct completion")
+    model = ClaudeChatModel(client=fake_client, model_id="claude-opus-5")
+
+    answer = await model.complete("Write a hypothetical answer to: what is FastAPI?")
+
+    assert answer == "a direct completion"
+
+
+async def test_complete_sends_no_system_prompt():
+    # The bug this batch's final review caught: generate()'s RAG-answering
+    # system prompt made the model refuse HyDE/Self-RAG/Multi-Query's non-QA
+    # prompts. complete() must never send that system prompt.
+    fake_client = _FakeAnthropicClient("irrelevant")
+    model = ClaudeChatModel(client=fake_client, model_id="claude-opus-5")
+
+    await model.complete("some prompt")
+
+    sent = fake_client.messages.last_call_kwargs
+    assert "system" not in sent
+    assert sent["messages"] == [{"role": "user", "content": "some prompt"}]

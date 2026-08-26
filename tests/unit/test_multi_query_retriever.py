@@ -13,10 +13,18 @@ def _result(chunk_id: uuid.UUID) -> SearchResult:
 class _FakeChatModel:
     def __init__(self, response: str) -> None:
         self._response = response
-        self.questions: list[str] = []
+        self.prompts: list[str] = []
+        self.generate_calls: int = 0
+
+    async def complete(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return self._response
 
     async def generate(self, question: str, context: str) -> str:
-        self.questions.append(question)
+        # Tracked, never expected to be called -- see
+        # src/rag/infrastructure/multi_query_retriever.py's comment on why
+        # variant generation must use complete(), not generate().
+        self.generate_calls += 1
         return self._response
 
 
@@ -64,3 +72,28 @@ async def test_blank_lines_in_the_chat_response_are_not_treated_as_query_variant
     await retriever.execute(tenant_id=_TENANT, query="q", top_k=5)
 
     assert inner.queries_seen == ["variant one", "variant two"]
+
+
+async def test_falls_back_to_the_original_query_when_the_response_has_no_variants():
+    chat = _FakeChatModel("")
+    inner = _RecordingRetriever({"q": [_result(uuid.uuid4())]})
+    retriever = MultiQueryRetriever(inner=inner, chat_model=chat, num_queries=4)
+
+    await retriever.execute(tenant_id=_TENANT, query="q", top_k=5)
+
+    assert inner.queries_seen == ["q"]
+
+
+async def test_generates_variants_via_complete_not_generate():
+    # Regression test for the bug this batch's final review caught: using
+    # generate(question=prompt, context="") for a rephrasing task risks the
+    # same RAG-answering-system-prompt conflict that broke HyDE and Self-RAG.
+    # complete() carries no such system prompt.
+    chat = _FakeChatModel("variant one\nvariant two")
+    inner = _RecordingRetriever({})
+    retriever = MultiQueryRetriever(inner=inner, chat_model=chat, num_queries=2)
+
+    await retriever.execute(tenant_id=_TENANT, query="q", top_k=5)
+
+    assert chat.generate_calls == 0
+    assert len(chat.prompts) == 1
