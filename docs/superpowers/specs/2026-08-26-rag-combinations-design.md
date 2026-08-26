@@ -75,10 +75,32 @@ surface a parent chunk as a search result — and `ParentDocumentRetriever` expe
 input to be *child* chunks: for a result whose `chunk_id` resolves to a parent chunk
 (`parent_id is None`), it silently skips that result rather than expanding or erroring.
 This is measured and disclosed honestly in Fort Knox's report as a real behavior, not
-engineered around with new production code at this stage — the corpus's own placeholder
-parent-chunk embeddings (`[0.0] * 384`, from Batch B) mean parent chunks never surface
-via the *vector* search arm, so this specifically affects only what BM25's keyword arm
-can return, bounding the interaction's actual impact.
+engineered around with new production code at this stage.
+
+**Revised after this batch's final review, which measured the actual impact rather than
+assuming it was bounded**: the mechanism stated in an earlier version of this section was
+wrong, and so was the conclusion. `UploadDocumentWithParents`
+(`src/rag/application/upload_document_with_parents.py`) never upserts parent chunks to
+the vector store *at all* — the `[0.0] * 384` placeholder embedding exists solely to
+satisfy the Postgres `Vector(384) NOT NULL` column, not to keep parents out of vector
+search results (they were never eligible for the vector arm in the first place, upsert
+or no). That means this interaction is not "only what BM25 can return" in some small,
+bounded sense — parents are BM25's *natural favorites*: at roughly 969 tokens each
+against children's roughly 182, they accumulate far more of BM25Plus's per-matched-term
+score contribution. Measured directly against this batch's real corpus and question set:
+parents occupied 6–7 of the 7 available parent slots in BM25's own top-20 on every one of
+the 7 questions (47 of 49 possible appearances), with a parent's best BM25 rank landing
+at position 2 (0-indexed 1) on all 7 questions. After `HybridSearchDocuments`' RRF fusion
+and `RerankingRetriever`'s cross-encoder pass, parents still made up 13 of the 35 results
+(37%) reaching `ParentDocumentRetriever` across a live 7-question sample — meaning over a
+third of what CRAG and Reranking worked to surface got silently dropped at the very last
+stage, not a rare edge case. This can degenerate a treatment sample into an empty
+context (see Fort Knox's report notes) when too few of the survivors are children.
+Genuinely fixing this — e.g. having `BM25KeywordSearch` accept an optional
+child-only filter, or having `ParentDocumentRetriever` fall back to a parent's own
+content instead of dropping it — is real production work, out of scope for this
+composition-only batch; the point of this section is that the interaction is
+disclosed honestly with its measured size, not "bounded" by assumption.
 
 ## Reranker and corpus choice
 

@@ -81,6 +81,17 @@ class _CorrectionObservingRetriever(Retriever):
 
     def take_call_count(self) -> int:
         count = self.calls_this_question
+        # A bypassed observer (e.g. a future refactor that stops wiring it
+        # as CorrectiveRetriever's inner) would silently report count=0,
+        # which reads identically to "correction never fired" -- this
+        # batch's final review had to independently reproduce a live call to
+        # confirm the observer was really being invoked (count=1, not the 0
+        # a bypass would also produce) before trusting the 0%-correction
+        # reports. Asserting >=1 here makes a bypass fail loudly instead.
+        assert count >= 1, (
+            "observer was never invoked -- it is not correctly wired as "
+            "CorrectiveRetriever's inner retriever"
+        )
         self.calls_this_question = 0
         return count
 
@@ -119,12 +130,13 @@ def _build_retriever(
     # only for combinations that wrap a CorrectiveRetriever, so treatment()
     # can honestly report how often correction actually fires (the exact
     # measurement the rag-crag batch's final review found missing).
-    reranker = CrossEncoderReranker()
-    keyword_retriever = BM25KeywordSearch(document_repository=document_repository)
-    hybrid: Retriever = HybridSearchDocuments(
-        vector_retriever=vector_retriever, keyword_retriever=keyword_retriever
-    )
-
+    #
+    # CrossEncoderReranker/BM25KeywordSearch/HybridSearchDocuments are built
+    # lazily, per branch below (not unconditionally at the top): the
+    # cross-encoder loads a real HuggingFace model, and multi-query-hyde
+    # uses none of these three -- this batch's final review caught the
+    # earlier unconditional construction wasting a model load on every
+    # multi-query-hyde run.
     if combination == "multi-query-hyde":
         # Multi-Query + HyDE only -- no Hybrid Search in this pairing's own
         # name, so the base stays plain vector search.
@@ -133,6 +145,12 @@ def _build_retriever(
             chat_model=chat_model,
         )
         return retriever, None
+
+    reranker = CrossEncoderReranker()
+    keyword_retriever = BM25KeywordSearch(document_repository=document_repository)
+    hybrid: Retriever = HybridSearchDocuments(
+        vector_retriever=vector_retriever, keyword_retriever=keyword_retriever
+    )
 
     if combination == "reranking-crag":
         # Reranking + CRAG only -- no Hybrid Search in this pairing's own
@@ -299,9 +317,7 @@ async def _run(combination: str) -> None:
                 "self-rag" in text and "hybrid" in text and "rerank" in text
                 and "compression" in text and "fort knox" in text
             ),
-            scenario.questions[5].question: lambda: (
-                "parent" in text and ("small chunk" in text or "small chunks" in text)
-            ),
+            scenario.questions[5].question: lambda: "parent" in text and "small chunk" in text,
             scenario.questions[6].question: lambda: "zero" in text and "conflict" in text,
         }
         return checks.get(question, lambda: False)()
@@ -311,17 +327,54 @@ async def _run(combination: str) -> None:
 
     correction_caveat = (
         " CAVEAT 4: this combination wraps CorrectiveRetriever -- correction "
-        "firing rate is instrumented and reported below, not assumed."
+        "firing rate is instrumented and reported below, not assumed. "
+        "IMPORTANT SCOPE LIMIT (added after this batch's final review): the "
+        "instrument measures ONLY whether CorrectiveRetriever's re-search "
+        "fired (i.e. whether zero of top_k passed relevance review) -- it "
+        "does NOT measure the relevance filter's rejection rate. A 0% "
+        "correction rate is fully compatible with the filter discarding "
+        "most candidates on every call, as long as at least one survives; "
+        "spot-checks during review found CRAG discarding roughly 3 of every "
+        "5 reranked results on individual live calls while still reporting "
+        "0% correction. A 0% rate here also isn't directly comparable to "
+        "the standalone rag-crag batch's measured 14% firing rate: that "
+        "batch used a different question set (including 2 deliberately "
+        "vague, non-technical diagnostic questions written specifically to "
+        "stress the correction path) and wrapped CorrectiveRetriever around "
+        "a plain vector search with no reranker inside it, whereas every "
+        "combination here already reranks before CRAG ever sees the "
+        "results, structurally lowering how often nothing passes."
         if observer is not None
         else ""
     )
     fort_knox_caveat = (
         " CAVEAT 5 (FORT KNOX ONLY): BM25 keyword search reads every saved "
-        "chunk, including parent chunks UploadDocumentWithParents also "
-        "saves; a parent chunk surfaced by the keyword arm is silently "
-        "skipped by ParentDocumentRetriever (its parent_id is None), a real "
-        "disclosed interaction documented in the design spec, not engineered "
-        "around."
+        "chunk, including the 7 parent chunks UploadDocumentWithParents "
+        "also saves (48 total chunks in the repository; document.chunk_count "
+        "below reports only the 41 children UploadDocumentWithParents "
+        "returns, not both tiers). A parent chunk surfaced by the keyword "
+        "arm is silently skipped by ParentDocumentRetriever (its parent_id "
+        "is None) rather than expanded or erroring. MEASURED IMPACT (added "
+        "after this batch's final review measured it directly, rather than "
+        "assuming it was bounded): parents are BM25's natural favorites, "
+        "not a rare edge case -- at roughly 969 tokens each against "
+        "children's roughly 182, they accumulate far more of BM25Plus's "
+        "per-matched-term score. Measured on this batch's real corpus and "
+        "question set: parents occupied 6-7 of the 7 available parent "
+        "slots in BM25's own top-20 on every one of the 7 questions (47 of "
+        "49 possible appearances), with a parent's best BM25 rank landing "
+        "at position 2 on all 7 questions. After Hybrid Search's RRF fusion "
+        "and Reranking's cross-encoder pass, parents still made up roughly "
+        "37% of results reaching ParentDocumentRetriever in a live sample -- "
+        "over a third of what CRAG and Reranking worked to surface got "
+        "silently dropped at the final stage. This can degenerate a "
+        "treatment sample into an empty context (if too few of the "
+        "survivors are children), which AnswerQuestion then answers with no "
+        "retrieved material at all -- indistinguishable from a baseline "
+        "call for that one sample. Not engineered around at this stage "
+        "(would require production changes to BM25KeywordSearch or "
+        "ParentDocumentRetriever, out of scope for this composition-only "
+        "batch); disclosed here with its real measured size instead."
         if combination == "fort-knox"
         else ""
     )
@@ -339,7 +392,13 @@ async def _run(combination: str) -> None:
             f"context deliberately (strict context-only methodology, same "
             f"as every prior batch) -- expected to refuse or answer from "
             f"general training regardless of what a bare model might know. "
-            f"CAVEAT 3: the qualitative judge scores both arms against the "
+            f"Baseline's task-success figure can differ slightly run to run "
+            f"for the identical call: task_success_rate is computed from "
+            f"only the LAST of repeat_count=3 samples per question, not an "
+            f"average, so a small amount of run-to-run variance on "
+            f"borderline questions is expected and not itself evidence of a "
+            f"methodology difference between combinations' reports. CAVEAT "
+            f"3: the qualitative judge scores both arms against the "
             f"TREATMENT's own retrieved context (evaluation/application/"
             f"run_comparison.py, pre-existing, tracked as #148) -- baseline "
             f"can be penalized on 'groundedness' for citing facts sourced "
