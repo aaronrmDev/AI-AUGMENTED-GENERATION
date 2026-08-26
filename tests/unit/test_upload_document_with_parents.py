@@ -94,3 +94,36 @@ async def test_saved_chunks_include_both_tiers_with_correct_parent_linkage():
     assert child_chunk.parent_id == parent_chunk.id
     assert parent_chunk.embedding == [0.0] * 384  # placeholder, never searched
     assert child_chunk.embedding == [0.1, 0.2]  # real embedding
+
+
+async def test_each_child_links_to_the_correct_one_of_multiple_parents():
+    # Final-review finding I-5: the two tests above both use exactly one
+    # parent, so parent_chunks[parent_index] is indistinguishable from
+    # parent_chunks[0] -- an implementation that hardcoded index 0, or
+    # reversed the parent list, would still pass both. This test uses two
+    # parents with children distributed across both, and asserts by
+    # CONTENT (not by list position) that each child's parent_id resolves
+    # to the parent chunk whose content actually matches -- a hardcoded or
+    # reversed index fails this.
+    result = ParentChildChunks(
+        parents=["parent zero", "parent one"],
+        children=[("child a", 0), ("child b", 1), ("child c", 0)],
+    )
+    repo = _FakeDocumentRepository()
+    upload = UploadDocumentWithParents(
+        document_repository=repo,
+        embedding_model=_FakeEmbedder(),
+        vector_store=_FakeVectorStore(),
+        parent_document_chunker=_FakeChunker(result),
+        extractor=_FakeExtractor(),
+        file_storage=_FakeFileStorage(),
+    )
+
+    await upload.execute(tenant_id=uuid.uuid4(), filename="doc.txt", content=b"text")
+
+    parents_by_content = {c.content: c for c in repo.saved_chunks if c.parent_id is None}
+    children_by_content = {c.content: c for c in repo.saved_chunks if c.parent_id is not None}
+
+    assert children_by_content["child a"].parent_id == parents_by_content["parent zero"].id
+    assert children_by_content["child c"].parent_id == parents_by_content["parent zero"].id
+    assert children_by_content["child b"].parent_id == parents_by_content["parent one"].id

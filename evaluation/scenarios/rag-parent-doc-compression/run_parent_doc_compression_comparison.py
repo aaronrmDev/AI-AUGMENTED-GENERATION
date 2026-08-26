@@ -18,15 +18,17 @@ own):
     PYTHONPATH=. uv run python evaluation/scenarios/rag-parent-doc-compression/\
 run_parent_doc_compression_comparison.py <strategy>
 
-<strategy> is one of: parent-document, context-compression,
+<strategy> is one of: no-compression, parent-document, context-compression,
 parent-document-compression
 """
 import asyncio
+import dataclasses
 import sys
 import uuid
 from pathlib import Path
 
 import ollama
+import tiktoken
 
 from evaluation.application.run_comparison import RunComparison
 from evaluation.domain.entities import Answer
@@ -52,13 +54,17 @@ from src.rag.infrastructure.text_extractor import TextExtractor
 _SCENARIO_DIR = Path(__file__).parent
 _MODEL_CONFIG = "qwen3.5, Ollama"
 
-_STRATEGIES = ("parent-document", "context-compression", "parent-document-compression")
+_STRATEGIES = (
+    "no-compression", "parent-document", "context-compression", "parent-document-compression",
+)
 # Only these two strategies need the two-tier parent/child index built by
 # UploadDocumentWithParents/ParentDocumentChunker. context-compression alone
 # compresses whatever a plain retriever returns and has no use for a parent
 # tier -- it uploads with the plain UploadDocument/FixedSizeChunker pair
 # instead (see the upload branch in _run below).
 _PARENT_DOCUMENT_STRATEGIES = ("parent-document", "parent-document-compression")
+
+_ENCODING = tiktoken.get_encoding("cl100k_base")
 
 
 def _make_retriever(
@@ -74,10 +80,18 @@ def _make_retriever(
     # request exactly top_k from their inner retriever (see
     # src/rag/infrastructure/parent_document_retriever.py and
     # src/rag/infrastructure/compressing_retriever.py). There is no
-    # widen-then-narrow step here, so the earlier batch's "candidate_k
-    # exceeds corpus size" measurement caveat does NOT apply to this batch --
-    # every strategy below always retrieves exactly top_k candidates from the
-    # vector store, regardless of how small the corpus is.
+    # widen-then-narrow step here in the candidate_k sense. BUT this is not
+    # "no measurement gap" -- the final whole-branch review proved parent
+    # expansion creates its own confound: on this 7-parent corpus, a top_k=5
+    # child search routinely expands to 3-5 DISTINCT parents, which is
+    # 45-77% of the entire corpus by token count (measured per-question in
+    # the parent-document/parent-document-compression notes below). A high
+    # task-success rate on those two strategies is therefore partly "the
+    # model saw most of the source document," not purely a property of the
+    # retrieval mechanism -- disclosed here rather than left for a reader to
+    # assume "no widen-then-narrow" means "no confound of any kind."
+    if name == "no-compression":
+        return vector_retriever
     if name == "parent-document":
         return ParentDocumentRetriever(
             inner=vector_retriever, document_repository=document_repository
@@ -160,6 +174,8 @@ async def _run(strategy: str) -> None:
         text = await chat_model.generate(question=question, context="")
         return Answer(text=text, input_tokens=0, output_tokens=0, context="")
 
+    context_token_counts: list[int] = []
+
     async def treatment(question: str) -> Answer:
         result = await answer_question.execute(tenant_id=tenant_id, question=question)
         # Reconstructs exactly what AnswerQuestion.execute() itself joined
@@ -167,6 +183,15 @@ async def _run(strategy: str) -> None:
         # on ChatAnswer, so this is the only way to get it back out for the
         # judge without changing AnswerQuestion's return contract.
         retrieved_context = "\n\n".join(source.content for source in result.sources)
+        # OllamaChatModel.generate discards Ollama's own prompt_eval_count/
+        # eval_count, so Answer.input_tokens/output_tokens stay 0 (a known
+        # harness limitation, tracked in #147) -- but for a Context
+        # Compression batch specifically, the retrieved-context size IS the
+        # metric the technique exists to move, and it's sitting right here
+        # for free. Recorded in context_token_counts (closed over, appended
+        # to the notes string below) rather than repurposing input_tokens
+        # for a value that isn't actually the chat model's real usage.
+        context_token_counts.append(len(_ENCODING.encode(retrieved_context)))
         return Answer(
             text=result.answer, input_tokens=0, output_tokens=0, context=retrieved_context
         )
@@ -252,17 +277,36 @@ async def _run(strategy: str) -> None:
             f"same model family judging its own treatment output, a real "
             f"self-grading-bias risk; re-run with ClaudeJudge once credits "
             f"exist before treating these judge scores as final. "
-            f"CAVEAT 2 does NOT apply to this batch: unlike "
-            f"rag-hybrid-reranking's candidate_k-exceeds-corpus-size caveat, "
-            f"ParentDocumentRetriever and CompressingRetriever both request "
-            f"exactly top_k from their inner retriever (no widen-then-narrow "
-            f"candidate pool), so this run has no equivalent measurement gap."
+            f"CAVEAT 2 (corrected after the final whole-branch review found "
+            f"the original wording overclaimed): candidate_k-style widen-"
+            f"then-narrow doesn't apply here, but parent expansion creates "
+            f"its own confound on this small 7-parent corpus -- see the "
+            f"'no-compression' control arm's report for the isolated effect. "
+            f"CAVEAT 3: per-strategy latency deltas across this batch's runs "
+            f"are dominated by Ollama generation variance at repeat_count=3 "
+            f"(observed p95/p50 ratios of 2.2x-6.0x on 15 samples each) and "
+            f"should not be read as a precise per-technique cost; only large, "
+            f"consistent differences are meaningful at this sample size."
         ),
         questions=[q.question for q in scenario.questions],
         baseline=baseline,
         treatment=treatment,
         success_check=success_check,
     )
+    # context_token_counts is only fully populated once every treatment()
+    # call has actually run -- which happens inside execute() above, not
+    # before it (Python evaluates the notes= argument before the call, so
+    # building this into the notes= string directly would have captured an
+    # empty list). Appended via dataclasses.replace on the frozen result
+    # instead of threading a mutable notes string through RunComparison.
+    context_note = (
+        f" Context tokens actually sent to the model this run: "
+        f"mean={sum(context_token_counts) // max(len(context_token_counts), 1)}, "
+        f"range={min(context_token_counts, default=0)}-{max(context_token_counts, default=0)} "
+        f"(computed from the real retrieved context, not the chat model's "
+        f"own usage reporting -- OllamaChatModel discards that, tracked in #147)."
+    )
+    result = dataclasses.replace(result, notes=result.notes + context_note)
 
     report_path = Path(f"evaluation/reports/rag-parent-doc-compression-{strategy}.md")
     report_path.parent.mkdir(parents=True, exist_ok=True)
