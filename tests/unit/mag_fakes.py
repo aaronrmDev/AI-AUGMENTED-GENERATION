@@ -35,20 +35,28 @@ class FakeEpisodicMemoryRepository(EpisodicMemoryRepository):
 class FakeSemanticMemoryRepository(SemanticMemoryRepository):
     def __init__(self) -> None:
         self.saved: list[tuple[SemanticMemory, uuid.UUID]] = []
-        # Keyed by (tenant_id, user_id, fact_key), matching the real
-        # repository's ON CONFLICT (user_id, fact_key) upsert -- a second
-        # save() with the same key replaces, never duplicates.
-        self._by_key: dict[tuple[uuid.UUID, uuid.UUID, str], SemanticMemory] = {}
+        # Keyed by (user_id, fact_key) ONLY, matching the real repository's
+        # actual unique constraint (migration 0003's
+        # uq_semantic_memory_user_id_fact_key -- deliberately NOT scoped to
+        # tenant_id, since user_id already implies exactly one tenant via
+        # the users table; a save() under a tenant_id that doesn't match the
+        # user's real tenant is a caller bug the real database's RLS policy
+        # rejects outright rather than silently permitting a second row).
+        # This fake previously keyed on (tenant_id, user_id, fact_key),
+        # which permitted exactly the duplicate-under-a-mismatched-tenant
+        # case the real constraint forbids -- a unit test built on it could
+        # never catch that mismatch.
+        self._by_key: dict[tuple[uuid.UUID, str], SemanticMemory] = {}
         self._search_results: list[SemanticMemory] = []
 
     async def save(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
         self.saved.append((fact, tenant_id))
-        self._by_key[(tenant_id, fact.user_id, fact.fact_key)] = fact
+        self._by_key[(fact.user_id, fact.fact_key)] = fact
 
     async def find_by_key(
         self, user_id: uuid.UUID, fact_key: str, tenant_id: uuid.UUID
     ) -> SemanticMemory | None:
-        return self._by_key.get((tenant_id, user_id, fact_key))
+        return self._by_key.get((user_id, fact_key))
 
     def set_search_results(self, results: list[SemanticMemory]) -> None:
         self._search_results = results

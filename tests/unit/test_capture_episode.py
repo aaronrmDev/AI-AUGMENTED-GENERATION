@@ -28,13 +28,33 @@ class FakeQdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
         return []
 
 
+class _SpyEmbeddingModel(FakeEmbeddingModel):
+    # FakeEmbeddingModel hashes purely by len(text) % 7 -- two strings of
+    # equal length embed identically, which is exactly the case a
+    # sort_keys=True regression test needs to tell apart (json.dumps with
+    # and without sort_keys produces same-length strings for the same dict,
+    # just reordered). This spy records the literal text it was asked to
+    # embed so a test can assert on that directly, instead of trying to
+    # infer it from an embedding whose own hash can't distinguish the cases
+    # under test.
+    def __init__(self) -> None:
+        super().__init__()
+        self.embedded_texts: list[str] = []
+
+    def embed(self, text: str) -> list[float]:
+        self.embedded_texts.append(text)
+        return super().embed(text)
+
+
 def _use_case(
-    repo: FakeEpisodicMemoryRepository, index: FakeQdrantEpisodicMemoryIndex
+    repo: FakeEpisodicMemoryRepository,
+    index: FakeQdrantEpisodicMemoryIndex,
+    embedder: FakeEmbeddingModel | None = None,
 ) -> CaptureEpisode:
     return CaptureEpisode(
         episodic_memory_repository=repo,
         episodic_memory_index=index,
-        embedding_model=FakeEmbeddingModel(),
+        embedding_model=embedder or FakeEmbeddingModel(),
     )
 
 
@@ -81,16 +101,23 @@ async def test_execute_generates_a_fresh_uuid_for_every_episode():
 
 
 async def test_execute_embeds_the_json_serialized_content_with_sorted_keys():
+    # Regression-proof against a same-length-string collision: the
+    # FakeEmbeddingModel this test used to rely on can't tell
+    # '{"b": ..., "a": ...}' apart from '{"a": ..., "b": ...}' by output
+    # alone (both hash to the same length-derived vector), so a bug that
+    # dropped sort_keys=True entirely would not have failed this test. The
+    # spy asserts on the literal text handed to embed() instead.
     repo = FakeEpisodicMemoryRepository()
     index = FakeQdrantEpisodicMemoryIndex()
+    embedder = _SpyEmbeddingModel()
     content = {"b": "second", "a": "first"}
 
-    episode = await _use_case(repo, index).execute(
+    await _use_case(repo, index, embedder).execute(
         tenant_id=uuid.uuid4(), session_id=uuid.uuid4(), content=content
     )
 
-    expected = FakeEmbeddingModel().embed(json.dumps(content, sort_keys=True))
-    assert episode.embedding == expected
+    assert embedder.embedded_texts == [json.dumps(content, sort_keys=True)]
+    assert embedder.embedded_texts != [json.dumps(content)]
 
 
 async def test_execute_returns_an_episodic_memory_carrying_the_given_session_and_content():

@@ -80,8 +80,12 @@ class QdrantSemanticMemoryIndex(SemanticMemoryIndex):
                     fact_key=str(payload["fact_key"]),
                     fact_value=str(payload["fact_value"]),
                     embedding=embedding,
-                    confidence=float(payload["confidence"]),
-                    source=str(payload["source"]),
+                    # .get() with the entity's own defaults, not payload[...]
+                    # -- a point upserted before confidence/source were added
+                    # to this payload (or by any future schema change) reads
+                    # back as "unknown," not a KeyError.
+                    confidence=float(payload.get("confidence", 1.0)),
+                    source=str(payload.get("source", "")),
                     valid_until=(
                         datetime.fromisoformat(valid_until_raw) if valid_until_raw else None
                     ),

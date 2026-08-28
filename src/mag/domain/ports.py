@@ -48,9 +48,13 @@ class SemanticMemoryRepository(ABC):
 
 
 class EpisodicMemoryIndex(ABC):
-    @abstractmethod
-    async def ensure_collection(self) -> None: ...
-
+    # ensure_collection() is deliberately NOT part of this port: it's a
+    # Qdrant collection-provisioning concern, not a domain operation, and
+    # RAG's own VectorStore port (src/rag/domain/ports.py) already
+    # establishes that convention -- QdrantVectorStore.ensure_collection is
+    # concrete-only, called directly by whatever wires the app together, not
+    # abstracted here. Matching that reference exactly (rather than
+    # re-litigating it per-vertical) is what this port does.
     @abstractmethod
     async def upsert(self, episode: EpisodicMemory, tenant_id: uuid.UUID) -> None: ...
 
@@ -70,9 +74,8 @@ class EpisodicMemoryIndex(ABC):
 
 
 class SemanticMemoryIndex(ABC):
-    @abstractmethod
-    async def ensure_collection(self) -> None: ...
-
+    # ensure_collection() deliberately omitted -- see EpisodicMemoryIndex
+    # above.
     @abstractmethod
     async def upsert(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None: ...
 

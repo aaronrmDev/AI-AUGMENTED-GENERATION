@@ -80,12 +80,18 @@ class PostgresEpisodicMemoryRepository(EpisodicMemoryRepository):
             id=row["id"],
             session_id=row["session_id"],
             content=content,
-            # Never read back from Postgres -- Qdrant
-            # (qdrant_episodic_memory_index.py) is this system's actual
-            # nearest-neighbor search path, and no reader in this codebase
-            # parses a pgvector column's text output back into floats
-            # (PostgresDocumentRepository's chunk reads follow the same
-            # embedding=[] convention for the same reason).
+            # Never read back from Postgres: search_by_similarity above
+            # already performs a real, correctly-ordered nearest-neighbor
+            # search via pgvector's <=> operator (this IS a real search
+            # path today, not a stub -- see
+            # test_search_by_similarity_orders_by_nearest_neighbor), it just
+            # doesn't parse the raw vector back out of its text
+            # representation. Qdrant (qdrant_episodic_memory_index.py) is
+            # this system's embedding-BEARING read path -- the one to use
+            # when the caller needs the actual vector values back, not
+            # merely a correctly-ranked result set. PostgresDocumentRepository
+            # 's chunk reads follow the same embedding=[] convention for the
+            # same reason.
             embedding=[],
             timestamp=row["timestamp"],
             salience_score=row["salience_score"],

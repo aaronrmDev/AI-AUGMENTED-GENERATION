@@ -4,43 +4,46 @@
 
 **Why this report doesn't use the RAG evaluation harness's format:** every prior report in `evaluation/reports/` compares an LLM's answer quality across a baseline/treatment pair, judged qualitatively by another LLM. Memory Hierarchy's actual claim (`docs/architecture/MAG.md`: "hot data belongs in context, warm data in RAM, cold data in a persistent store") is a systems/latency claim with no LLM output to judge — forcing it through that harness would produce a quantitative table with meaningless token counts and an empty qualitative section. This report measures what was actually tested instead.
 
-## Memory Hierarchy: working-memory tier vs. cold-store round trip
+## Memory Hierarchy: working-memory tier vs. cold-store round trip — a retracted claim, corrected
 
 **Claim tested:** reading a session's recent turns from the fast tier (Redis, `RetrieveWorkingMemory`) is meaningfully faster than reading the same logical data from the durable tier (Postgres, a direct query against `episodic_memory`) — the reason the fast tier exists at all.
 
-**Methodology** (`tests/integration/test_working_memory_latency.py`):
-- Real `testcontainers`-launched Postgres and Redis, not mocks or fixtures.
-- The Postgres side is seeded with 12,000 *other* sessions' episodes (400 sessions × 30 rows) before measuring, plus `ANALYZE episodic_memory` — an empty, freshly-created table produced a statistical tie against Redis in an earlier version of this test (both stores answer a trivially small lookup at roughly the same loopback-dominated speed), which is not an honest represention of a "durable store holding a real conversation history" baseline.
-- An `EXPLAIN` check, run before timing starts, asserts the query plan is *not* a sequential scan — this is a real, executed check, not a claim in a comment; the assertion passed, confirming `ix_episodic_memory_session_id` is actually what the measured numbers reflect.
-- 5 untimed warm-up reads on both paths first (asyncpg plan-caching, redis-py's lazy connection), then 50 timed reads each, reporting the median (p50).
-- The comparison is structurally biased *against* the hypothesis: the Redis path deserializes 20 JSON payloads and parses 20 ISO datetimes per read; the Postgres path selects one column and discards it.
+**This section originally reported a 1.39× Redis speedup, consistent across three runs. That claim is retracted.** It was produced by a test whose `ANALYZE episodic_memory` call ran through the application's own `app_user` connection — which, confirmed empirically (not assumed) by a later review, silently lacks the privilege to actually update table statistics: the call returns successfully, with no error, while `pg_stat_user_tables.last_analyze` stays unset. Once `ANALYZE` was fixed to run through a properly-privileged connection (see `tests/integration/test_working_memory_latency.py::_seed_postgres_episodes`), the claimed gap did not survive. Four independent runs with the corrected methodology all showed Postgres at or slightly **faster** than Redis:
 
-**Result** (one live run, `2026-08-26`):
+| Run | Postgres p50 (50 reads) | Redis p50 (50 reads) | Postgres/Redis ratio |
+|---|---|---|---|
+| 1 | 0.540 ms | 0.550 ms | 0.98× |
+| 2 | 0.551 ms | 0.567 ms | 0.97× |
+| 3 | 0.516 ms | 0.549 ms | 0.94× |
+| 4 | 0.542 ms | 0.556 ms | 0.97× |
 
-| Path | Read | p50 over 50 reads |
-|---|---|---|
-| Baseline | Postgres (`episodic_memory`, 12,000 background rows, indexed) | 0.800 ms |
-| Treatment | Redis (`RetrieveWorkingMemory`) | 0.575 ms |
+**What's still real:** a query plan check (`EXPLAIN`, run before timing starts) confirms Postgres genuinely uses `ix_episodic_memory_session_id` — a correctly-indexed lookup, not a sequential scan being mistaken for one — in every run. So this isn't "the index doesn't work"; it's that a correctly-indexed Postgres read and a Redis read are both comparably fast, sub-millisecond, at this benchmark's scale (12,000 background rows across 400 sessions), on this hardware (Docker Desktop for Windows, loopback networking).
 
-**Speedup: 1.39×.**
+**What this does and doesn't say about Memory Hierarchy as a design:** the architectural reasoning behind the fast tier — Redis's per-session key costs the same regardless of how many other sessions exist; a B-tree index lookup's cost has some dependence on total table size even when it stays sub-linear — is still sound in principle, and this project's own testing discipline (`docs/testing/TESTING.md`) requires disclosing what a live measurement actually shows, not what the architecture predicts. What this benchmark actually demonstrates at 12,000 rows is narrower than originally claimed: both paths work correctly and are both fast. Whether a measurable Redis advantage emerges at a materially larger table size, under concurrent load, or over a real network rather than loopback is untested here, not confirmed by this report.
 
-**Caveats:**
-- Single run, not repeated across multiple independent samples the way this project's RAG comparisons use `repeat_count=3–5` — a systems latency measurement doesn't have the same sampling-noise profile as an LLM's answer generation, but the exact ratio should be read as directionally real, not a precise constant. Two prior manual runs during this batch's development (before the ANALYZE/EXPLAIN fix) measured 1.32× and 1.41× on the same seeded scale, consistent with this run's 1.39×.
-- Both numbers are sub-millisecond — this is `testcontainers` on Docker Desktop for Windows, loopback networking, on this specific machine. The *relative* difference (Redis reads a bounded, per-session key; Postgres has to use an index across a table that grows with every session in the system) is the architectural property being demonstrated, not a production latency SLA.
-- Redis's TTL-bearing write path (`push_turn`) was not benchmarked here, only reads — writes are cheap RPUSH+EXPIRE either way and weren't the contested claim.
+**Test changed accordingly:** `tests/integration/test_working_memory_latency.py` no longer asserts `redis_p50 < postgres_p50` — asserting a specific direction would mean asserting whichever one happened to be true when the test was last run, which is exactly the kind of unverified claim this project's evaluation discipline exists to catch. It now asserts both reads return correct, complete results and reports the real numbers, without gating on a direction that isn't reliably true.
+
+**Caveats retained from the original methodology:**
+- Both numbers are sub-millisecond — this is `testcontainers` on Docker Desktop for Windows, loopback networking, on this specific machine, not a production latency SLA.
+- Redis's TTL-bearing write path (`push_turn`) was not benchmarked here, only reads.
+- 5 untimed warm-up reads on both paths first (asyncpg plan-caching, redis-py's lazy connection), then 50 timed reads each, reporting the median (p50) — this part of the methodology held up under the correction and wasn't the source of the retracted claim.
 
 ## Episodic Memory and Semantic Memory: correctness, not a quality comparison
 
 Unlike Memory Hierarchy, there is no baseline/treatment distinction for "can the system capture and retrieve a memory correctly" — that comparison belongs to a later batch, once retrieval strategies (Batch C) and gating (Batch E) exist to make a full pipeline worth judging end-to-end against not having memory at all. This batch validates the storage layer those later batches build on:
 
-- **Dual-write correctness**: `CaptureEpisode` and `RecordSemanticFact` write to both Postgres (the durable, transactionally-consistent record) and Qdrant (the embedding-bearing nearest-neighbor search path) — verified via real testcontainers Postgres and Qdrant, not fakes, for both write and read paths.
+- **Dual-write correctness**: `CaptureEpisode` and `RecordSemanticFact` write to both Postgres (the durable, transactionally-consistent record) and Qdrant (the embedding-bearing nearest-neighbor search path). `tests/integration/test_capture_episode_command.py` and `tests/integration/test_record_semantic_fact_command.py` construct the real command classes against real testcontainers Postgres and Qdrant end to end — not just their repository/index dependencies in isolation, which is the seam a real defect (below) was hiding in.
 - **Nearest-neighbor ordering is real**: `test_search_by_similarity_orders_by_nearest_neighbor` (episodic) and `test_search_by_similarity_returns_real_nearest_neighbor_ordering` (semantic) embed genuinely different content via the real `SentenceTransformersEmbedder` and confirm a semantically-close query actually ranks the close fact/episode first — not asserted against a fixture vector.
 - **Tenant and user isolation is real, at two layers**: both the application-level `WHERE tenant_id = ...` / `WHERE user_id = ...` filters *and* the database-level RLS backstop are independently tested (`tests/integration/test_mag_rls_tenant_isolation.py` runs a query with **no** application-level filter at all, proving RLS alone — not app code discipline — is what actually blocks a cross-tenant read).
 - **Upsert correctness**: `SemanticMemory` facts upsert by `(user_id, fact_key)` (a `UNIQUE` constraint plus `ON CONFLICT DO UPDATE`, both found necessary by adversarial review — see below) rather than accumulating unbounded duplicates resolved nondeterministically at read time.
 
-## Process note: what the adversarial review caught
+## Process note: what two rounds of adversarial review caught
 
-The first-pass implementation (three parallel subagents, one per vertical) passed all 45 of its own tests and both ruff/mypy — and still had two real defects an adversarial review found before merge: `RecordSemanticFact` could never actually update a fact (no unique constraint, no upsert — two saves with the same key produced two rows resolved by a random UUID tie-break at read time), and `semantic_memory` had no `tenant_id` column or RLS at all, with the design spec's own justification for that gap being factually wrong about the schema it cited (`Sessions` was claimed to scope through a join alone; it doesn't — it has always had its own `tenant_id` + RLS). Both are fixed in this merged version, along with five smaller issues (a `limit=0` Redis bug that returned an entire session instead of nothing, an architectural layering violation where application code imported concrete Qdrant classes instead of ports, a missing `by_similarity` query path, an untested RLS backstop, and — caught by this report's own stricter test — Qdrant's COSINE-distance collections normalizing every stored vector to unit length, so a search-based embedding read is not bit-identical to what was written). Full detail in the design spec's correction note and the branch's commit history.
+The first-pass implementation (three parallel subagents, one per vertical) passed all 45 of its own tests and both ruff/mypy — and still had two real defects an adversarial review found before merge: `RecordSemanticFact` could never actually update a fact (no unique constraint, no upsert — two saves with the same key produced two rows resolved by a random UUID tie-break at read time), and `semantic_memory` had no `tenant_id` column or RLS at all, with the design spec's own justification for that gap being factually wrong about the schema it cited (`Sessions` was claimed to scope through a join alone; it doesn't — it has always had its own `tenant_id` + RLS). The first fix wave closed both, plus five smaller issues (a `limit=0` Redis bug that returned an entire session instead of nothing, an architectural layering violation where application code imported concrete Qdrant classes instead of ports, a missing `by_similarity` query path, an untested RLS backstop, and Qdrant's COSINE-distance collections normalizing every stored vector to unit length, caught by a new, stricter regression test).
+
+A second, scoped re-review of that fix wave then found the Postgres-side upsert fix had **relocated the original defect, not eliminated it**: `RecordSemanticFact` minted a fresh random UUID on every call, so while Postgres correctly upserted to one row per `(user_id, fact_key)`, Qdrant — which has no equivalent "overwrite by key," only "overwrite a point with this exact id" — was left with an orphaned, still-searchable stale point every time a fact was re-recorded. No unit test caught it, because both dependencies were fakes; it took an integration test constructing the real command against real infrastructure to reproduce. Fixed by deriving the fact's id deterministically from `(user_id, fact_key)` instead of `uuid4()`, so a re-record overwrites the same Qdrant point the way Postgres already overwrites the same row — with a new regression test (`test_recording_the_same_key_twice_does_not_orphan_a_stale_qdrant_point`) proving it. The same review also caught this report overclaiming what its own `ANALYZE`/`EXPLAIN` methodology had actually verified, both corrected above, and two lower-severity items (an ABC that exposed Qdrant collection-lifecycle management as if it were a domain concern, and a unit-test fake whose upsert-key shape didn't match the real database's unique constraint).
+
+Full detail in the design spec's correction note and the branch's commit history.
 
 ## Out of scope for this batch
 

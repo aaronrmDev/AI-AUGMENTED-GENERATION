@@ -32,7 +32,18 @@ class RecordSemanticFact:
         # fact_value is the actual content ("blue").
         embedding = self._embedder.embed(fact_value)
         fact = SemanticMemory(
-            id=uuid.uuid4(),
+            # Deterministic (uuid5), not uuid4: Postgres upserts by
+            # (user_id, fact_key) (migration 0003's unique constraint), but
+            # Qdrant has no equivalent upsert-by-fact_key -- it only
+            # overwrites a point that shares the SAME id. A fresh uuid4 on
+            # every call left Qdrant with an orphaned stale point every time
+            # a fact was re-recorded (the old id's point was never deleted,
+            # just no longer referenced from Postgres), so a similarity
+            # search could surface a fact the caller had already overwritten
+            # with no way to tell which copy was current. A deterministic id
+            # makes re-recording the same (user_id, fact_key) overwrite the
+            # same Qdrant point, matching what Postgres already does.
+            id=uuid.uuid5(uuid.NAMESPACE_OID, f"semantic_memory:{user_id}:{fact_key}"),
             user_id=user_id,
             fact_key=fact_key,
             fact_value=fact_value,
