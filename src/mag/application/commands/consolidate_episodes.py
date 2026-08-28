@@ -124,6 +124,12 @@ def _validate_and_dedupe_facts(facts: list[Any]) -> list[dict[str, Any]]:
             raise TypeError("fact_key must be a non-empty string")
         if not isinstance(fact_value, str) or not fact_value.strip():
             raise TypeError("fact_value must be a non-empty string")
+        # Stripped before use, not just before the emptiness check -- "lang"
+        # and "lang " would otherwise dedupe as distinct keys here and later
+        # persist as two distinct rows (RecordSemanticFact's uuid5 id is
+        # derived from the exact string), defeating the dedup this function
+        # exists to do.
+        fact_key = fact_key.strip()
         confidence = float(item.get("confidence", 1.0))  # ValueError on e.g. "high"
         record = {"fact_key": fact_key, "fact_value": fact_value, "confidence": confidence}
         # Last-wins on a duplicate fact_key within one reflection response:
