@@ -15,7 +15,7 @@ Batch A's reviews found the same two defect classes twice each: a new table miss
 
 In scope: Procedural Memory (#17/#51) — capture and retrieve reusable workflows. Consolidation (#11/#50) — reflect on a batch of episodes, extract durable facts, write them to semantic memory, mark the source episodes consolidated.
 
-Deliberately out of scope, deferred to later batches: the six advanced retrieval strategies (Batch C) — Consolidation's episode selection here is recency-only (the last N unconsolidated episodes for a session), matching MAG.md's own simplest-stated trigger ("collect a batch of episodes (the last N turns...)"), not the full recency+relevance+salience+abstraction weighting MAG.md describes as the Generative Agents pattern. Memory Evolution's Archive operation (Batch F) — this batch's "mark or archive the source episodes as consolidated" is implemented as a `consolidated_at` timestamp flag (excludes them from future consolidation runs), not a move to cold storage.
+Deliberately out of scope, deferred to later batches: the six advanced retrieval strategies (Batch C) — Consolidation's episode selection here is oldest-unconsolidated-first, a backlog drain rather than the full recency+relevance+salience+abstraction weighting MAG.md describes as the Generative Agents pattern (see the "Correction, post-review" note under Consolidation's Port changes below for why "oldest-first" and MAG.md's own "the last N turns" framing aren't quite the same claim). Memory Evolution's Archive operation (Batch F) — this batch's "mark or archive the source episodes as consolidated" is implemented as a `consolidated_at` timestamp flag (excludes them from future consolidation runs), not a move to cold storage.
 
 ## Procedural Memory
 
@@ -78,6 +78,8 @@ async def get_unconsolidated_by_session(
 
 async def mark_consolidated(self, episode_ids: list[uuid.UUID], tenant_id: uuid.UUID) -> None: ...
 ```
+
+> **Correction, post-review:** this section's "collect the last N episodes" and this batch's initial implementation used "last N" and "recency" language loosely. What `get_unconsolidated_by_session` actually does is `ORDER BY timestamp ASC LIMIT :limit` on the unconsolidated set — **oldest**-unconsolidated-first, a backlog drain, not a recency window. In steady state (Consolidation run at least as often as episodes accumulate) the two coincide, since the whole unconsolidated set IS the recent tail — but if a backlog ever exceeds one run's `batch_size`, oldest-first is the behavior that actually drains it; a genuinely recency-first read (`ORDER BY timestamp DESC`) would instead keep reprocessing whatever's newest while older unconsolidated episodes waited forever. The implementation's choice is arguably the more correct one; the spec's wording just didn't say so. `EpisodicMemoryRepository.get_unconsolidated_by_session`'s docstring now states this precisely.
 
 ### Application
 

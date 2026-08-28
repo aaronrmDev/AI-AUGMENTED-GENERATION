@@ -32,4 +32,4 @@ The model correctly inferred the generalized fact from three specific, Python-fl
 
 ## Out of scope for this batch
 
-The six advanced retrieval strategies (Batch C) — Consolidation's episode selection here is recency-only (the last N unconsolidated episodes for a session), not the full recency+relevance+salience+abstraction weighting MAG.md describes. Memory Evolution's Archive operation (Batch F) — "mark as consolidated" is a timestamp flag here, not a move to cold storage.
+The six advanced retrieval strategies (Batch C) — Consolidation's episode selection here is oldest-unconsolidated-first (a backlog drain, not a recency window — see the design spec's correction note under Consolidation's Port changes), not the full recency+relevance+salience+abstraction weighting MAG.md describes. Memory Evolution's Archive operation (Batch F) — "mark as consolidated" is a timestamp flag here, not a move to cold storage.

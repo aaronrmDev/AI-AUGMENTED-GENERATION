@@ -38,6 +38,7 @@ Every one of this schema's seven tables carries an explicit `tenant_id` column, 
 | EpisodicMemory | embedding | vector (pgvector) |
 | EpisodicMemory | timestamp | — |
 | EpisodicMemory | salience_score | — |
+| EpisodicMemory | consolidated_at | nullable; set by Consolidation once this episode has been reflected on, excluding it from future consolidation runs regardless of whether that reflection extracted a fact |
 | SemanticMemory | id | UUID, primary key |
 | SemanticMemory | user_id | foreign key → Users |
 | SemanticMemory | tenant_id | explicit column, indexed, RLS-enforced |

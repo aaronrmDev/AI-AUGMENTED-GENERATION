@@ -205,6 +205,116 @@ async def test_execute_strips_markdown_fencing_before_parsing():
     assert len(result) == 2
 
 
+async def test_execute_retries_when_a_fact_element_is_not_an_object():
+    # Regression test: the outer {"facts": [...]} envelope being valid JSON
+    # says nothing about what's inside it -- a bare string element used to
+    # reach fact["fact_key"] uncaught, outside this method's retry loop.
+    episodes_repo = FakeEpisodicMemoryRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(_episode(session_id, {"n": 1}), tenant_id)
+    malformed = json.dumps({"facts": ["User's language is Python"]})
+    chat_model = _ScriptedChatModel([malformed, _VALID_RESPONSE])
+    use_case = _use_case(
+        episodes_repo, FakeSemanticMemoryRepository(), _FakeSemanticMemoryIndex(), chat_model
+    )
+
+    result = await use_case.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id
+    )
+
+    assert chat_model.call_count == 2
+    assert len(result) == 2
+
+
+async def test_execute_retries_when_a_fact_is_missing_a_required_field():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(_episode(session_id, {"n": 1}), tenant_id)
+    renamed_fields = json.dumps({"facts": [{"key": "lang", "value": "Python"}]})
+    chat_model = _ScriptedChatModel([renamed_fields, _VALID_RESPONSE])
+    use_case = _use_case(
+        episodes_repo, FakeSemanticMemoryRepository(), _FakeSemanticMemoryIndex(), chat_model
+    )
+
+    result = await use_case.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id
+    )
+
+    assert chat_model.call_count == 2
+    assert len(result) == 2
+
+
+async def test_execute_retries_when_confidence_is_not_a_number():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(_episode(session_id, {"n": 1}), tenant_id)
+    bad_confidence = json.dumps(
+        {"facts": [{"fact_key": "lang", "fact_value": "Python", "confidence": "high"}]}
+    )
+    chat_model = _ScriptedChatModel([bad_confidence, _VALID_RESPONSE])
+    use_case = _use_case(
+        episodes_repo, FakeSemanticMemoryRepository(), _FakeSemanticMemoryIndex(), chat_model
+    )
+
+    result = await use_case.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id
+    )
+
+    assert chat_model.call_count == 2
+    assert len(result) == 2
+
+
+async def test_execute_retries_when_a_fact_key_is_empty():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(_episode(session_id, {"n": 1}), tenant_id)
+    empty_key = json.dumps({"facts": [{"fact_key": "", "fact_value": "Python"}]})
+    chat_model = _ScriptedChatModel([empty_key, _VALID_RESPONSE])
+    use_case = _use_case(
+        episodes_repo, FakeSemanticMemoryRepository(), _FakeSemanticMemoryIndex(), chat_model
+    )
+
+    result = await use_case.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id
+    )
+
+    assert chat_model.call_count == 2
+    assert len(result) == 2
+
+
+async def test_execute_deduplicates_a_repeated_fact_key_keeping_the_last_value():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    facts_repo = FakeSemanticMemoryRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(_episode(session_id, {"n": 1}), tenant_id)
+    duplicate_key_response = json.dumps(
+        {
+            "facts": [
+                {"fact_key": "primary_language", "fact_value": "Python", "confidence": 0.5},
+                {"fact_key": "primary_language", "fact_value": "Go", "confidence": 0.9},
+            ]
+        }
+    )
+    chat_model = _ScriptedChatModel([duplicate_key_response])
+    use_case = _use_case(episodes_repo, facts_repo, _FakeSemanticMemoryIndex(), chat_model)
+
+    result = await use_case.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id
+    )
+
+    # Exactly one fact returned, not two -- and it's the LAST value seen,
+    # matching what RecordSemanticFact's deterministic id would actually
+    # persist (the second write overwrites the first's row).
+    assert len(result) == 1
+    assert result[0].fact_value == "Go"
+    assert len(facts_repo.saved) == 1
+
+
 async def test_execute_returns_empty_facts_after_exhausting_retries_but_still_marks_consolidated():
     episodes_repo = FakeEpisodicMemoryRepository()
     tenant_id = uuid.uuid4()

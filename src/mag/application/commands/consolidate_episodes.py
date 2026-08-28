@@ -85,8 +85,8 @@ class ConsolidateEpisodes:
                 facts = parsed["facts"]
                 if not isinstance(facts, list):
                     raise TypeError("'facts' must be a list")
-                return list(facts)
-            except (json.JSONDecodeError, KeyError, TypeError):
+                return _validate_and_dedupe_facts(facts)
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 continue
         # Exhausted retries: treated the same as "nothing durable found,"
         # not raised -- the episodes stay marked consolidated (this batch
@@ -97,6 +97,47 @@ class ConsolidateEpisodes:
         # every future run if the failure mode is content-specific, not
         # transient.
         return []
+
+
+def _validate_and_dedupe_facts(facts: list[Any]) -> list[dict[str, Any]]:
+    # The outer envelope ({"facts": [...]}) being valid JSON says nothing
+    # about what's INSIDE each element -- an LLM extracting facts from an
+    # open-ended reflection prompt can return a bare string instead of an
+    # object, rename fields, or hand back confidence as a word ("high")
+    # instead of a number. Any of those used to reach RecordSemanticFact
+    # directly and crash outside this method's retry loop -- which also
+    # meant the episodes never got marked consolidated (they'd fail the
+    # same way again on the next run) and, worse, could leave a fact
+    # already written to Qdrant by an EARLIER iteration of this same loop
+    # orphaned when a LATER iteration's crash rolled back the caller's
+    # Postgres transaction. Validating here folds a malformed element into
+    # the same retry path as malformed JSON, rather than a second,
+    # unguarded failure mode one call-frame up.
+    validated: list[dict[str, Any]] = []
+    seen_keys: dict[str, int] = {}
+    for item in facts:
+        if not isinstance(item, dict):
+            raise TypeError("each fact must be a JSON object")
+        fact_key = item["fact_key"]
+        fact_value = item["fact_value"]
+        if not isinstance(fact_key, str) or not fact_key.strip():
+            raise TypeError("fact_key must be a non-empty string")
+        if not isinstance(fact_value, str) or not fact_value.strip():
+            raise TypeError("fact_value must be a non-empty string")
+        confidence = float(item.get("confidence", 1.0))  # ValueError on e.g. "high"
+        record = {"fact_key": fact_key, "fact_value": fact_value, "confidence": confidence}
+        # Last-wins on a duplicate fact_key within one reflection response:
+        # RecordSemanticFact's deterministic id means both would resolve to
+        # the same row anyway (the second write overwrites the first), so
+        # returning both as if they were two independently-written facts
+        # would report one that was never actually the final, persisted
+        # value.
+        if fact_key in seen_keys:
+            validated[seen_keys[fact_key]] = record
+        else:
+            seen_keys[fact_key] = len(validated)
+            validated.append(record)
+    return validated
 
 
 def _strip_markdown_fence(text: str) -> str:

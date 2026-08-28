@@ -24,8 +24,14 @@ class EpisodicMemoryRepository(ABC):
     async def get_unconsolidated_by_session(
         self, session_id: uuid.UUID, tenant_id: uuid.UUID, limit: int
     ) -> list[EpisodicMemory]:
-        """Oldest-first, consolidated_at IS NULL only -- the recency-ordered
-        "last N turns" batch Consolidation reflects on."""
+        """Oldest-unconsolidated-first, consolidated_at IS NULL only -- a
+        backlog drain, not a recency window. In steady state (Consolidation
+        run at least as often as episodes accumulate) the unconsolidated set
+        IS the recent tail, so this coincides with MAG.md's "last N turns"
+        framing -- but if a backlog ever exceeds one run's limit, this
+        returns the OLDEST unconsolidated episodes, not the most recent
+        ones, so the backlog actually drains instead of perpetually
+        reprocessing whatever's newest while older episodes wait forever."""
 
     @abstractmethod
     async def mark_consolidated(
@@ -91,7 +97,17 @@ class EpisodicMemoryIndex(ABC):
         storage (confirmed empirically, not assumed -- see
         test_qdrant_semantic_memory_index.py's regression test for the
         sibling index). Same direction, unit length -- correct for
-        similarity comparisons, just not the original values."""
+        similarity comparisons, just not the original values.
+
+        consolidated_at is ALWAYS None from this path, regardless of the
+        real value in Postgres -- upsert() doesn't write it to the payload
+        and mark_consolidated() (EpisodicMemoryRepository) only updates
+        Postgres. Nothing reads this field through the index today, but a
+        caller that starts filtering/weighting on it here would get a
+        silently wrong answer, not an error. Use
+        EpisodicMemoryRepository.get_unconsolidated_by_session for a
+        consolidation-status-aware read until this index carries the field
+        too."""
 
 
 class SemanticMemoryIndex(ABC):

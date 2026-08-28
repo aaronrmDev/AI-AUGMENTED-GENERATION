@@ -127,11 +127,24 @@ async def test_execute_consolidates_real_episodes_with_a_real_ollama_model(
     remaining = await episodic_repo.get_unconsolidated_by_session(session_id, tenant_id, limit=10)
     assert remaining == []
 
+    # Three real, distinct, Python-flavored episodes reflected on by a real
+    # model should produce at least one fact -- if this ever starts failing,
+    # that's a real regression in either the prompt or the model's behavior
+    # worth knowing about, not a silently-skipped verification. Without this,
+    # the store-verification loop below would pass vacuously on an empty
+    # result and prove nothing.
+    assert result, "expected at least one consolidated fact from three Python-related episodes"
+
     # Whatever WAS extracted must have genuinely reached both real stores,
-    # not just been returned in memory.
+    # WITH THE SAME ID -- not merely a row/point that happens to carry the
+    # same fact_key or fact_value. find_by_key alone can't distinguish "the
+    # row this command wrote" from "any row carrying that key," which is
+    # exactly the gap that would have hidden a regression back to a random
+    # (non-deterministic) id.
     for fact in result:
         found = await semantic_repo.find_by_key(user_id, fact.fact_key, tenant_id)
         assert found is not None
+        assert found.id == fact.id
         assert found.fact_value == fact.fact_value
         from_index = await semantic_index.search(
             query_embedding=embedding_model.embed(fact.fact_value), user_id=user_id,

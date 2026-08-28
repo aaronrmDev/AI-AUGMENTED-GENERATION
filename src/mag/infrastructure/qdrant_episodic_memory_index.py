@@ -87,6 +87,9 @@ class QdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
                     embedding=embedding,
                     timestamp=datetime.fromisoformat(str(payload["timestamp"])),
                     salience_score=float(payload["salience_score"]),
+                    # consolidated_at defaults to None -- upsert() above
+                    # never writes it to the payload. See
+                    # EpisodicMemoryIndex.search's docstring for why.
                 )
             )
         return results
