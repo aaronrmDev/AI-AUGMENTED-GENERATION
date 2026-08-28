@@ -112,3 +112,39 @@ async def test_semantic_memory_has_a_unique_constraint_on_user_id_and_fact_key(d
         )
     )
     assert result.scalar_one_or_none() == "uq_semantic_memory_user_id_fact_key"
+
+
+async def test_procedural_memory_table_exists_with_rls_enabled(db_session):
+    # procedural_memory carries tenant_id and RLS from its first version
+    # (migration 0004), not as a follow-up fix -- see the design spec's
+    # "Lessons applied" section for why semantic_memory needed a review
+    # round to get here and procedural_memory doesn't.
+    result = await db_session.execute(
+        text("SELECT relrowsecurity FROM pg_class WHERE relname = 'procedural_memory'")
+    )
+    assert result.scalar_one() is True
+
+
+async def test_tenant_isolation_policy_exists_on_procedural_memory(db_session):
+    result = await db_session.execute(
+        text(
+            "SELECT tablename FROM pg_policies "
+            "WHERE policyname = 'tenant_isolation' AND tablename = 'procedural_memory'"
+        )
+    )
+    tables = {row.tablename for row in result}
+    assert tables == {"procedural_memory"}
+
+
+async def test_procedural_memory_has_a_unique_constraint_on_user_id_and_task_pattern(db_session):
+    # Regression test: without this constraint, RecordProcedure's upsert
+    # would have no database-level backstop -- two saves with the same
+    # (user_id, task_pattern) would produce two rows resolved
+    # nondeterministically by find_by_task_pattern's read-time tie-break.
+    result = await db_session.execute(
+        text(
+            "SELECT conname FROM pg_constraint "
+            "WHERE conname = 'uq_procedural_memory_user_id_task_pattern' AND contype = 'u'"
+        )
+    )
+    assert result.scalar_one_or_none() == "uq_procedural_memory_user_id_task_pattern"

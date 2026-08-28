@@ -1,0 +1,245 @@
+import json
+import uuid
+from datetime import UTC, datetime
+
+from src.mag.application.commands.consolidate_episodes import ConsolidateEpisodes
+from src.mag.domain.entities import EpisodicMemory, SemanticMemory
+from src.mag.domain.ports import SemanticMemoryIndex
+from tests.unit.mag_fakes import FakeEpisodicMemoryRepository, FakeSemanticMemoryRepository
+from tests.unit.rag_fakes import FakeEmbeddingModel
+
+
+class _FakeSemanticMemoryIndex(SemanticMemoryIndex):
+    def __init__(self) -> None:
+        self.upserted: list[tuple[SemanticMemory, uuid.UUID]] = []
+
+    async def ensure_collection(self) -> None:
+        pass
+
+    async def upsert(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
+        self.upserted.append((fact, tenant_id))
+
+    async def search(
+        self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
+    ) -> list[SemanticMemory]:
+        return []
+
+
+class _ScriptedChatModel:
+    """Returns a different completion on each successive complete() call."""
+
+    def __init__(self, responses: list[str]) -> None:
+        self._responses = iter(responses)
+        self.call_count = 0
+        self.last_prompt: str | None = None
+
+    async def generate(self, question: str, context: str) -> str:
+        raise NotImplementedError("ConsolidateEpisodes only ever calls complete()")
+
+    async def complete(self, prompt: str) -> str:
+        self.call_count += 1
+        self.last_prompt = prompt
+        return next(self._responses)
+
+
+def _episode(session_id: uuid.UUID, content: dict, consolidated: bool = False) -> EpisodicMemory:
+    return EpisodicMemory(
+        id=uuid.uuid4(),
+        session_id=session_id,
+        content=content,
+        embedding=[0.0] * 384,
+        timestamp=datetime.now(UTC),
+        consolidated_at=datetime.now(UTC) if consolidated else None,
+    )
+
+
+_VALID_RESPONSE = json.dumps(
+    {
+        "facts": [
+            {"fact_key": "primary_language", "fact_value": "Python", "confidence": 0.9},
+            {"fact_key": "secondary_language", "fact_value": "Go", "confidence": 0.6},
+        ]
+    }
+)
+
+
+def _use_case(
+    episodes_repo: FakeEpisodicMemoryRepository,
+    facts_repo: FakeSemanticMemoryRepository,
+    index: _FakeSemanticMemoryIndex,
+    chat_model: _ScriptedChatModel,
+) -> ConsolidateEpisodes:
+    return ConsolidateEpisodes(
+        episodic_memory_repository=episodes_repo,
+        semantic_memory_repository=facts_repo,
+        semantic_memory_index=index,
+        embedding_model=FakeEmbeddingModel(),
+        chat_model=chat_model,
+    )
+
+
+async def test_execute_returns_empty_list_when_there_are_no_unconsolidated_episodes():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    use_case = _use_case(
+        episodes_repo, FakeSemanticMemoryRepository(), _FakeSemanticMemoryIndex(),
+        _ScriptedChatModel([_VALID_RESPONSE]),
+    )
+
+    result = await use_case.execute(
+        tenant_id=uuid.uuid4(), user_id=uuid.uuid4(), session_id=uuid.uuid4()
+    )
+
+    assert result == []
+
+
+async def test_execute_writes_each_extracted_fact_via_record_semantic_fact():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    facts_repo = FakeSemanticMemoryRepository()
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(
+        _episode(session_id, {"input": "what language do you use", "output": "Python"}),
+        tenant_id,
+    )
+    chat_model = _ScriptedChatModel([_VALID_RESPONSE])
+    use_case = _use_case(episodes_repo, facts_repo, _FakeSemanticMemoryIndex(), chat_model)
+
+    result = await use_case.execute(tenant_id=tenant_id, user_id=user_id, session_id=session_id)
+
+    assert {f.fact_key for f in result} == {"primary_language", "secondary_language"}
+    assert {f.fact_value for f in result} == {"Python", "Go"}
+    assert len(facts_repo.saved) == 2
+    assert all(fact.source == "consolidation" for fact, _ in facts_repo.saved)
+
+
+async def test_execute_marks_the_consolidated_episodes_even_when_facts_are_extracted():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    episode = _episode(session_id, {"input": "hi"})
+    await episodes_repo.save(episode, tenant_id)
+    use_case = _use_case(
+        episodes_repo, FakeSemanticMemoryRepository(), _FakeSemanticMemoryIndex(),
+        _ScriptedChatModel([_VALID_RESPONSE]),
+    )
+
+    await use_case.execute(tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id)
+
+    remaining = await episodes_repo.get_unconsolidated_by_session(session_id, tenant_id, limit=10)
+    assert remaining == []
+
+
+async def test_execute_marks_episodes_consolidated_even_when_reflection_finds_nothing():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(_episode(session_id, {"input": "hi"}), tenant_id)
+    empty_response = json.dumps({"facts": []})
+    use_case = _use_case(
+        episodes_repo, FakeSemanticMemoryRepository(), _FakeSemanticMemoryIndex(),
+        _ScriptedChatModel([empty_response]),
+    )
+
+    result = await use_case.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id
+    )
+
+    assert result == []
+    remaining = await episodes_repo.get_unconsolidated_by_session(session_id, tenant_id, limit=10)
+    assert remaining == []
+
+
+async def test_execute_only_reflects_on_unconsolidated_episodes():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(_episode(session_id, {"n": 1}, consolidated=True), tenant_id)
+    empty_response = json.dumps({"facts": []})
+    chat_model = _ScriptedChatModel([empty_response])
+    use_case = _use_case(
+        episodes_repo, FakeSemanticMemoryRepository(), _FakeSemanticMemoryIndex(), chat_model
+    )
+
+    result = await use_case.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id
+    )
+
+    assert result == []
+    assert chat_model.call_count == 0  # nothing to reflect on -- no LLM call at all
+
+
+async def test_execute_retries_on_malformed_json_and_succeeds():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(_episode(session_id, {"n": 1}), tenant_id)
+    chat_model = _ScriptedChatModel(["not valid json{{{", _VALID_RESPONSE])
+    use_case = _use_case(
+        episodes_repo, FakeSemanticMemoryRepository(), _FakeSemanticMemoryIndex(), chat_model
+    )
+
+    result = await use_case.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id
+    )
+
+    assert chat_model.call_count == 2
+    assert len(result) == 2
+
+
+async def test_execute_strips_markdown_fencing_before_parsing():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(_episode(session_id, {"n": 1}), tenant_id)
+    fenced = f"```json\n{_VALID_RESPONSE}\n```"
+    chat_model = _ScriptedChatModel([fenced])
+    use_case = _use_case(
+        episodes_repo, FakeSemanticMemoryRepository(), _FakeSemanticMemoryIndex(), chat_model
+    )
+
+    result = await use_case.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id
+    )
+
+    assert len(result) == 2
+
+
+async def test_execute_returns_empty_facts_after_exhausting_retries_but_still_marks_consolidated():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(_episode(session_id, {"n": 1}), tenant_id)
+    chat_model = _ScriptedChatModel(["garbage"] * 5)
+    use_case = _use_case(
+        episodes_repo, FakeSemanticMemoryRepository(), _FakeSemanticMemoryIndex(), chat_model
+    )
+
+    result = await use_case.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id
+    )
+
+    assert result == []
+    assert chat_model.call_count == 3  # bounded retry, not unlimited
+    remaining = await episodes_repo.get_unconsolidated_by_session(session_id, tenant_id, limit=10)
+    assert remaining == []
+
+
+async def test_execute_respects_batch_size():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    for i in range(5):
+        await episodes_repo.save(_episode(session_id, {"n": i}), tenant_id)
+    empty_response = json.dumps({"facts": []})
+    chat_model = _ScriptedChatModel([empty_response])
+    use_case = _use_case(
+        episodes_repo, FakeSemanticMemoryRepository(), _FakeSemanticMemoryIndex(), chat_model
+    )
+
+    await use_case.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id, batch_size=2
+    )
+
+    remaining = await episodes_repo.get_unconsolidated_by_session(session_id, tenant_id, limit=10)
+    assert len(remaining) == 3

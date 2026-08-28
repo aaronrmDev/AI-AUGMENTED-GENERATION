@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.mag.domain.entities import EpisodicMemory
 from src.mag.domain.ports import EpisodicMemoryRepository
 
+_SELECT_COLUMNS = "id, session_id, content, timestamp, salience_score, consolidated_at"
+
 
 class PostgresEpisodicMemoryRepository(EpisodicMemoryRepository):
     def __init__(self, session: AsyncSession) -> None:
@@ -41,7 +43,7 @@ class PostgresEpisodicMemoryRepository(EpisodicMemoryRepository):
     ) -> list[EpisodicMemory]:
         result = await self._session.execute(
             text(
-                "SELECT id, session_id, content, timestamp, salience_score "
+                f"SELECT {_SELECT_COLUMNS} "
                 "FROM episodic_memory "
                 "WHERE session_id = :session_id AND tenant_id = :tenant_id "
                 "ORDER BY timestamp ASC"
@@ -50,13 +52,43 @@ class PostgresEpisodicMemoryRepository(EpisodicMemoryRepository):
         )
         return [self._row_to_episode(row) for row in result.mappings()]
 
+    async def get_unconsolidated_by_session(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, limit: int
+    ) -> list[EpisodicMemory]:
+        result = await self._session.execute(
+            text(
+                f"SELECT {_SELECT_COLUMNS} "
+                "FROM episodic_memory "
+                "WHERE session_id = :session_id AND tenant_id = :tenant_id "
+                "AND consolidated_at IS NULL "
+                "ORDER BY timestamp ASC "
+                "LIMIT :limit"
+            ),
+            {"session_id": session_id, "tenant_id": tenant_id, "limit": limit},
+        )
+        return [self._row_to_episode(row) for row in result.mappings()]
+
+    async def mark_consolidated(
+        self, episode_ids: list[uuid.UUID], tenant_id: uuid.UUID
+    ) -> None:
+        if not episode_ids:
+            return
+        await self._session.execute(
+            text(
+                "UPDATE episodic_memory SET consolidated_at = now() "
+                "WHERE id = ANY(:episode_ids) AND tenant_id = :tenant_id"
+            ),
+            {"episode_ids": episode_ids, "tenant_id": tenant_id},
+        )
+        await self._session.flush()
+
     async def search_by_similarity(
         self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
     ) -> list[EpisodicMemory]:
         result = await self._session.execute(
             text(
-                """
-                SELECT id, session_id, content, timestamp, salience_score
+                f"""
+                SELECT {_SELECT_COLUMNS}
                 FROM episodic_memory
                 WHERE tenant_id = :tenant_id
                 ORDER BY embedding <=> CAST(:query_embedding AS vector)
@@ -95,4 +127,5 @@ class PostgresEpisodicMemoryRepository(EpisodicMemoryRepository):
             embedding=[],
             timestamp=row["timestamp"],
             salience_score=row["salience_score"],
+            consolidated_at=row["consolidated_at"],
         )

@@ -162,6 +162,79 @@ async def test_search_by_similarity_orders_by_nearest_neighbor(db_session, embed
     assert result[0].id == about_cats.id
 
 
+async def test_get_unconsolidated_by_session_excludes_consolidated_episodes(db_session):
+    tenant_id = uuid.uuid4()
+    session_id = await _insert_user_and_session(db_session, tenant_id)
+    await set_tenant_context(db_session, tenant_id)
+
+    repo = PostgresEpisodicMemoryRepository(db_session)
+    keep = _episode(session_id, {"n": 1}, [0.1] * 384)
+    consolidate = _episode(session_id, {"n": 2}, [0.1] * 384)
+    await repo.save(keep, tenant_id)
+    await repo.save(consolidate, tenant_id)
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_id)
+    await repo.mark_consolidated([consolidate.id], tenant_id)
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_id)
+    result = await repo.get_unconsolidated_by_session(session_id, tenant_id, limit=10)
+
+    assert [e.id for e in result] == [keep.id]
+
+
+async def test_get_unconsolidated_by_session_respects_the_limit(db_session):
+    tenant_id = uuid.uuid4()
+    session_id = await _insert_user_and_session(db_session, tenant_id)
+    await set_tenant_context(db_session, tenant_id)
+
+    repo = PostgresEpisodicMemoryRepository(db_session)
+    base = datetime.now(UTC)
+    for i in range(5):
+        await repo.save(
+            _episode(session_id, {"n": i}, [0.1] * 384, timestamp=base + timedelta(seconds=i)),
+            tenant_id,
+        )
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_id)
+    result = await repo.get_unconsolidated_by_session(session_id, tenant_id, limit=2)
+
+    assert len(result) == 2
+    assert [e.content["n"] for e in result] == [0, 1]  # oldest first
+
+
+async def test_mark_consolidated_does_not_affect_another_tenants_episode(db_session):
+    tenant_a = uuid.uuid4()
+    tenant_b = uuid.uuid4()
+    session_id = await _insert_user_and_session(db_session, tenant_a)
+    repo = PostgresEpisodicMemoryRepository(db_session)
+
+    await set_tenant_context(db_session, tenant_a)
+    episode_a = _episode(session_id, {"who": "a"}, [0.1] * 384)
+    await repo.save(episode_a, tenant_a)
+    await db_session.commit()
+
+    # Attempting to mark tenant_a's episode consolidated while scoped to
+    # tenant_b must be a no-op -- RLS's USING clause governs the UPDATE the
+    # same way it governs reads, so the WHERE tenant_id = :tenant_id clause
+    # here is defense in depth, not the only thing preventing this.
+    await set_tenant_context(db_session, tenant_b)
+    await repo.mark_consolidated([episode_a.id], tenant_b)
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_a)
+    result = await repo.get_unconsolidated_by_session(session_id, tenant_a, limit=10)
+    assert [e.id for e in result] == [episode_a.id]
+
+
+async def test_mark_consolidated_with_an_empty_list_does_not_raise(db_session):
+    tenant_id = uuid.uuid4()
+    repo = PostgresEpisodicMemoryRepository(db_session)
+    await repo.mark_consolidated([], tenant_id)
+
+
 async def test_search_by_similarity_only_returns_the_given_tenants_episodes(
     db_session, embedding_model
 ):

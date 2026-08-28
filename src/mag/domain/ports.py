@@ -3,7 +3,12 @@ from __future__ import annotations
 import uuid
 from abc import ABC, abstractmethod
 
-from src.mag.domain.entities import EpisodicMemory, SemanticMemory, WorkingMemoryTurn
+from src.mag.domain.entities import (
+    EpisodicMemory,
+    ProceduralMemory,
+    SemanticMemory,
+    WorkingMemoryTurn,
+)
 
 
 class EpisodicMemoryRepository(ABC):
@@ -14,6 +19,22 @@ class EpisodicMemoryRepository(ABC):
     async def get_by_session(
         self, session_id: uuid.UUID, tenant_id: uuid.UUID
     ) -> list[EpisodicMemory]: ...
+
+    @abstractmethod
+    async def get_unconsolidated_by_session(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, limit: int
+    ) -> list[EpisodicMemory]:
+        """Oldest-first, consolidated_at IS NULL only -- the recency-ordered
+        "last N turns" batch Consolidation reflects on."""
+
+    @abstractmethod
+    async def mark_consolidated(
+        self, episode_ids: list[uuid.UUID], tenant_id: uuid.UUID
+    ) -> None:
+        """Sets consolidated_at on every id given, regardless of whether
+        Consolidation's reflection pass actually extracted a fact from it --
+        a reflected-on episode with nothing durable in it is still done, not
+        eligible for re-reflection on the next run."""
 
     @abstractmethod
     async def search_by_similarity(
@@ -88,6 +109,19 @@ class SemanticMemoryIndex(ABC):
         L2-normalized rather than bit-identical to the upserted value (same
         COSINE-distance-collection behavior as EpisodicMemoryIndex.search
         above)."""
+
+
+class ProceduralMemoryRepository(ABC):
+    @abstractmethod
+    async def save(self, procedure: ProceduralMemory, tenant_id: uuid.UUID) -> None:
+        """Upserts by (user_id, task_pattern) -- same reasoning as
+        SemanticMemoryRepository.save above, see migration 0004's
+        uq_procedural_memory_user_id_task_pattern constraint."""
+
+    @abstractmethod
+    async def find_by_task_pattern(
+        self, user_id: uuid.UUID, task_pattern: str, tenant_id: uuid.UUID
+    ) -> ProceduralMemory | None: ...
 
 
 class WorkingMemoryStore(ABC):

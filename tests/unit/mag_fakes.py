@@ -1,8 +1,16 @@
+import dataclasses
 import uuid
+from datetime import UTC, datetime
 
-from src.mag.domain.entities import EpisodicMemory, SemanticMemory, WorkingMemoryTurn
+from src.mag.domain.entities import (
+    EpisodicMemory,
+    ProceduralMemory,
+    SemanticMemory,
+    WorkingMemoryTurn,
+)
 from src.mag.domain.ports import (
     EpisodicMemoryRepository,
+    ProceduralMemoryRepository,
     SemanticMemoryRepository,
     WorkingMemoryStore,
 )
@@ -22,6 +30,25 @@ class FakeEpisodicMemoryRepository(EpisodicMemoryRepository):
         self, session_id: uuid.UUID, tenant_id: uuid.UUID
     ) -> list[EpisodicMemory]:
         return self._by_session.get(session_id, [])
+
+    async def get_unconsolidated_by_session(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, limit: int
+    ) -> list[EpisodicMemory]:
+        episodes = self._by_session.get(session_id, [])
+        return [e for e in episodes if e.consolidated_at is None][:limit]
+
+    async def mark_consolidated(
+        self, episode_ids: list[uuid.UUID], tenant_id: uuid.UUID
+    ) -> None:
+        # EpisodicMemory is frozen -- replace in place rather than mutate,
+        # matching how the real UPDATE statement changes the stored row
+        # without changing its identity.
+        now = datetime.now(UTC)
+        for session_id, episodes in self._by_session.items():
+            self._by_session[session_id] = [
+                dataclasses.replace(e, consolidated_at=now) if e.id in episode_ids else e
+                for e in episodes
+            ]
 
     def set_search_results(self, results: list[EpisodicMemory]) -> None:
         self._search_results = results
@@ -65,6 +92,25 @@ class FakeSemanticMemoryRepository(SemanticMemoryRepository):
         self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
     ) -> list[SemanticMemory]:
         return self._search_results[:top_k]
+
+
+class FakeProceduralMemoryRepository(ProceduralMemoryRepository):
+    def __init__(self) -> None:
+        self.saved: list[tuple[ProceduralMemory, uuid.UUID]] = []
+        # Keyed by (user_id, task_pattern) ONLY, matching the real
+        # repository's actual unique constraint (migration 0004's
+        # uq_procedural_memory_user_id_task_pattern) -- same reasoning as
+        # FakeSemanticMemoryRepository's identical key shape above.
+        self._by_pattern: dict[tuple[uuid.UUID, str], ProceduralMemory] = {}
+
+    async def save(self, procedure: ProceduralMemory, tenant_id: uuid.UUID) -> None:
+        self.saved.append((procedure, tenant_id))
+        self._by_pattern[(procedure.user_id, procedure.task_pattern)] = procedure
+
+    async def find_by_task_pattern(
+        self, user_id: uuid.UUID, task_pattern: str, tenant_id: uuid.UUID
+    ) -> ProceduralMemory | None:
+        return self._by_pattern.get((user_id, task_pattern))
 
 
 class FakeWorkingMemoryStore(WorkingMemoryStore):

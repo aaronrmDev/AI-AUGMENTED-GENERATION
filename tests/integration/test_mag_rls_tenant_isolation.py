@@ -4,9 +4,12 @@ from datetime import UTC, datetime
 from sqlalchemy import text
 
 from src.identity.infrastructure.db import set_tenant_context
-from src.mag.domain.entities import EpisodicMemory, SemanticMemory
+from src.mag.domain.entities import EpisodicMemory, ProceduralMemory, SemanticMemory
 from src.mag.infrastructure.postgres_episodic_memory_repository import (
     PostgresEpisodicMemoryRepository,
+)
+from src.mag.infrastructure.postgres_procedural_memory_repository import (
+    PostgresProceduralMemoryRepository,
 )
 from src.mag.infrastructure.postgres_semantic_memory_repository import (
     PostgresSemanticMemoryRepository,
@@ -125,3 +128,45 @@ async def test_semantic_memory_rls_returns_zero_cross_tenant_rows_without_an_app
 
     assert fact_values == {"tenant a's fact"}
     assert "tenant b's fact" not in fact_values
+
+
+async def test_procedural_memory_rls_returns_zero_cross_tenant_rows_without_an_app_level_filter(
+    db_session,
+):
+    # Same task_pattern under both tenants deliberately -- proves RLS, not
+    # the (user_id, task_pattern) unique constraint (which is scoped within
+    # a tenant's own user_id values anyway), is what's keeping the rows
+    # apart.
+    tenant_a = uuid.uuid4()
+    tenant_b = uuid.uuid4()
+    repo = PostgresProceduralMemoryRepository(db_session)
+
+    await set_tenant_context(db_session, tenant_a)
+    user_a = await _create_user(db_session, tenant_a)
+    await repo.save(
+        ProceduralMemory(
+            id=uuid.uuid4(), user_id=user_a, task_pattern="deploy_service",
+            workflow={"who": "a"},
+        ),
+        tenant_a,
+    )
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_b)
+    user_b = await _create_user(db_session, tenant_b)
+    await repo.save(
+        ProceduralMemory(
+            id=uuid.uuid4(), user_id=user_b, task_pattern="deploy_service",
+            workflow={"who": "b"},
+        ),
+        tenant_b,
+    )
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_a)
+    # Deliberately no WHERE tenant_id = ... -- RLS alone must do the filtering.
+    result = await db_session.execute(text("SELECT workflow FROM procedural_memory"))
+    who_values = {row.workflow["who"] for row in result}
+
+    assert who_values == {"a"}
+    assert "b" not in who_values
