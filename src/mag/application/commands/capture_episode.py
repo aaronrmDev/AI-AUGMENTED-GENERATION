@@ -4,24 +4,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.mag.domain.entities import EpisodicMemory
-from src.mag.domain.ports import EpisodicMemoryRepository
-from src.mag.infrastructure.qdrant_episodic_memory_index import QdrantEpisodicMemoryIndex
+from src.mag.domain.ports import EpisodicMemoryIndex, EpisodicMemoryRepository
 from src.rag.domain.ports import EmbeddingModel
 
 
 class CaptureEpisode:
-    # episodic_memory_index is typed against the concrete
-    # QdrantEpisodicMemoryIndex, not a src.mag.domain.ports abstraction --
-    # ports.py (this batch's already-written, shared contract) defines only
-    # EpisodicMemoryRepository/SemanticMemoryRepository/WorkingMemoryStore,
-    # with no fast-lookup-index port. The design spec treats this index as a
-    # second concrete write target for save(), matching how UploadDocument
-    # (RAG) writes to both DocumentRepository and VectorStore, not as a port
-    # this batch is scoped to introduce.
     def __init__(
         self,
         episodic_memory_repository: EpisodicMemoryRepository,
-        episodic_memory_index: QdrantEpisodicMemoryIndex,
+        episodic_memory_index: EpisodicMemoryIndex,
         embedding_model: EmbeddingModel,
     ) -> None:
         self._episodes = episodic_memory_repository

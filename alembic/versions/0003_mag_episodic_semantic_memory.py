@@ -57,6 +57,15 @@ def upgrade() -> None:
         sa.Column(
             "user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=False
         ),
+        # Explicit column, same reasoning as episodic_memory.tenant_id below and
+        # chunks.tenant_id in 0002: RLS needs it directly on the row rather than
+        # joined in through user_id -> users.tenant_id on every query. An
+        # earlier draft of this migration scoped semantic_memory through
+        # user_id alone and skipped RLS entirely, on the mistaken belief that
+        # sessions does the same -- it doesn't (0001 gives sessions its own
+        # tenant_id + RLS policy); this table now follows that same pattern
+        # instead of inventing a weaker one.
+        sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("fact_key", sa.String, nullable=False),
         sa.Column("fact_value", sa.Text, nullable=False),
         sa.Column("embedding", Vector(384), nullable=False),
@@ -65,26 +74,25 @@ def upgrade() -> None:
         sa.Column("valid_until", sa.DateTime(timezone=True), nullable=True),
     )
     op.create_index("ix_semantic_memory_user_id", "semantic_memory", ["user_id"])
-    # A user's own facts are looked up by key on every RecordSemanticFact call
-    # (find-before-write, so a Batch B Update/Refine can tell whether a fact
-    # already exists) -- not unique, since two facts can share a key across
-    # different users.
-    op.create_index(
-        "ix_semantic_memory_user_id_fact_key", "semantic_memory", ["user_id", "fact_key"]
+    op.create_index("ix_semantic_memory_tenant_id", "semantic_memory", ["tenant_id"])
+    # UNIQUE, not a plain index: a fact_key is meant to be looked up and
+    # overwritten (RecordSemanticFact is an upsert), not accumulated as
+    # unbounded duplicates resolved by an arbitrary tie-break at read time.
+    # Two different users (even in the same tenant) can still share a
+    # fact_key freely -- the constraint is per-user, not global.
+    op.create_unique_constraint(
+        "uq_semantic_memory_user_id_fact_key", "semantic_memory", ["user_id", "fact_key"]
     )
 
-    # RLS on episodic_memory only, direct tenant_id column, same pattern as
-    # chunks (0002) -- semantic_memory scopes through user_id and no
-    # user_id-keyed RLS pattern exists yet anywhere in this schema (see design
-    # spec's Migration section for why inventing one here is out of scope).
-    op.execute("ALTER TABLE episodic_memory ENABLE ROW LEVEL SECURITY")
-    op.execute("ALTER TABLE episodic_memory FORCE ROW LEVEL SECURITY")
-    op.execute(
-        """
-        CREATE POLICY tenant_isolation ON episodic_memory
-        USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
-        """
-    )
+    for table in ("episodic_memory", "semantic_memory"):
+        op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+        op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+        op.execute(
+            f"""
+            CREATE POLICY tenant_isolation ON {table}
+            USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
+            """
+        )
 
     op.execute(
         "GRANT SELECT, INSERT, UPDATE, DELETE ON episodic_memory, semantic_memory TO app_user"

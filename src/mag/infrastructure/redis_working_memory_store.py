@@ -27,12 +27,24 @@ class RedisWorkingMemoryStore(WorkingMemoryStore):
                 "metadata": turn.metadata,
             }
         )
-        await self._client.rpush(key, payload)
-        await self._client.expire(key, _TTL_SECONDS)
+        # Pipelined so RPUSH and EXPIRE reach Redis as one round trip and one
+        # unit of work -- two separate awaits left a window where a process
+        # crash between them left a newly created key with no TTL, leaking it
+        # forever in the tier whose entire point is bounded lifetime.
+        async with self._client.pipeline(transaction=True) as pipe:
+            pipe.rpush(key, payload)
+            pipe.expire(key, _TTL_SECONDS)
+            await pipe.execute()
 
     async def get_recent_turns(
         self, session_id: uuid.UUID, limit: int
     ) -> list[WorkingMemoryTurn]:
+        # limit <= 0 must return nothing, not everything: Redis's LRANGE
+        # treats a start index of -0 as plain 0, its idiom for "the whole
+        # list" -- so a naive -limit here silently ignores a caller that
+        # asked for zero turns and hands back the entire session instead.
+        if limit <= 0:
+            return []
         raw_entries = await self._client.lrange(self._key(session_id), -limit, -1)
         return [self._deserialize(entry) for entry in raw_entries]
 

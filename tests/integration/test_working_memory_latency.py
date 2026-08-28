@@ -119,6 +119,16 @@ async def _seed_postgres_episodes(db_session, tenant_id: uuid.UUID, session_id: 
     await db_session.execute(episode_insert, background_episode_rows)
     await db_session.commit()
 
+    # Without this, the planner's row-count estimate for a table it has never
+    # analyzed is PostgreSQL's default guess, not the true ~12,000-row
+    # reality just seeded -- on a freshly created table that guess can still
+    # produce a sequential scan, which would mean the measured gap below
+    # reflects "scanning an unanalyzed table" rather than the architectural
+    # claim this test exists to prove (see module docstring). The EXPLAIN
+    # assertion in the test itself is what actually confirms the index gets
+    # used, rather than trusting this comment.
+    await db_session.execute(text("ANALYZE episodic_memory"))
+
 
 async def _seed_redis_turns(store: RedisWorkingMemoryStore, session_id: uuid.UUID) -> None:
     for i in range(_TURN_COUNT):
@@ -157,6 +167,19 @@ async def test_working_memory_reads_are_faster_than_a_cold_postgres_round_trip(
         "ORDER BY timestamp DESC LIMIT :limit"
     )
     postgres_params = {"session_id": postgres_session_id, "limit": _TURN_COUNT}
+
+    # Confirms the planner actually chose an index scan on the seeded,
+    # analyzed table -- without this, "the gap comes from the index" is a
+    # claim in a comment, not something this test verified. A sequential
+    # scan here would mean the measured numbers below don't demonstrate what
+    # the module docstring says they demonstrate.
+    explain_result = await db_session.execute(
+        text(f"EXPLAIN {postgres_query.text}"), postgres_params
+    )
+    explain_plan = "\n".join(row[0] for row in explain_result)
+    assert "Seq Scan" not in explain_plan, (
+        f"expected an index scan on episodic_memory, got a sequential scan:\n{explain_plan}"
+    )
 
     # A handful of untimed reads first, for both paths, so neither measurement
     # is skewed by one-time costs a real hot/warm session would never pay on

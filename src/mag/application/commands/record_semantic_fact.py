@@ -2,8 +2,7 @@ import uuid
 from datetime import datetime
 
 from src.mag.domain.entities import SemanticMemory
-from src.mag.domain.ports import SemanticMemoryRepository
-from src.mag.infrastructure.qdrant_semantic_memory_index import QdrantSemanticMemoryIndex
+from src.mag.domain.ports import SemanticMemoryIndex, SemanticMemoryRepository
 from src.rag.domain.ports import EmbeddingModel
 
 
@@ -11,7 +10,7 @@ class RecordSemanticFact:
     def __init__(
         self,
         semantic_memory_repository: SemanticMemoryRepository,
-        semantic_memory_index: QdrantSemanticMemoryIndex,
+        semantic_memory_index: SemanticMemoryIndex,
         embedding_model: EmbeddingModel,
     ) -> None:
         self._repository = semantic_memory_repository
@@ -20,6 +19,7 @@ class RecordSemanticFact:
 
     async def execute(
         self,
+        tenant_id: uuid.UUID,
         user_id: uuid.UUID,
         fact_key: str,
         fact_value: str,
@@ -41,6 +41,6 @@ class RecordSemanticFact:
             source=source,
             valid_until=valid_until,
         )
-        await self._repository.save(fact)
-        await self._index.upsert(fact)
+        await self._repository.save(fact, tenant_id)
+        await self._index.upsert(fact, tenant_id)
         return fact

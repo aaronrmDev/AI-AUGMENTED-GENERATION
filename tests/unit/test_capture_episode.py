@@ -3,11 +3,12 @@ import uuid
 
 from src.mag.application.commands.capture_episode import CaptureEpisode
 from src.mag.domain.entities import EpisodicMemory
+from src.mag.domain.ports import EpisodicMemoryIndex
 from tests.unit.mag_fakes import FakeEpisodicMemoryRepository
 from tests.unit.rag_fakes import FakeEmbeddingModel
 
 
-class FakeQdrantEpisodicMemoryIndex:
+class FakeQdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
     # Deliberately local, not added to tests/unit/mag_fakes.py: that file is
     # shared with two other MAG verticals running in parallel in this same
     # worktree, and this fake only stands in for this vertical's own

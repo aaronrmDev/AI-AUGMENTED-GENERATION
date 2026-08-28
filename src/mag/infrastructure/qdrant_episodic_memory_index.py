@@ -6,12 +6,13 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qmodels
 
 from src.mag.domain.entities import EpisodicMemory
+from src.mag.domain.ports import EpisodicMemoryIndex
 
 _COLLECTION_NAME = "episodic_memory"
 _VECTOR_SIZE = 384
 
 
-class QdrantEpisodicMemoryIndex:
+class QdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
     def __init__(self, url: str) -> None:
         self._client = AsyncQdrantClient(url=url)
 

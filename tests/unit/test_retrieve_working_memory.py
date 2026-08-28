@@ -52,3 +52,18 @@ async def test_execute_returns_empty_list_for_a_session_with_no_turns():
     turns = await query.execute(uuid.uuid4())
 
     assert turns == []
+
+
+async def test_execute_with_limit_zero_returns_nothing_not_everything():
+    # Regression test: Redis's LRANGE key -0 -1 is its idiom for "the whole
+    # list" (-0 == 0), so a caller asking for zero turns must not silently
+    # get every turn in the session back instead.
+    store = FakeWorkingMemoryStore()
+    session_id = uuid.uuid4()
+    for i in range(5):
+        await store.push_turn(session_id, _turn(f"turn {i}"))
+
+    query = RetrieveWorkingMemory(store)
+    turns = await query.execute(session_id, limit=0)
+
+    assert turns == []

@@ -77,13 +77,38 @@ async def test_tenant_isolation_policy_exists_on_episodic_memory(db_session):
     assert tables == {"episodic_memory"}
 
 
-async def test_semantic_memory_table_has_no_rls_policy(db_session):
-    # Deliberate: semantic_memory scopes through user_id, not a direct
-    # tenant_id column -- see the design spec's Migration section for why an
-    # RLS policy isn't added for it yet (no user_id-keyed RLS pattern exists
-    # anywhere else in this schema to follow). This test guards against a
-    # future edit accidentally adding a policy shape nothing else uses.
+async def test_semantic_memory_table_exists_with_rls_enabled(db_session):
+    # Corrected post-review: an earlier version of this migration scoped
+    # semantic_memory through user_id alone with no RLS, on the mistaken
+    # belief that Sessions does the same (it doesn't -- see the design
+    # spec's Infrastructure section for the correction). semantic_memory now
+    # carries a direct tenant_id column and RLS, same as episodic_memory.
     result = await db_session.execute(
         text("SELECT relrowsecurity FROM pg_class WHERE relname = 'semantic_memory'")
     )
-    assert result.scalar_one() is False
+    assert result.scalar_one() is True
+
+
+async def test_tenant_isolation_policy_exists_on_semantic_memory(db_session):
+    result = await db_session.execute(
+        text(
+            "SELECT tablename FROM pg_policies "
+            "WHERE policyname = 'tenant_isolation' AND tablename = 'semantic_memory'"
+        )
+    )
+    tables = {row.tablename for row in result}
+    assert tables == {"semantic_memory"}
+
+
+async def test_semantic_memory_has_a_unique_constraint_on_user_id_and_fact_key(db_session):
+    # Regression test: without this constraint, RecordSemanticFact's upsert
+    # had no database-level backstop -- two saves with the same
+    # (user_id, fact_key) produced two rows resolved nondeterministically by
+    # find_by_key's read-time tie-break.
+    result = await db_session.execute(
+        text(
+            "SELECT conname FROM pg_constraint "
+            "WHERE conname = 'uq_semantic_memory_user_id_fact_key' AND contype = 'u'"
+        )
+    )
+    assert result.scalar_one_or_none() == "uq_semantic_memory_user_id_fact_key"

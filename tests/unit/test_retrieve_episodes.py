@@ -16,29 +16,29 @@ def _episode(session_id: uuid.UUID) -> EpisodicMemory:
     )
 
 
-async def test_execute_delegates_to_get_by_session():
+async def test_by_session_delegates_to_get_by_session():
     repo = FakeEpisodicMemoryRepository()
     tenant_id = uuid.uuid4()
     session_id = uuid.uuid4()
     episode = _episode(session_id)
     await repo.save(episode, tenant_id)
 
-    result = await RetrieveEpisodes(repo).execute(tenant_id=tenant_id, session_id=session_id)
+    result = await RetrieveEpisodes(repo).by_session(tenant_id=tenant_id, session_id=session_id)
 
     assert result == [episode]
 
 
-async def test_execute_returns_an_empty_list_for_a_session_with_no_episodes():
+async def test_by_session_returns_an_empty_list_for_a_session_with_no_episodes():
     repo = FakeEpisodicMemoryRepository()
 
-    result = await RetrieveEpisodes(repo).execute(
+    result = await RetrieveEpisodes(repo).by_session(
         tenant_id=uuid.uuid4(), session_id=uuid.uuid4()
     )
 
     assert result == []
 
 
-async def test_execute_does_not_return_another_sessions_episodes():
+async def test_by_session_does_not_return_another_sessions_episodes():
     repo = FakeEpisodicMemoryRepository()
     tenant_id = uuid.uuid4()
     session_a = uuid.uuid4()
@@ -48,6 +48,19 @@ async def test_execute_does_not_return_another_sessions_episodes():
     await repo.save(episode_a, tenant_id)
     await repo.save(episode_b, tenant_id)
 
-    result = await RetrieveEpisodes(repo).execute(tenant_id=tenant_id, session_id=session_a)
+    result = await RetrieveEpisodes(repo).by_session(tenant_id=tenant_id, session_id=session_a)
 
     assert result == [episode_a]
+
+
+async def test_by_similarity_delegates_to_search_by_similarity():
+    repo = FakeEpisodicMemoryRepository()
+    tenant_id = uuid.uuid4()
+    episodes = [_episode(uuid.uuid4()) for _ in range(3)]
+    repo.set_search_results(episodes)
+
+    result = await RetrieveEpisodes(repo).by_similarity(
+        query_embedding=[0.1] * 384, tenant_id=tenant_id, top_k=2
+    )
+
+    assert result == episodes[:2]

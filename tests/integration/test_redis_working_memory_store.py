@@ -76,6 +76,19 @@ async def test_get_recent_turns_returns_empty_list_for_an_unknown_session(store)
     assert turns == []
 
 
+async def test_get_recent_turns_with_limit_zero_returns_nothing_against_real_redis(store):
+    # Regression test against the real client: LRANGE key -0 -1 is Redis's
+    # own idiom for "the whole list" (-0 == 0), so this only proves the
+    # guard if it runs against a real Redis, not just the in-memory fake.
+    session_id = uuid.uuid4()
+    for i in range(5):
+        await store.push_turn(session_id, _turn(f"turn {i}"))
+
+    turns = await store.get_recent_turns(session_id, limit=0)
+
+    assert turns == []
+
+
 async def test_recorded_at_round_trips_through_json_as_a_real_datetime(store):
     session_id = uuid.uuid4()
     turn = _turn("timestamped")

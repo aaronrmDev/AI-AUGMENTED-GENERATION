@@ -12,7 +12,7 @@ The second group is MAG's long-term memory — the durable tier behind the worki
 
 The third group is the RAG document pipeline: `Documents` tracks an uploaded file's status and chunk count, and `Chunks` holds the actual pieces that get embedded and retrieved. `Chunks.parent_id` is a self-reference — it's what makes parent-document retrieval possible, where a small chunk is what matches a query but a larger surrounding block is what actually gets handed to the model. `Chunks` also carries its own `tenant_id` column rather than scoping to a tenant only indirectly through `document_id`: the migration that created the table (`alembic/versions/0002_documents_chunks.py`) sets `tenant_id` on every chunk and indexes it, specifically so the `tenant_isolation` row-level security policy can evaluate `tenant_id = current_setting('app.current_tenant_id', true)::uuid` directly against the `Chunks` row being read or written, without a join back through `Documents` on every query.
 
-Most of the remaining tables don't repeat a `tenant_id` column explicitly — `Users`, `Sessions`, `Documents`, and now `Chunks` are the ones that do, per the tables shown below. The rest scope to a tenant indirectly, through the foreign key that ties them back to a `Sessions` or `Users` row that does carry one; row-level security policies enforce the filter at the point where it actually matters. `Chunks` is the one place so far where that indirect scoping was judged not good enough on its own — the RLS policy needs the column directly rather than joining through `document_id` — and whether the same reasoning eventually extends to the other intermediate tables is a detail this document doesn't resolve on its own.
+Most of the remaining tables don't repeat a `tenant_id` column explicitly — `Users`, `Sessions`, `Documents`, `Chunks`, `EpisodicMemory`, and `SemanticMemory` are the ones that do, per the tables shown below. The rest scope to a tenant indirectly, through the foreign key that ties them back to a `Sessions` or `Users` row that does carry one; row-level security policies enforce the filter at the point where it actually matters. `Chunks` was the first place that indirect scoping was judged not good enough on its own — the RLS policy needs the column directly rather than joining through `document_id` — and the migration that added `EpisodicMemory` and `SemanticMemory` (`alembic/versions/0003_mag_episodic_semantic_memory.py`) followed the same reasoning for both: every tenant-scoped table in this schema now carries `tenant_id` directly and enforces it with a `tenant_isolation` RLS policy, rather than relying on an indirect join (an earlier draft of that migration scoped `SemanticMemory` through `user_id` alone with no RLS at all, on the mistaken premise that `Sessions` does the same — it doesn't, and the schema below reflects the corrected version).
 
 | Table | Column | Notes |
 |---|---|---|
@@ -33,13 +33,15 @@ Most of the remaining tables don't repeat a `tenant_id` column explicitly — `U
 |---|---|---|
 | EpisodicMemory | id | UUID, primary key |
 | EpisodicMemory | session_id | foreign key → Sessions |
+| EpisodicMemory | tenant_id | explicit column, indexed, RLS-enforced — same reasoning as `Chunks.tenant_id` below |
 | EpisodicMemory | content | JSONB |
 | EpisodicMemory | embedding | vector (pgvector) |
 | EpisodicMemory | timestamp | — |
 | EpisodicMemory | salience_score | — |
 | SemanticMemory | id | UUID, primary key |
 | SemanticMemory | user_id | foreign key → Users |
-| SemanticMemory | fact_key | — |
+| SemanticMemory | tenant_id | explicit column, indexed, RLS-enforced |
+| SemanticMemory | fact_key | unique per `(user_id, fact_key)` — `RecordSemanticFact` upserts on this pair rather than appending duplicates |
 | SemanticMemory | fact_value | — |
 | SemanticMemory | confidence | — |
 | SemanticMemory | source | — |
