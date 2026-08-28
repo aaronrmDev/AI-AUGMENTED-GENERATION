@@ -139,11 +139,13 @@ async def _seed_postgres_episodes(
     # Without this, the planner's row-count estimate for a table it has never
     # analyzed is PostgreSQL's default guess, not the true ~12,000-row
     # reality just seeded -- on a freshly created table that guess can still
-    # produce a sequential scan, which would mean the measured gap below
-    # reflects "scanning an unanalyzed table" rather than the architectural
-    # claim this test exists to prove (see module docstring). The EXPLAIN
-    # assertion in the test itself is what actually confirms the index gets
-    # used, rather than trusting this comment.
+    # produce a sequential scan, which would mean the timed reads below are
+    # scanning an unanalyzed table rather than exercising the real,
+    # correctly-indexed lookup this benchmark is meant to measure (see
+    # module docstring for what this benchmark does and doesn't
+    # demonstrate). The EXPLAIN assertion in the test itself is what
+    # actually confirms the index gets used, rather than trusting this
+    # comment.
     #
     # Run through a SEPARATE connection using the migration's own bootstrap
     # credentials (database_url), not db_session (app_user): ANALYZE only
@@ -201,12 +203,12 @@ async def test_working_memory_and_postgres_reads_both_return_correct_results_wit
     postgres_params = {"session_id": postgres_session_id, "limit": _TURN_COUNT}
 
     # Confirms the planner actually chose ix_episodic_memory_session_id
-    # (migration 0003) -- without this, "the gap comes from the index" is a
-    # claim in a comment, not something this test verified. Checking only
-    # for the absence of "Seq Scan" isn't enough on its own: a bitmap scan
-    # against a DIFFERENT index (e.g. ix_episodic_memory_tenant_id) would
-    # also satisfy that check while not actually being the index this
-    # test's claim is about.
+    # (migration 0003) -- without this, "this is a real, correctly-indexed
+    # Postgres read, not a strawman" is a claim in a comment, not something
+    # this test verified. Checking only for the absence of "Seq Scan" isn't
+    # enough on its own: a bitmap scan against a DIFFERENT index (e.g.
+    # ix_episodic_memory_tenant_id) would also satisfy that check while not
+    # actually being the index this claim is about.
     explain_result = await db_session.execute(
         text(f"EXPLAIN {postgres_query.text}"), postgres_params
     )
@@ -265,8 +267,10 @@ async def test_working_memory_and_postgres_reads_both_return_correct_results_wit
     # here would mean asserting whichever one happened to be true on the
     # day this was last edited -- exactly the kind of unverified claim this
     # project's evaluation reports are supposed to catch, not commit. What
-    # IS safe to assert is that both reads returned correct, complete
-    # results (checked above) with real, live-measured sub-millisecond
-    # latency on both sides -- that's what this test actually proves.
+    # this test actually proves: both reads return correct, complete
+    # results (checked above), and real p50 latency for each is measured
+    # and printed for disclosure -- not gated on a specific bound, since
+    # this suite's own timing is dominated by testcontainers/Docker Desktop
+    # overhead that varies run to run.
     assert postgres_p50 > 0
     assert redis_p50 > 0

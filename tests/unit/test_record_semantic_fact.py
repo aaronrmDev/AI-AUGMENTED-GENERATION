@@ -64,22 +64,40 @@ async def test_execute_embeds_the_fact_value_not_the_fact_key():
     assert fact.embedding != embedder.embed("k")
 
 
-async def test_execute_generates_a_new_uuid_for_the_fact():
+async def test_execute_derives_the_same_id_for_the_same_user_and_fact_key():
+    # The id is deterministic (uuid5 of user_id+fact_key), not random --
+    # this is the actual invariant that keeps a re-recorded fact from
+    # orphaning a stale point in Qdrant (see the comment in
+    # record_semantic_fact.py and the integration-level regression test
+    # test_recording_the_same_key_twice_does_not_orphan_a_stale_qdrant_point).
+    # A unit test asserting only "two DIFFERENT keys get different ids"
+    # can't tell a correct deterministic scheme apart from a reverted
+    # uuid4() -- this test is the fast, Docker-free guard for the specific
+    # property that matters.
     command = RecordSemanticFact(
         semantic_memory_repository=FakeSemanticMemoryRepository(),
         semantic_memory_index=FakeSemanticMemoryIndex(),
         embedding_model=FakeEmbeddingModel(),
     )
+    user_id = uuid.uuid4()
 
-    fact_one = await command.execute(
-        tenant_id=uuid.uuid4(), user_id=uuid.uuid4(), fact_key="k", fact_value="v"
+    first = await command.execute(
+        tenant_id=uuid.uuid4(), user_id=user_id, fact_key="favorite_color", fact_value="blue"
     )
-    fact_two = await command.execute(
-        tenant_id=uuid.uuid4(), user_id=uuid.uuid4(), fact_key="k", fact_value="v"
+    second = await command.execute(
+        tenant_id=uuid.uuid4(), user_id=user_id, fact_key="favorite_color", fact_value="red"
+    )
+    different_key = await command.execute(
+        tenant_id=uuid.uuid4(), user_id=user_id, fact_key="favorite_language", fact_value="v"
+    )
+    different_user = await command.execute(
+        tenant_id=uuid.uuid4(), user_id=uuid.uuid4(), fact_key="favorite_color", fact_value="v"
     )
 
-    assert isinstance(fact_one.id, uuid.UUID)
-    assert fact_one.id != fact_two.id
+    assert isinstance(first.id, uuid.UUID)
+    assert first.id == second.id
+    assert first.id != different_key.id
+    assert first.id != different_user.id
 
 
 async def test_execute_defaults_confidence_to_one():

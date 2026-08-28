@@ -27,6 +27,7 @@
 - Both numbers are sub-millisecond — this is `testcontainers` on Docker Desktop for Windows, loopback networking, on this specific machine, not a production latency SLA.
 - Redis's TTL-bearing write path (`push_turn`) was not benchmarked here, only reads.
 - 5 untimed warm-up reads on both paths first (asyncpg plan-caching, redis-py's lazy connection), then 50 timed reads each, reporting the median (p50) — this part of the methodology held up under the correction and wasn't the source of the retracted claim.
+- The two paths do asymmetric work per read: Postgres's timed loop stops at raw row fetch, while Redis's goes through `RetrieveWorkingMemory`, which deserializes 20 JSON payloads and constructs 20 frozen `WorkingMemoryTurn` dataclasses. That asymmetry is plausibly on the same order of magnitude as the ~0.01–0.03 ms differences these four runs actually measured, which is a second, independent reason not to read "Postgres at or slightly faster" as evidence that the *storage tier itself* favors Postgres — the comparison at this scale isn't clean enough in either direction to support a directional conclusion.
 
 ## Episodic Memory and Semantic Memory: correctness, not a quality comparison
 
