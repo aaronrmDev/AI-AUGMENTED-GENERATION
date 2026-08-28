@@ -64,7 +64,36 @@ async def test_run_comparison_computes_latency_percentiles():
     assert result.baseline.latency_p95_ms >= result.baseline.latency_p50_ms
 
 
-async def test_run_comparison_passes_the_right_answers_to_the_judge():
+async def test_run_comparison_passes_each_arms_own_context_to_the_judge():
+    async def baseline(question: str) -> Answer:
+        return Answer(text="base", input_tokens=1, output_tokens=1, context="baseline's own chunk")
+
+    async def treatment(question: str) -> Answer:
+        return Answer(
+            text="treat", input_tokens=1, output_tokens=1, context="treatment's own chunk"
+        )
+
+    judge = FakeJudge()
+    use_case = RunComparison(judge=judge, repeat_count=1)
+    await use_case.execute(
+        scenario_name="s", model_config="m", success_criterion="c",
+        rag=True, cag=False, mag=False,
+        questions=["only question"], baseline=baseline, treatment=treatment,
+        success_check=lambda q, a: True,
+    )
+
+    # Each arm is judged against its OWN retrieved context, not a shared one
+    # (#148) -- a baseline that retrieves something different from treatment
+    # must have its claims checked against what it actually retrieved.
+    assert judge.calls == [
+        ("only question", "base", "treat", "baseline's own chunk", "treatment's own chunk")
+    ]
+
+
+async def test_run_comparison_passes_an_empty_baseline_context_through_unchanged():
+    # A no-retrieval baseline (plain LLM call) has nothing of its own to be
+    # judged against -- confirms the fix doesn't force a fabricated context
+    # onto that arm.
     async def baseline(question: str) -> Answer:
         return Answer(text="base", input_tokens=1, output_tokens=1)
 
@@ -80,10 +109,7 @@ async def test_run_comparison_passes_the_right_answers_to_the_judge():
         success_check=lambda q, a: True,
     )
 
-    # The judge is given the TREATMENT's context (the only side with any),
-    # never the baseline's -- otherwise a context-free baseline's own claims
-    # would have nothing to be checked against at all.
-    assert judge.calls == [("only question", "base", "treat", "retrieved chunk")]
+    assert judge.calls == [("only question", "base", "treat", "", "retrieved chunk")]
 
 
 async def test_run_comparison_keeps_only_the_last_repeat_runs_answer():

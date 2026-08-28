@@ -16,7 +16,7 @@ class ClaudeJudge(Judge):
         self._model_id = model_id
 
     async def score(
-        self, query: str, response_a: str, response_b: str, context: str
+        self, query: str, response_a: str, response_b: str, context_a: str, context_b: str
     ) -> tuple[JudgeScores, JudgeScores]:
         response = await self._client.messages.create(
             model=self._model_id,
@@ -27,10 +27,15 @@ class ClaudeJudge(Judge):
                     "role": "user",
                     "content": (
                         f"Query: {query}\n\n"
-                        f"Context (use this to judge groundedness -- a claim "
-                        f"that doesn't trace to this is unverifiable):\n"
-                        f"{context or '(none provided)'}\n\n"
+                        f"Context for Response A (use this to judge Response A's "
+                        f"groundedness -- a claim that doesn't trace to this is "
+                        f"unverifiable):\n"
+                        f"{context_a or '(none provided)'}\n\n"
                         f"Response A:\n{response_a}\n\n"
+                        f"Context for Response B (use this to judge Response B's "
+                        f"groundedness -- a claim that doesn't trace to this is "
+                        f"unverifiable):\n"
+                        f"{context_b or '(none provided)'}\n\n"
                         f"Response B:\n{response_b}"
                     ),
                 }

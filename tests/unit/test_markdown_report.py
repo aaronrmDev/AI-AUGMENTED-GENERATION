@@ -88,3 +88,29 @@ def test_render_github_comment_omits_the_title_and_success_criterion_line():
     assert "— Comparison Result" in full
     assert "— Comparison Result" not in comment
     assert "Success criterion" not in comment
+
+
+def test_render_shows_a_dash_row_instead_of_zeros_for_a_parse_failure():
+    # Regression test for #149: a JudgeScores with parse_failed=True carries
+    # placeholder 0s that must never be rendered as if they were real judged
+    # scores on the 1-5 rubric.
+    result = _make_result()
+    failed_scores = JudgeScores(
+        coherence=0,
+        relevance=0,
+        completeness=0,
+        groundedness=0,
+        unverifiable_claims=["JUDGE PARSE FAILURE: JSONDecodeError: boom"],
+        parse_failed=True,
+    )
+    result.judge_scores[0] = (failed_scores, result.judge_scores[0][1])
+
+    output = render(result)
+
+    lines = output.splitlines()
+    baseline_score_row = next(
+        line for line in lines if line.startswith("| Baseline (A)")
+    )
+    assert baseline_score_row == "| Baseline (A) | — | — | — | — |"
+    assert "0 |" not in baseline_score_row
+    assert "⚠ Baseline: JUDGE PARSE FAILURE: JSONDecodeError: boom" in output

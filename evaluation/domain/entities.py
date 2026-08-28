@@ -34,6 +34,10 @@ class JudgeScores:
     completeness: int
     groundedness: int
     unverifiable_claims: list[str] = field(default_factory=list)
+    # True when the judge's raw response never parsed into real scores after
+    # every retry (#149) -- coherence/relevance/completeness/groundedness are
+    # meaningless placeholders (0) in that case, never a real judged score.
+    parse_failed: bool = False
 
 
 @dataclass(frozen=True)

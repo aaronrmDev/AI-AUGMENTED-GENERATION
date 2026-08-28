@@ -10,11 +10,13 @@ main point but skips secondary detail the query implied it wanted, 5 = covers \
 everything the query needed at the depth it implied
 - groundedness: 1 = asserts specific checkable facts with no support anywhere, 3 = \
 mixes grounded and unverifiable claims, 5 = every specific checkable claim traces to \
-the provided context
+that response's own provided context
 
-Score both responses on all four dimensions before comparing them to each other. Also \
-flag, per response, any specific claim you cannot verify against the query or context \
-provided -- a real flagged claim, never a bare "seems fine" or "seems off."
+Each response has its own context section below it -- judge that response's \
+groundedness against ITS OWN context only, never the other response's. Score both \
+responses on all four dimensions before comparing them to each other. Also flag, per \
+response, any specific claim you cannot verify against the query or that response's own \
+context -- a real flagged claim, never a bare "seems fine" or "seems off."
 
 Respond with ONLY this JSON shape, no other text, no markdown fencing:
 {"response_a": {"coherence": <int>, "relevance": <int>, "completeness": <int>, \

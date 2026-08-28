@@ -46,6 +46,11 @@ def _quantitative_table(result: ComparisonResult) -> list[str]:
 
 
 def _score_row(label: str, scores: JudgeScores) -> str:
+    if scores.parse_failed:
+        # Never render 0s here -- on the 1-5 rubric this JudgeScores actually
+        # uses, a 0 in every column would read as a real (if extreme) judged
+        # score rather than what it is: no judgment happened at all (#149).
+        return f"| {label} | — | — | — | — |"
     return (
         f"| {label} | {scores.coherence} | {scores.relevance} "
         f"| {scores.completeness} | {scores.groundedness} |"
@@ -62,11 +67,15 @@ def _qualitative_section(result: ComparisonResult) -> list[str]:
         lines.append(_score_row("Baseline (A)", scores_a))
         lines.append(_score_row("Treatment (B)", scores_b))
         lines.append("")
-        if scores_a.unverifiable_claims:
+        if scores_a.parse_failed:
+            lines.append(f"- ⚠ Baseline: {scores_a.unverifiable_claims[0]}")
+        elif scores_a.unverifiable_claims:
             lines.append(
                 f"- Baseline unverifiable claims: {', '.join(scores_a.unverifiable_claims)}"
             )
-        if scores_b.unverifiable_claims:
+        if scores_b.parse_failed:
+            lines.append(f"- ⚠ Treatment: {scores_b.unverifiable_claims[0]}")
+        elif scores_b.unverifiable_claims:
             lines.append(
                 f"- Treatment unverifiable claims: {', '.join(scores_b.unverifiable_claims)}"
             )
