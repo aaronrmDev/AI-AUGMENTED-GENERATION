@@ -5,7 +5,7 @@ from typing import Any, cast
 
 from evaluation.domain.entities import JudgeScores
 from evaluation.domain.ports import Judge
-from evaluation.infrastructure._judge_prompt import JUDGE_SYSTEM_PROMPT
+from evaluation.infrastructure._judge_prompt import JUDGE_SYSTEM_PROMPT, build_judge_user_message
 
 
 class ClaudeJudge(Judge):
@@ -25,18 +25,8 @@ class ClaudeJudge(Judge):
             messages=[
                 {
                     "role": "user",
-                    "content": (
-                        f"Query: {query}\n\n"
-                        f"Context for Response A (use this to judge Response A's "
-                        f"groundedness -- a claim that doesn't trace to this is "
-                        f"unverifiable):\n"
-                        f"{context_a or '(none provided)'}\n\n"
-                        f"Response A:\n{response_a}\n\n"
-                        f"Context for Response B (use this to judge Response B's "
-                        f"groundedness -- a claim that doesn't trace to this is "
-                        f"unverifiable):\n"
-                        f"{context_b or '(none provided)'}\n\n"
-                        f"Response B:\n{response_b}"
+                    "content": build_judge_user_message(
+                        query, response_a, response_b, context_a, context_b
                     ),
                 }
             ],

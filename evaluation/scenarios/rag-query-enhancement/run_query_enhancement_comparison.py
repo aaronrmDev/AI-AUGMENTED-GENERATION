@@ -381,7 +381,17 @@ async def _run(strategy: str) -> None:
             f"coherent and 'grounded' (it makes no false claims), which is a "
             f"real, separate judge-prompt limitation, not evidence baseline "
             f"actually answered correctly. Treat baseline as 'no context "
-            f"provided', not 'no model knowledge available'."
+            f"provided', not 'no model knowledge available'. CAVEAT 5: the "
+            f"flip side of CAVEAT 4 -- per the #148 fix (each arm judged "
+            f"against its own context), baseline is now judged against "
+            f"'(none provided)' rather than treatment's context. A refusal "
+            f"still reads as grounded (CAVEAT 4), but any question where "
+            f"baseline DOES venture a specific factual claim will have that "
+            f"claim flagged unverifiable and groundedness pinned low, "
+            f"independent of whether the claim is true -- not evidence "
+            f"treatment is more factually accurate, just a structural "
+            f"consequence of baseline having nothing to check its claims "
+            f"against."
         ),
         questions=[q.question for q in scenario.questions],
         baseline=baseline,

@@ -253,7 +253,13 @@ async def _run(strategy: str) -> None:
             f"Ollama/qwen3.5, not Claude (no API credit balance at run time) -- "
             f"same model family judging its own treatment output, a real "
             f"self-grading-bias risk; re-run with ClaudeJudge once credits "
-            f"exist before treating these judge scores as final. "
+            f"exist before treating these judge scores as final. CAVEAT 1b: "
+            f"baseline has no retrieved context of its own (empty string), so "
+            f"per the #148 fix (each arm judged against its own context) "
+            f"baseline's groundedness is judged against '(none provided)' -- "
+            f"treat any baseline-vs-treatment groundedness gap as reflecting "
+            f"that structural difference in what each arm had to work with, "
+            f"not a measured claim about factual accuracy. "
             f"{candidate_pool_note}{llm_reranker_note}"
         ),
         questions=[q.question for q in scenario.questions],

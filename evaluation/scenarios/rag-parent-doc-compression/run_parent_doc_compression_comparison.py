@@ -286,7 +286,13 @@ async def _run(strategy: str) -> None:
             f"are dominated by Ollama generation variance at repeat_count=3 "
             f"(observed p95/p50 ratios of 2.2x-6.0x on 15 samples each) and "
             f"should not be read as a precise per-technique cost; only large, "
-            f"consistent differences are meaningful at this sample size."
+            f"consistent differences are meaningful at this sample size. "
+            f"CAVEAT 4: baseline has no retrieved context of its own (empty "
+            f"string), so per the #148 fix (each arm judged against its own "
+            f"context) baseline's groundedness is judged against '(none "
+            f"provided)' -- treat any baseline-vs-treatment groundedness gap "
+            f"as reflecting that structural difference in what each arm had "
+            f"to work with, not a measured claim about factual accuracy."
         ),
         questions=[q.question for q in scenario.questions],
         baseline=baseline,

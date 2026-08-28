@@ -132,8 +132,11 @@ async def test_score_marks_each_empty_context_explicitly_rather_than_omitting_it
 
     await judge.score(query="q", response_a="a", response_b="b", context_a="", context_b="")
 
-    full_prompt = str(fake_client.last_call_kwargs["messages"])
-    assert full_prompt.count("(none provided)") == 2
+    # Scoped to the user message only -- the system prompt's own groundedness
+    # rubric also mentions the literal string "(none provided)" as guidance,
+    # which would inflate a count taken over the whole message list.
+    user_message = fake_client.last_call_kwargs["messages"][1]["content"]
+    assert user_message.count("(none provided)") == 2
 
 
 async def test_score_retries_and_succeeds_after_malformed_json():

@@ -114,3 +114,54 @@ def test_render_shows_a_dash_row_instead_of_zeros_for_a_parse_failure():
     assert baseline_score_row == "| Baseline (A) | — | — | — | — |"
     assert "0 |" not in baseline_score_row
     assert "⚠ Baseline: JUDGE PARSE FAILURE: JSONDecodeError: boom" in output
+
+
+def test_render_shows_a_dash_row_for_a_treatment_parse_failure_too():
+    # The Baseline/scores_a and Treatment/scores_b branches in
+    # _qualitative_section are hand-duplicated, not one shared code path --
+    # this covers the symmetric case the test above doesn't touch, so a
+    # copy-paste error in the scores_b branch can't slip past both silently.
+    result = _make_result()
+    failed_scores = JudgeScores(
+        coherence=0,
+        relevance=0,
+        completeness=0,
+        groundedness=0,
+        unverifiable_claims=["JUDGE PARSE FAILURE: JSONDecodeError: boom"],
+        parse_failed=True,
+    )
+    result.judge_scores[0] = (result.judge_scores[0][0], failed_scores)
+
+    output = render(result)
+
+    lines = output.splitlines()
+    treatment_score_row = next(
+        line for line in lines if line.startswith("| Treatment (B)")
+    )
+    assert treatment_score_row == "| Treatment (B) | — | — | — | — |"
+    assert "0 |" not in treatment_score_row
+    assert "⚠ Treatment: JUDGE PARSE FAILURE: JSONDecodeError: boom" in output
+
+
+def test_render_github_comment_shows_a_dash_row_for_a_parse_failure():
+    # render_github_comment() shares _qualitative_section with render(), but
+    # had no direct test coverage of the parse-failure path at all.
+    result = _make_result()
+    failed_scores = JudgeScores(
+        coherence=0,
+        relevance=0,
+        completeness=0,
+        groundedness=0,
+        unverifiable_claims=["JUDGE PARSE FAILURE: JSONDecodeError: boom"],
+        parse_failed=True,
+    )
+    result.judge_scores[0] = (failed_scores, result.judge_scores[0][1])
+
+    comment = render_github_comment(result)
+
+    lines = comment.splitlines()
+    baseline_score_row = next(
+        line for line in lines if line.startswith("| Baseline (A)")
+    )
+    assert baseline_score_row == "| Baseline (A) | — | — | — | — |"
+    assert "⚠ Baseline: JUDGE PARSE FAILURE: JSONDecodeError: boom" in comment
