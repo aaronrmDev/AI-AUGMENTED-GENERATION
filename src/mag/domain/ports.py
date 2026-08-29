@@ -36,7 +36,18 @@ class EpisodicMemoryRepository(ABC):
         framing -- but if a backlog ever exceeds one run's limit, this
         returns the OLDEST unconsolidated episodes, not the most recent
         ones, so the backlog actually drains instead of perpetually
-        reprocessing whatever's newest while older episodes wait forever."""
+        reprocessing whatever's newest while older episodes wait forever.
+
+        WARNING for callers also composing ConsolidateProcedures over the
+        same window: ConsolidateEpisodes.execute() unconditionally marks
+        every episode it fetches via this method as consolidated, so
+        calling this method again for the same session AFTER
+        ConsolidateEpisodes has run returns [] even if a genuine repeated
+        task pattern is sitting right there -- ConsolidateProcedures then
+        silently extracts nothing. Use get_by_session (unfiltered) to build
+        a batch that will also go through ConsolidateProcedures; see
+        ConsolidateProcedures's own class comment and
+        test_mag_combinations.py's composition-safety test."""
 
     @abstractmethod
     async def mark_consolidated(
