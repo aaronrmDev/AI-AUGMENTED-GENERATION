@@ -214,7 +214,9 @@ class FakeSemanticMemoryRepository(SemanticMemoryRepository):
 class FakeSemanticMemoryIndex(SemanticMemoryIndex):
     def __init__(self) -> None:
         self.upserted: list[tuple[SemanticMemory, uuid.UUID]] = []
-        self.status_updates: list[tuple[uuid.UUID, uuid.UUID, datetime | None, datetime | None]] = []
+        self.status_updates: list[
+            tuple[uuid.UUID, uuid.UUID, datetime | None, datetime | None]
+        ] = []
 
     async def ensure_collection(self) -> None:
         pass
