@@ -32,6 +32,12 @@ dependencies = [
     # floor for the graph-DB driver. Native async API (neo4j.AsyncGraphDatabase),
     # matching this project's async-first convention everywhere else.
     "neo4j>=5.20.0",
+    # Previously only a transitive pull-in via sentence-transformers;
+    # CAG's compression module (PALUCompressor's SVD) now imports it
+    # directly, so it needs its own declared floor rather than riding on
+    # another package's transitive dependency, which could change
+    # independently of what this code actually needs.
+    "numpy>=2.0",
 ]
 
 [project.optional-dependencies]
