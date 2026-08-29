@@ -11,11 +11,13 @@ import uuid
 from datetime import UTC, datetime
 
 import ollama
+from neo4j import AsyncGraphDatabase
 from sqlalchemy import text
 
 from src.identity.infrastructure.db import set_tenant_context
 from src.mag.application.commands.consolidate_episodes import ConsolidateEpisodes
 from src.mag.domain.entities import EpisodicMemory
+from src.mag.infrastructure.neo4j_memory_graph_repository import Neo4jMemoryGraphRepository
 from src.mag.infrastructure.postgres_episodic_memory_repository import (
     PostgresEpisodicMemoryRepository,
 )
@@ -55,8 +57,27 @@ async def _insert_user_and_session(db_session, tenant_id: uuid.UUID) -> tuple[uu
     return user_id, session_id
 
 
+async def _memory_graph_repository(neo4j_url) -> Neo4jMemoryGraphRepository:
+    url, username, password = neo4j_url
+    repository = Neo4jMemoryGraphRepository(url, auth=(username, password))
+    await repository.ensure_schema()
+    return repository
+
+
+async def _raw_neo4j_query(neo4j_url, cypher: str, **params: object) -> int:
+    url, username, password = neo4j_url
+    driver = AsyncGraphDatabase.driver(url, auth=(username, password))
+    try:
+        async with driver.session() as session:
+            result = await session.run(cypher, **params)
+            record = await result.single()
+            return record["c"]
+    finally:
+        await driver.close()
+
+
 async def test_execute_consolidates_real_episodes_with_a_real_ollama_model(
-    db_session, qdrant_url, embedding_model
+    db_session, qdrant_url, embedding_model, neo4j_url
 ):
     tenant_id = uuid.uuid4()
     user_id, session_id = await _insert_user_and_session(db_session, tenant_id)
@@ -66,6 +87,7 @@ async def test_execute_consolidates_real_episodes_with_a_real_ollama_model(
     semantic_index = QdrantSemanticMemoryIndex(qdrant_url)
     await semantic_index.ensure_collection()
     chat_model = OllamaChatModel(client=ollama.AsyncClient(), model_id=_MODEL_ID)
+    graph = await _memory_graph_repository(neo4j_url)
 
     await set_tenant_context(db_session, tenant_id)
     now = datetime.now(UTC)
@@ -103,6 +125,13 @@ async def test_execute_consolidates_real_episodes_with_a_real_ollama_model(
     ]
     for episode in episodes:
         await episodic_repo.save(episode, tenant_id)
+        # In real use CaptureEpisode would have already upserted these into
+        # the graph before Consolidation ever ran (Consolidation reflects on
+        # already-captured episodes) -- ABSTRACTS_TO's own port docstring
+        # requires both endpoint nodes to already exist, so this mirrors
+        # that real ordering rather than building episodes that were never
+        # captured through the normal path.
+        await graph.upsert_episode_node(episode, tenant_id)
     await db_session.commit()
 
     await set_tenant_context(db_session, tenant_id)
@@ -112,6 +141,7 @@ async def test_execute_consolidates_real_episodes_with_a_real_ollama_model(
         semantic_memory_index=semantic_index,
         embedding_model=embedding_model,
         chat_model=chat_model,
+        memory_graph_repository=graph,
     )
     result = await command.execute(tenant_id=tenant_id, user_id=user_id, session_id=session_id)
     await db_session.commit()
@@ -151,3 +181,16 @@ async def test_execute_consolidates_real_episodes_with_a_real_ollama_model(
             tenant_id=tenant_id, top_k=5,
         )
         assert fact.id in {r.fact.id for r in from_index}
+
+        # ABSTRACTS_TO from every reflected episode to this fact, in real
+        # Neo4j (MAG Batch D) -- the graph's own representation of what
+        # Consolidation just did.
+        abstracts_to_count = await _raw_neo4j_query(
+            neo4j_url,
+            "MATCH (:Episode)-[:ABSTRACTS_TO]->(:Fact {id: $fact_id, tenant_id: $tenant_id}) "
+            "RETURN count(*) AS c",
+            fact_id=str(fact.id),
+            tenant_id=str(tenant_id),
+        )
+        assert abstracts_to_count == len(episodes)
+    await graph.close()

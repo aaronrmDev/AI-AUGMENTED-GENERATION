@@ -4,7 +4,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.mag.domain.entities import EpisodicMemory
-from src.mag.domain.ports import EpisodicMemoryIndex, EpisodicMemoryRepository
+from src.mag.domain.ports import (
+    EpisodicMemoryIndex,
+    EpisodicMemoryRepository,
+    MemoryGraphRepository,
+)
+from src.mag.infrastructure._graph_write_safety import best_effort_graph_write
 from src.mag.infrastructure._llm_json import strip_markdown_fence
 from src.mag.infrastructure._salience_prompt import (
     SALIENCE_SYSTEM_PROMPT,
@@ -25,15 +30,28 @@ class CaptureEpisode:
         episodic_memory_index: EpisodicMemoryIndex,
         embedding_model: EmbeddingModel,
         chat_model: ChatModel,
+        memory_graph_repository: MemoryGraphRepository,
     ) -> None:
         self._episodes = episodic_memory_repository
         self._index = episodic_memory_index
         self._embedder = embedding_model
         self._chat_model = chat_model
+        self._graph = memory_graph_repository
 
     async def execute(
-        self, tenant_id: uuid.UUID, session_id: uuid.UUID, content: dict[str, Any]
+        self,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        session_id: uuid.UUID,
+        content: dict[str, Any],
     ) -> EpisodicMemory:
+        # Fetched before saving the new episode -- this is the episode
+        # TEMPORALLY_FOLLOWS will link from, so it has to be "the most
+        # recent episode as of before this one," not after. get_recent_by_
+        # session(limit=1) (MAG Batch C) is the cheap way to ask for just
+        # that, rather than get_by_session's full-session fetch.
+        previous = await self._episodes.get_recent_by_session(session_id, tenant_id, limit=1)
+
         # Embeds the whole event (json.dumps, keys sorted for a stable
         # embedding regardless of dict insertion order) rather than one
         # designated field -- content's shape (input/reasoning/tool_calls/
@@ -51,6 +69,32 @@ class CaptureEpisode:
         )
         await self._episodes.save(episode, tenant_id)
         await self._index.upsert(episode, tenant_id)
+
+        # Mirrors this episode into the memory graph (MAG Batch D) -- best
+        # effort, not blocking: see _graph_write_safety for why a Neo4j
+        # failure here must never roll back or mask the writes above, which
+        # already succeeded.
+        await best_effort_graph_write(
+            self._graph.upsert_episode_node(episode, tenant_id), "upsert episode node"
+        )
+        await best_effort_graph_write(
+            self._graph.link_participated_in(user_id, session_id, tenant_id),
+            "link participated_in",
+        )
+        if previous:
+            await best_effort_graph_write(
+                self._graph.link_temporally_follows(previous[0].id, episode.id, tenant_id),
+                "link temporally_follows",
+            )
+        # Reuses the same content["entities"] field MAG Batch C's
+        # EntityRetrieval already reads structurally, rather than inventing
+        # a second entity-extraction mechanism for the same data.
+        for entity_name in content.get("entities", []):
+            await best_effort_graph_write(
+                self._graph.link_mentions(episode.id, entity_name, tenant_id),
+                f"link mentions ({entity_name})",
+            )
+
         return episode
 
     async def _score_salience(self, content: dict[str, Any]) -> float:

@@ -40,6 +40,37 @@ services:
       timeout: 5s
       retries: 10
 
+  neo4j:
+    # Community edition matches this project's other stores' free/open-source
+    # choices (Postgres, Redis, Qdrant all run unlicensed here). 5.x pin
+    # matches OVERVIEW.md's own "neo4j >=5.20.0" driver-version floor -- the
+    # server and the Python driver aren't required to match exactly, but
+    # staying on the same major line is what's actually been validated.
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-unified_ai_neo4j}
+    ports:
+      - "7687:7687"
+      - "7474:7474"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      # cypher-shell against Bolt (7687), not an HTTP spider check against
+      # the browser console (7474) -- Bolt is the protocol the Python
+      # driver and Neo4jMemoryGraphRepository actually use, matching how
+      # postgres's pg_isready and redis's redis-cli ping both verify the
+      # real serving protocol rather than a secondary interface. A review
+      # caught the original HTTP-only check as a real gap: the browser
+      # console can respond before Bolt is actually ready.
+      test:
+        [
+          "CMD-SHELL",
+          "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-unified_ai_neo4j} 'RETURN 1' || exit 1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   api:
     build:
       context: ..
@@ -99,3 +130,4 @@ services:
 
 volumes:
   api_storage:
+  neo4j_data:

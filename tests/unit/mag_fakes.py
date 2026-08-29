@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 from src.mag.domain.entities import (
+    ActivatedNode,
     EpisodicMemory,
     ProceduralMemory,
     ScoredEpisode,
@@ -13,6 +14,7 @@ from src.mag.domain.entities import (
 )
 from src.mag.domain.ports import (
     EpisodicMemoryRepository,
+    MemoryGraphRepository,
     ProceduralMemoryRepository,
     SemanticMemoryRepository,
     WorkingMemoryStore,
@@ -184,6 +186,65 @@ class FakeProceduralMemoryRepository(ProceduralMemoryRepository):
         self, user_id: uuid.UUID, task_pattern: str, tenant_id: uuid.UUID
     ) -> ProceduralMemory | None:
         return self._by_pattern.get((user_id, task_pattern))
+
+
+class FakeMemoryGraphRepository(MemoryGraphRepository):
+    # Records every call rather than modeling real graph state -- unlike
+    # the other fakes above (which back a real query path with realistic
+    # in-memory behavior), nothing in this batch's unit tests needs to
+    # traverse a fake graph; they need to assert a command made the right
+    # graph-write calls (CaptureEpisode/RecordSemanticFact/
+    # ConsolidateEpisodes's unit tests) or to control
+    # SpreadingActivationRetrieval's return value directly. Real traversal
+    # behavior is covered by test_neo4j_memory_graph_repository.py against
+    # real Neo4j, not re-modeled here.
+    def __init__(self) -> None:
+        self.upserted_episodes: list[tuple[EpisodicMemory, uuid.UUID]] = []
+        self.upserted_facts: list[tuple[SemanticMemory, uuid.UUID]] = []
+        self.participated_in_links: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = []
+        self.temporally_follows_links: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = []
+        self.mentions_links: list[tuple[uuid.UUID, str, uuid.UUID]] = []
+        self.abstracts_to_links: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = []
+        self._spread_activation_results: list[ActivatedNode] = []
+
+    async def upsert_episode_node(self, episode: EpisodicMemory, tenant_id: uuid.UUID) -> None:
+        self.upserted_episodes.append((episode, tenant_id))
+
+    async def upsert_fact_node(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
+        self.upserted_facts.append((fact, tenant_id))
+
+    async def link_participated_in(
+        self, user_id: uuid.UUID, session_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> None:
+        self.participated_in_links.append((user_id, session_id, tenant_id))
+
+    async def link_temporally_follows(
+        self, earlier_episode_id: uuid.UUID, later_episode_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> None:
+        self.temporally_follows_links.append((earlier_episode_id, later_episode_id, tenant_id))
+
+    async def link_mentions(
+        self, episode_id: uuid.UUID, entity_name: str, tenant_id: uuid.UUID
+    ) -> None:
+        self.mentions_links.append((episode_id, entity_name, tenant_id))
+
+    async def link_abstracts_to(
+        self, episode_id: uuid.UUID, fact_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> None:
+        self.abstracts_to_links.append((episode_id, fact_id, tenant_id))
+
+    def set_spread_activation_results(self, results: list[ActivatedNode]) -> None:
+        self._spread_activation_results = results
+
+    async def spread_activation(
+        self,
+        tenant_id: uuid.UUID,
+        start_entity_names: list[str],
+        max_hops: int,
+        decay_factor: float,
+        activation_threshold: float,
+    ) -> list[ActivatedNode]:
+        return self._spread_activation_results
 
 
 class FakeWorkingMemoryStore(WorkingMemoryStore):

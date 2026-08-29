@@ -5,6 +5,7 @@ import pytest_asyncio
 import redis.asyncio as redis
 from alembic.config import Config
 from sqlalchemy.engine import make_url
+from testcontainers.neo4j import Neo4jContainer
 from testcontainers.postgres import PostgresContainer
 from testcontainers.qdrant import QdrantContainer
 from testcontainers.redis import RedisContainer
@@ -160,6 +161,27 @@ def qdrant_url(qdrant_container: QdrantContainer) -> str:
     #    documented on `redis_url` above.
     port = qdrant_container.get_exposed_port(6333)
     return f"http://127.0.0.1:{port}"
+
+
+@pytest.fixture(scope="session")
+def neo4j_container():
+    # Pinned to the 5.x line, matching docker/docker-compose.yml's neo4j
+    # service and OVERVIEW.md's "neo4j >=5.20.0" driver-version floor -- same
+    # reasoning as qdrant_container's explicit pin above (an unpinned image
+    # tag drifts to whatever testcontainers currently defaults to, silently
+    # moving the integration suite off the version compose actually runs).
+    with Neo4jContainer("neo4j:5-community") as container:
+        yield container
+
+
+@pytest.fixture(scope="session")
+def neo4j_url(neo4j_container: Neo4jContainer) -> tuple[str, str, str]:
+    # (bolt_url, username, password) -- 127.0.0.1 explicit, not
+    # get_container_host_ip() (returns "localhost", the same Windows/IPv6
+    # problem documented on redis_url/qdrant_url above).
+    port = neo4j_container.get_exposed_port(neo4j_container.port)
+    url = f"bolt://127.0.0.1:{port}"
+    return url, neo4j_container.username, neo4j_container.password
 
 
 @pytest.fixture(scope="session", autouse=True)

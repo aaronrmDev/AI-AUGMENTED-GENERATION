@@ -68,6 +68,22 @@ class ScoredFact:
 
 
 @dataclass(frozen=True)
+class ActivatedNode:
+    # The result shape for spreading activation (MAG Batch D, #76): a node
+    # reached by traversing the memory graph outward from a start node, with
+    # its distance-decayed relevance. node_type/properties are deliberately
+    # generic rather than a typed union of six node dataclasses -- spreading
+    # activation's whole point is traversing across heterogeneous node types
+    # (User -> Entity -> Fact, etc.) in one pass, so the caller gets back
+    # whatever the graph actually reached, not a pre-filtered single type.
+    node_id: str
+    node_type: str  # "User" | "Session" | "Entity" | "Concept" | "Episode" | "Fact"
+    properties: dict[str, Any]
+    activation: float
+    hops: int
+
+
+@dataclass(frozen=True)
 class ProceduralMemory:
     id: uuid.UUID
     user_id: uuid.UUID

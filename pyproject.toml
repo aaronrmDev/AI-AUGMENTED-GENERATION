@@ -28,6 +28,10 @@ dependencies = [
     "python-multipart>=0.0.9",
     "ollama>=0.6.2",
     "pyyaml>=6.0",
+    # >=5.20.0 matches docs/architecture/OVERVIEW.md's MAG-ecosystem version
+    # floor for the graph-DB driver. Native async API (neo4j.AsyncGraphDatabase),
+    # matching this project's async-first convention everywhere else.
+    "neo4j>=5.20.0",
 ]
 
 [project.optional-dependencies]

@@ -6,6 +6,7 @@ from src.mag.application.commands.record_semantic_fact import RecordSemanticFact
 from src.mag.domain.entities import EpisodicMemory, SemanticMemory
 from src.mag.domain.ports import (
     EpisodicMemoryRepository,
+    MemoryGraphRepository,
     SemanticMemoryIndex,
     SemanticMemoryRepository,
 )
@@ -13,6 +14,7 @@ from src.mag.infrastructure._consolidation_prompt import (
     CONSOLIDATION_SYSTEM_PROMPT,
     build_consolidation_user_message,
 )
+from src.mag.infrastructure._graph_write_safety import best_effort_graph_write
 from src.mag.infrastructure._llm_json import strip_markdown_fence
 from src.rag.domain.ports import ChatModel, EmbeddingModel
 
@@ -31,14 +33,17 @@ class ConsolidateEpisodes:
         semantic_memory_index: SemanticMemoryIndex,
         embedding_model: EmbeddingModel,
         chat_model: ChatModel,
+        memory_graph_repository: MemoryGraphRepository,
     ) -> None:
         self._episodes = episodic_memory_repository
         self._record_fact = RecordSemanticFact(
             semantic_memory_repository=semantic_memory_repository,
             semantic_memory_index=semantic_memory_index,
             embedding_model=embedding_model,
+            memory_graph_repository=memory_graph_repository,
         )
         self._chat_model = chat_model
+        self._graph = memory_graph_repository
 
     async def execute(
         self, tenant_id: uuid.UUID, user_id: uuid.UUID, session_id: uuid.UUID, batch_size: int = 10
@@ -53,16 +58,26 @@ class ConsolidateEpisodes:
 
         written: list[SemanticMemory] = []
         for fact in facts_raw:
-            written.append(
-                await self._record_fact.execute(
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    fact_key=fact["fact_key"],
-                    fact_value=fact["fact_value"],
-                    confidence=float(fact.get("confidence", 1.0)),
-                    source="consolidation",
-                )
+            recorded = await self._record_fact.execute(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                fact_key=fact["fact_key"],
+                fact_value=fact["fact_value"],
+                confidence=float(fact.get("confidence", 1.0)),
+                source="consolidation",
             )
+            written.append(recorded)
+            # ABSTRACTS_TO from every episode reflected on to this fact --
+            # the reflection was one LLM call over the whole batch, not a
+            # 1:1 episode:fact mapping, so there's no finer-grained "which
+            # specific episode produced this fact" signal to link instead.
+            # This IS the graph's representation of consolidation
+            # (DATABASE.md's own description of what this edge is for).
+            for episode in episodes:
+                await best_effort_graph_write(
+                    self._graph.link_abstracts_to(episode.id, recorded.id, tenant_id),
+                    "link abstracts_to",
+                )
 
         # Marked regardless of whether reflection produced any facts --
         # see the design spec's Consolidation section and

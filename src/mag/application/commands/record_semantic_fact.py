@@ -2,7 +2,12 @@ import uuid
 from datetime import datetime
 
 from src.mag.domain.entities import SemanticMemory
-from src.mag.domain.ports import SemanticMemoryIndex, SemanticMemoryRepository
+from src.mag.domain.ports import (
+    MemoryGraphRepository,
+    SemanticMemoryIndex,
+    SemanticMemoryRepository,
+)
+from src.mag.infrastructure._graph_write_safety import best_effort_graph_write
 from src.rag.domain.ports import EmbeddingModel
 
 
@@ -12,10 +17,12 @@ class RecordSemanticFact:
         semantic_memory_repository: SemanticMemoryRepository,
         semantic_memory_index: SemanticMemoryIndex,
         embedding_model: EmbeddingModel,
+        memory_graph_repository: MemoryGraphRepository,
     ) -> None:
         self._repository = semantic_memory_repository
         self._index = semantic_memory_index
         self._embedder = embedding_model
+        self._graph = memory_graph_repository
 
     async def execute(
         self,
@@ -54,4 +61,9 @@ class RecordSemanticFact:
         )
         await self._repository.save(fact, tenant_id)
         await self._index.upsert(fact, tenant_id)
+        # Best effort, not blocking -- same reasoning as CaptureEpisode's
+        # identical graph-write wrapping (MAG Batch D).
+        await best_effort_graph_write(
+            self._graph.upsert_fact_node(fact, tenant_id), "upsert fact node"
+        )
         return fact
