@@ -59,7 +59,16 @@ class EpisodicMemoryRepository(ABC):
         same quantity and scale Qdrant's search() below returns natively --
         deliberately kept comparable across both backends so retrieval
         strategies that fuse scores (MAG Batch C) aren't secretly mixing two
-        different conventions under one name."""
+        different conventions under one name.
+
+        Deliberately tenant-wide, not session-scoped, unlike
+        EpisodicMemoryIndex.search below: this method's only caller
+        (RetrieveEpisodes.by_similarity, from an earlier batch) searches
+        across a tenant's whole episode history by design. Batch C's
+        SemanticSimilarityRetrieval needed session-scoped semantic search
+        instead, which is exactly why it wraps EpisodicMemoryIndex.search
+        (Qdrant) rather than this method -- two deliberately different
+        scopes for two different callers, not an inconsistency."""
 
     @abstractmethod
     async def get_by_session_in_window(
