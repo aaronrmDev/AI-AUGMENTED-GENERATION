@@ -131,6 +131,16 @@ def _validate_and_dedupe_procedures(procedures: list[Any]) -> list[dict[str, Any
         # defeating the whole point of extracting a reusable workflow.
         if not isinstance(workflow, dict) or not workflow:
             raise TypeError("workflow must be a non-empty JSON object")
+        # A dict containing a "steps" key is truthy regardless of what's
+        # IN that list -- {"steps": []} (the system prompt's own
+        # documented shape, PROCEDURE_CONSOLIDATION_SYSTEM_PROMPT's
+        # {"steps": [<str>, ...]}) passes the check above untouched while
+        # still being exactly as stepless as {} (review-caught: a
+        # fix-wave re-review found the first version of this guard only
+        # closed the literal {} case, not this one level deeper).
+        steps = workflow.get("steps")
+        if isinstance(steps, list) and not steps:
+            raise TypeError("workflow.steps must not be an empty list")
         task_pattern = task_pattern.strip()
         # bool is a subclass of int in Python -- same guard
         # CaptureEpisode's salience validator and ConsolidateEpisodes's

@@ -200,6 +200,29 @@ async def test_execute_retries_when_workflow_is_empty():
     assert len(result) == 1
 
 
+async def test_execute_retries_when_workflow_steps_is_an_empty_list():
+    responses = [
+        json.dumps(
+            {
+                "procedures": [
+                    {"task_pattern": "deploy", "workflow": {"steps": []}, "success_rate": 1.0}
+                ]
+            }
+        ),
+        _VALID_RESPONSE,
+    ]
+    chat_model = _ScriptedChatModel(responses)
+    use_case = _use_case(FakeProceduralMemoryRepository(), chat_model)
+    episodes = [_episode({"input": "deploy", "outcome": "success"})]
+
+    result = await use_case.execute(
+        tenant_id=uuid.uuid4(), user_id=uuid.uuid4(), episodes=episodes
+    )
+
+    assert chat_model.call_count == 2
+    assert len(result) == 1
+
+
 async def test_execute_retries_when_success_rate_is_not_a_number():
     responses = [
         json.dumps(

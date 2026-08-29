@@ -138,24 +138,45 @@ async def test_living_agent_semantic_knowledge_compounds_across_sessions(
     session_1_summary = [(f.fact_key, f.fact_value) for f in facts_from_session_1]
     print(f"\nLiving Agent, session 1 facts (real Ollama, {_MODEL_ID}): {session_1_summary}")
     assert len(facts_from_session_1) >= 1
-    session_1_fact_keys = {f.fact_key for f in facts_from_session_1}
+    # Captured by VALUE, not just key -- a fix-wave re-review caught that
+    # checking fact_key membership alone can't distinguish "session 1's
+    # fact survived unmodified" from "session 2 coincidentally picked the
+    # same free-text fact_key and silently overwrote it" (RecordSemanticFact's
+    # id is deterministic on (user_id, fact_key) alone, so a same-key write
+    # from session 2 upserts in place). Checking the value survives closes
+    # that gap regardless of whether a collision happens.
+    session_1_facts_by_key = {f.fact_key: f.fact_value for f in facts_from_session_1}
 
     session_2 = await _create_session(db_session, tenant_id, user_id)
     await set_tenant_context(db_session, tenant_id)
-    # A second, DIFFERENT self-reported preference -- not a request/
-    # recommendation exchange like an earlier draft of this fixture used
-    # (review-caught: that phrasing gives the consolidation prompt's
-    # user-preference extraction criterion nothing to extract, matching
-    # the exact bug the session-1 fixture above was already fixed for,
-    # meaning facts_from_session_2 would silently stay empty every run).
-    # This tests the *other* half of the archetype's compounding claim
-    # the loose version of this test never checked: a genuinely NEW
-    # fact_key appearing in session 2, not just an old one surviving it.
+    # A second, DIFFERENT self-reported preference, reinforced across TWO
+    # episodes -- not a request/recommendation exchange like an earlier
+    # draft of this fixture used (review-caught: that phrasing gives the
+    # consolidation prompt's user-preference extraction criterion nothing
+    # to extract, matching the exact bug the session-1 fixture above was
+    # already fixed for). Two reinforcing episodes, not one, mirrors
+    # session 1's own repetition and this project's own established
+    # precedent (test_consolidate_episodes_command.py's three-episode
+    # fixture) for keeping a live, unseeded model's confidence high enough
+    # that the hard assertion below doesn't flake on an honest "not
+    # confident enough" decline -- a second re-review caught that a single
+    # session-2 episode carried a real, unmitigated flakiness risk against
+    # the live model's own sampling variance. This tests the *other* half
+    # of the archetype's compounding claim the loose version of this test
+    # never checked: a genuinely NEW fact_key appearing in session 2, not
+    # just an old one surviving it.
     await capture.execute(
         tenant_id, user_id, session_2,
         {
             "input": "I always deploy my side projects to AWS -- it's just what I know best.",
             "output": "Good to know, I'll keep AWS in mind for infrastructure suggestions.",
+        },
+    )
+    await capture.execute(
+        tenant_id, user_id, session_2,
+        {
+            "input": "Yeah, AWS is the cloud platform I always reach for, every time.",
+            "output": "Makes sense, sticking with one platform keeps things simple.",
         },
     )
     await db_session.commit()
@@ -170,18 +191,20 @@ async def test_living_agent_semantic_knowledge_compounds_across_sessions(
     assert len(facts_from_session_2) >= 1
 
     # The loop's sharper claim: knowledge from session 1 must still be
-    # retrievable after session 2's own, entirely separate consolidation
-    # pass has run -- not overwritten, not lost, genuinely compounding.
-    # Tied back to session 1's own fact_key identity, not a bare "python"
-    # substring match -- a substring match can't distinguish "session 1's
-    # fact survived" from "session 2 independently produced some other
-    # fact that happens to contain the same substring" (review-caught).
+    # retrievable, UNCHANGED, after session 2's own, entirely separate
+    # consolidation pass has run -- not overwritten, not lost, genuinely
+    # compounding. find_by_key is keyed on (user_id, fact_key) exactly the
+    # way RecordSemanticFact's own deterministic id is, so this directly
+    # proves no overwrite happened rather than inferring it from a
+    # fact_key merely being present in a search result (review-caught,
+    # twice: a bare substring match couldn't distinguish survival from
+    # coincidence, and a bare fact_key-membership check couldn't
+    # distinguish survival from a same-key overwrite).
     await set_tenant_context(db_session, tenant_id)
-    all_facts = await fact_repo.search_by_similarity(
-        embedding_model.embed("What programming language does the user prefer?"),
-        user_id, tenant_id, top_k=10,
-    )
-    assert any(f.fact.fact_key in session_1_fact_keys for f in all_facts)
+    for fact_key, original_value in session_1_facts_by_key.items():
+        current = await fact_repo.find_by_key(user_id, fact_key, tenant_id)
+        assert current is not None
+        assert current.fact_value == original_value
     await graph.close()
 
 
@@ -318,16 +341,24 @@ async def test_self_improving_agent_extracts_a_procedure_from_a_repeated_task_pa
     procedure = procedures[0]
     assert "deploy" in procedure.task_pattern.lower()
     assert procedure.workflow  # non-empty -- real steps were extracted, not a blank object
-    # Ties the extracted workflow back to the ACTUAL repeated steps, not
-    # just any non-empty object -- both fixture episodes above share the
-    # same three-tool workflow (Docker/Gunicorn/Nginx), so a genuine
-    # two-episode synthesis should recognizably reflect at least one of
-    # them (review-caught: generic non-emptiness alone can't distinguish
-    # correct two-episode pattern recognition from a hypothetical bug
-    # that only reflected on one episode, given how similar the two
-    # fixture episodes already are).
+    # Ties the extracted workflow back to the ACTUAL fixture content
+    # (Docker/Gunicorn/Nginx), not just any non-empty object -- rules out
+    # a hallucinated or unrelated workflow. Requires ALL THREE tools, not
+    # just any one, since both fixture episodes independently embed the
+    # full three-tool list verbatim (format_episodes_for_reflection dumps
+    # each episode's raw content into the prompt), so a single tool name
+    # is trivially satisfiable by echoing either episode alone -- a
+    # fix-wave re-review caught that the original any-of-three version
+    # therefore could NOT distinguish genuine two-episode synthesis from
+    # a hypothetical bug that only reflected on one episode, contrary to
+    # what an earlier version of this comment claimed. Requiring all
+    # three is a stronger fidelity check but still can't, by itself, rule
+    # out a single-episode echo (each episode alone already contains all
+    # three) -- proving multi-episode synthesis specifically would need
+    # instrumenting the reflection call itself, which is out of scope for
+    # a narrative, black-box integration test.
     workflow_text = str(procedure.workflow).lower()
-    assert any(tool in workflow_text for tool in ("docker", "gunicorn", "nginx"))
+    assert all(tool in workflow_text for tool in ("docker", "gunicorn", "nginx"))
     # The system prompt only extracts a pattern when every occurrence
     # succeeded -- both fixture episodes above report outcome="success".
     assert procedure.success_rate > 0.0
@@ -347,13 +378,14 @@ async def test_consolidate_procedures_composes_safely_with_consolidate_episodes_
     # get_unconsolidated_by_session AFTER ConsolidateEpisodes has already
     # run over that window gets [] back -- silently, no exception, no log
     # -- and a genuinely repeated task pattern never gets extracted into a
-    # procedure. This test proves both halves: that the hazard is real
-    # (get_unconsolidated_by_session really does return [] after
-    # ConsolidateEpisodes runs), and that the documented fix -- fetch the
-    # batch ONCE via the unfiltered get_by_session, independent of
-    # whichever order ConsolidateEpisodes runs in -- actually works
-    # end-to-end against real infrastructure and a live model, not just on
-    # paper.
+    # procedure. This test proves both halves against the EXACT hazard
+    # scenario: it fetches via BOTH methods AFTER ConsolidateEpisodes has
+    # already run, not before -- a fix-wave re-review caught that an
+    # earlier version of this test fetched via get_by_session before
+    # consolidation ran, which can't distinguish the fix actually working
+    # from the fetch simply having happened too early to matter, since
+    # ConsolidateProcedures takes its episode list as a plain in-memory
+    # parameter and never re-queries the database itself.
     tenant_id = uuid.uuid4()
     user_id, session_id = await _create_user_and_session(db_session, tenant_id)
     episode_repo = PostgresEpisodicMemoryRepository(db_session)
@@ -392,15 +424,13 @@ async def test_consolidate_procedures_composes_safely_with_consolidate_episodes_
     )
     await db_session.commit()
 
-    # The safe pattern: fetch the batch ONCE via the UNFILTERED
-    # get_by_session (no consolidated_at predicate) and hand that same
-    # list to ConsolidateProcedures -- never get_unconsolidated_by_session
-    # for this purpose, since ConsolidateEpisodes below will flip
-    # consolidated_at on both episodes regardless of call order.
+    # Run ConsolidateEpisodes FIRST, exactly matching the hazard scenario
+    # (a caller fetching for ConsolidateProcedures AFTER ConsolidateEpisodes
+    # has already marked the window consolidated) -- not before, the way
+    # an earlier version of this test did, which couldn't actually
+    # distinguish the fix working from the fetch simply predating the
+    # poisoning.
     await set_tenant_context(db_session, tenant_id)
-    episodes_for_procedures = await episode_repo.get_by_session(session_id, tenant_id)
-    assert len(episodes_for_procedures) == 2
-
     facts = await consolidate_episodes.execute(tenant_id, user_id, session_id)
     await db_session.commit()
     print(f"\nComposition safety, facts from ConsolidateEpisodes: {len(facts)}")
@@ -411,9 +441,18 @@ async def test_consolidate_procedures_composes_safely_with_consolidate_episodes_
     poisoned = await episode_repo.get_unconsolidated_by_session(session_id, tenant_id, limit=10)
     assert poisoned == []
 
-    # ...but ConsolidateProcedures, given the batch captured via
-    # get_by_session BEFORE ConsolidateEpisodes ran, still extracts the
-    # procedure correctly -- the safe composition pattern actually works.
+    # ...but the documented fix -- fetching via the UNFILTERED
+    # get_by_session instead, issued here AFTER ConsolidateEpisodes has
+    # already run -- still returns both episodes, genuinely proving
+    # get_by_session's result is unaffected by mark_consolidated rather
+    # than merely asserting it.
+    episodes_for_procedures = await episode_repo.get_by_session(session_id, tenant_id)
+    assert len(episodes_for_procedures) == 2
+
+    # ...and ConsolidateProcedures, given that same post-consolidation
+    # batch, still extracts the procedure correctly -- the safe
+    # composition pattern actually works end-to-end, against the real
+    # hazard ordering, not just on paper.
     procedures = await consolidate_procedures.execute(
         tenant_id, user_id, episodes_for_procedures
     )
