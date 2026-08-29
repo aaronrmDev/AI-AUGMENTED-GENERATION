@@ -1,3 +1,4 @@
+from src.mag.application.gating._scoring import safe_score
 from src.mag.domain.entities import GatingCandidate
 
 # fact first, episode after, graph_node last -- MAG.md's own worked example:
@@ -9,10 +10,13 @@ _SOURCE_TYPE_PRIORITY = {"fact": 0, "episode": 1, "graph_node": 2}
 
 
 class HierarchicalAssembly:
-    # Unlike its sibling gating strategies, this one never filters -- it's a
-    # pure reordering step meant to run on an already-selected candidate
+    # A pure reordering step meant to run on an already-selected candidate
     # list (issue #55), putting the highest-priority information first so
-    # the "lost in the middle" effect doesn't bury it.
+    # the "lost in the middle" effect doesn't bury it. Like DynamicReranking
+    # and RecencyWeightedSampling, it never drops a candidate -- only
+    # TaskSpecificFiltering, TokenBudgetAllocation, and TopKSelection
+    # narrow the pool, so "unlike its siblings, never filters" overstated
+    # how unusual that is.
     async def execute(
         self, candidates: list[GatingCandidate]
     ) -> list[GatingCandidate]:
@@ -20,6 +24,6 @@ class HierarchicalAssembly:
             candidates,
             key=lambda c: (
                 _SOURCE_TYPE_PRIORITY.get(c.source_type, len(_SOURCE_TYPE_PRIORITY)),
-                -c.score,
+                -safe_score(c.score),
             ),
         )

@@ -64,6 +64,24 @@ async def test_a_tie_in_source_type_and_score_preserves_original_relative_order(
     assert [id(c) for c in result] == [id(first), id(second), id(third)]
 
 
+async def test_nan_score_sorts_last_within_its_source_type_without_corrupting_the_rest():
+    # NaN fails every comparison, so sorting on the raw score would let a
+    # single corrupted score (e.g. from DynamicReranking's cosine
+    # similarity against a corrupted embedding) scramble the well-defined
+    # scores around it too, not just the NaN one. It must land last within
+    # its own source-type group instead.
+    high = _candidate("fact", 0.9)
+    corrupted = _candidate("fact", float("nan"))
+    low = _candidate("fact", 0.1)
+
+    result = await HierarchicalAssembly().execute([corrupted, high, low])
+
+    # id()-based, not ==: a dataclass holding a NaN field is never equal to
+    # itself under field-wise equality (nan == nan is False), so a plain
+    # `result == [...]` assertion here would fail even on correct output.
+    assert [id(c) for c in result] == [id(high), id(low), id(corrupted)]
+
+
 async def test_unrecognized_source_type_sorts_after_graph_node_without_crashing():
     fact = _candidate("fact", 0.1)
     episode = _candidate("episode", 0.1)

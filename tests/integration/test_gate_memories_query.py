@@ -128,12 +128,69 @@ async def test_gate_memories_narrows_real_retrieval_output_to_fit_a_tight_budget
     assert len(result) < len(scored_episodes) + len(scored_facts)
     assert sum(count_tokens(c.content_text) for c in result) <= tight_budget
 
-    # Hierarchical assembly ran last -- every fact in the final assembly
-    # must be ordered ahead of every episode, matching MAG.md's own worked
-    # example ("places user preferences ... facts first, adds supporting
-    # episodic context after").
-    source_types = [c.source_type for c in result]
-    fact_indices = [i for i, t in enumerate(source_types) if t == "fact"]
-    episode_indices = [i for i, t in enumerate(source_types) if t == "episode"]
-    if fact_indices and episode_indices:
-        assert max(fact_indices) < min(episode_indices)
+
+async def test_gate_memories_orders_facts_before_episodes_even_when_the_episode_scores_higher(
+    db_session, embedding_model
+):
+    # A dedicated scenario for the fact-before-episode ordering claim,
+    # separate from the tight-budget narrowing test above: that test's
+    # ordering check was guarded by `if fact_indices and episode_indices`
+    # (silently skippable if budget trimming happened to drop one group)
+    # and relied on whichever side natural embedding similarity happened
+    # to favor for its own query -- neither proves HierarchicalAssembly's
+    # source-type-priority stage is what produced the order. This scenario
+    # instead FORCES the episode to have the higher pre-assembly score by
+    # construction: its content is set to the query text verbatim, which
+    # cosine similarity mathematically maximizes (Cauchy-Schwarz equality
+    # for identical vectors), so its score cannot be lower than any fact's
+    # real similarity to the same query. If the fact still lands first,
+    # that can only be HierarchicalAssembly's source-type ordering at
+    # work, not a coincidence of the retrieval scores.
+    tenant_id = uuid.uuid4()
+    user_id, session_id = await _insert_user_and_session(db_session, tenant_id)
+    await set_tenant_context(db_session, tenant_id)
+    episode_repo = PostgresEpisodicMemoryRepository(db_session)
+    fact_repo = PostgresSemanticMemoryRepository(db_session)
+    now = datetime.now(UTC)
+
+    query_text = "What does the user know about Python?"
+    episode = EpisodicMemory(
+        id=uuid.uuid4(), session_id=session_id, content={"input": query_text},
+        embedding=embedding_model.embed(query_text), timestamp=now,
+    )
+    await episode_repo.save(episode, tenant_id)
+    await db_session.commit()
+    await set_tenant_context(db_session, tenant_id)
+
+    fact_value = "The user's preferred programming language is Python."
+    fact = SemanticMemory(
+        id=uuid.uuid4(), user_id=user_id, fact_key="preference_0",
+        fact_value=fact_value, embedding=embedding_model.embed(fact_value),
+    )
+    await fact_repo.save(fact, tenant_id)
+    await db_session.commit()
+    await set_tenant_context(db_session, tenant_id)
+
+    query_embedding = embedding_model.embed(query_text)
+    scored_episodes = await episode_repo.search_by_similarity(query_embedding, tenant_id, top_k=10)
+    scored_facts = await fact_repo.search_by_similarity(
+        query_embedding, user_id, tenant_id, top_k=10
+    )
+    assert len(scored_episodes) == 1
+    assert len(scored_facts) == 1
+    # The episode's text IS the query, so its score must be at least as
+    # high as the fact's -- proves the fixture actually sets up the
+    # "episode outranks fact on raw score" precondition this test needs.
+    assert scored_episodes[0].score >= scored_facts[0].score
+
+    # A generous budget -- both candidates must survive TokenBudgetAllocation
+    # unfiltered, or a dropped side would make the ordering assertion below
+    # vacuous again.
+    result = await GateMemories().execute(
+        episodes=scored_episodes,
+        facts=scored_facts,
+        graph_nodes=[],
+        token_budget=10_000,
+    )
+
+    assert [c.source_type for c in result] == ["fact", "episode"]

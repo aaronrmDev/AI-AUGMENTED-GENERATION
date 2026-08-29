@@ -66,3 +66,17 @@ async def test_tie_in_score_preserves_original_relative_order():
     result = await TopKSelection().execute([first, second, third], k=3)
 
     assert [c.content_text for c in result] == ["first", "second", "third"]
+
+
+async def test_nan_score_sorts_last_without_corrupting_well_defined_scores():
+    # NaN fails every comparison, so sorting on the raw score can scramble
+    # OTHER, well-defined scores around a single corrupted one (e.g. from
+    # DynamicReranking's cosine similarity against a corrupted embedding),
+    # not just misplace the NaN candidate itself.
+    high = _candidate(0.9, content_text="high")
+    corrupted = _candidate(float("nan"), content_text="corrupted")
+    low = _candidate(0.1, content_text="low")
+
+    result = await TopKSelection().execute([corrupted, high, low], k=3)
+
+    assert [c.content_text for c in result] == ["high", "low", "corrupted"]

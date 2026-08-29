@@ -1,6 +1,7 @@
 import math
 from dataclasses import replace
 
+from src.mag.application.gating._scoring import safe_score
 from src.mag.domain.entities import GatingCandidate
 
 
@@ -38,4 +39,4 @@ class DynamicReranking:
             else candidate
             for candidate in candidates
         ]
-        return sorted(reranked, key=lambda c: c.score, reverse=True)
+        return sorted(reranked, key=lambda c: safe_score(c.score), reverse=True)

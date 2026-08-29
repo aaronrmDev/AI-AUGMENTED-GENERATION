@@ -1,3 +1,4 @@
+import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -8,9 +9,11 @@ from src.mag.domain.entities import GatingCandidate
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def _candidate(score: float, timestamp: datetime | None) -> GatingCandidate:
+def _candidate(
+    score: float, timestamp: datetime | None, content_text: str = "x"
+) -> GatingCandidate:
     return GatingCandidate(
-        content_text="x",
+        content_text=content_text,
         score=score,
         salience=0.0,
         timestamp=timestamp,
@@ -64,6 +67,42 @@ async def test_returns_the_same_count_as_the_input():
     result = await RecencyWeightedSampling().execute(candidates, now=NOW)
 
     assert len(result) == len(candidates)
+
+
+async def test_older_negative_scored_candidate_ranks_below_a_fresher_equally_bad_one():
+    # A negative score (e.g. DynamicReranking's cosine similarity, which
+    # ranges [-1, 1]) must get WORSE with age, not drift toward zero and
+    # therefore toward looking more relevant. score * decay alone inverts
+    # this for negative scores -- this is the regression check for that.
+    older = _candidate(score=-0.1, timestamp=NOW - timedelta(hours=48))
+    newer = _candidate(score=-0.1, timestamp=NOW - timedelta(hours=1))
+
+    result = await RecencyWeightedSampling().execute(
+        [older, newer], half_life_hours=24.0, now=NOW
+    )
+
+    newer_result = next(c for c in result if c.timestamp == newer.timestamp)
+    older_result = next(c for c in result if c.timestamp == older.timestamp)
+    assert newer_result.score > older_result.score
+
+
+async def test_nan_score_sorts_last_without_corrupting_well_defined_scores():
+    high = _candidate(score=0.9, timestamp=NOW - timedelta(hours=1), content_text="high")
+    corrupted = _candidate(
+        score=float("nan"), timestamp=NOW - timedelta(hours=1), content_text="corrupted"
+    )
+    low = _candidate(score=0.1, timestamp=NOW - timedelta(hours=1), content_text="low")
+
+    result = await RecencyWeightedSampling().execute(
+        [corrupted, high, low], half_life_hours=24.0, now=NOW
+    )
+
+    # content_text-based, not id() or ==: this strategy rebuilds every
+    # timestamped candidate via dataclasses.replace(), so the result holds
+    # new objects (id() won't match the inputs), and a NaN-holding
+    # dataclass is never == to itself either.
+    assert [c.content_text for c in result] == ["high", "low", "corrupted"]
+    assert math.isnan(result[2].score)
 
 
 async def test_zero_half_life_raises_value_error():

@@ -68,6 +68,12 @@ async def test_running_total_of_selected_candidates_never_exceeds_budget():
 
     total_tokens = sum(count_tokens(c.content_text) for c in result)
     assert total_tokens <= budget
+    # The invariant above ([] would also satisfy it) doesn't prove the walk
+    # actually kept the two candidates that fit and skipped the rest --
+    # candidates[0] and [2] together spend exactly `budget`, [1] and [3]
+    # are each too large on their own to fit in what's left, and [4] can't
+    # fit after them either.
+    assert result == [candidates[0], candidates[2]]
 
 
 async def test_zero_budget_returns_empty_list():
@@ -86,10 +92,37 @@ async def test_negative_budget_returns_empty_list():
     assert result == []
 
 
+async def test_zero_budget_still_includes_a_genuinely_zero_cost_candidate():
+    # A budget of exactly 0 must not short-circuit to [] outright -- an
+    # empty-text candidate costs 0 tokens and legitimately fits in a
+    # 0-token budget; only a NEGATIVE budget is nonsensical enough to
+    # reject outright.
+    zero_cost = _candidate("", score=1.0)
+    assert count_tokens(zero_cost.content_text) == 0
+
+    result = await TokenBudgetAllocation().execute([zero_cost], 0)
+
+    assert result == [zero_cost]
+
+
 async def test_empty_candidate_list_returns_empty_list():
     result = await TokenBudgetAllocation().execute([], 1000)
 
     assert result == []
+
+
+async def test_nan_score_sorts_last_without_corrupting_well_defined_scores():
+    high = _candidate("high", score=0.9)
+    corrupted = _candidate("corrupted", score=float("nan"))
+    low = _candidate("low", score=0.1)
+    budget = (
+        count_tokens(high.content_text) + count_tokens(corrupted.content_text)
+        + count_tokens(low.content_text)
+    )
+
+    result = await TokenBudgetAllocation().execute([corrupted, high, low], budget)
+
+    assert [c.content_text for c in result] == ["high", "low", "corrupted"]
 
 
 async def test_single_candidate_exceeding_budget_is_excluded_not_raised():

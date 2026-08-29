@@ -1,3 +1,4 @@
+from src.mag.application.gating._scoring import safe_score
 from src.mag.domain.entities import GatingCandidate
 
 
@@ -11,5 +12,5 @@ class TopKSelection:
     ) -> list[GatingCandidate]:
         if k <= 0:
             return []
-        ranked = sorted(candidates, key=lambda c: c.score, reverse=True)
+        ranked = sorted(candidates, key=lambda c: safe_score(c.score), reverse=True)
         return ranked[:k]

@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from src.mag.application.gating.dynamic_reranking import DynamicReranking
@@ -87,6 +89,24 @@ async def test_returns_the_same_count_as_the_input():
     result = await DynamicReranking().execute(candidates, query_embedding=[1.0, 0.0])
 
     assert len(result) == len(candidates)
+
+
+async def test_candidate_with_a_nan_embedding_component_sorts_last_without_corrupting_others():
+    # A NaN component anywhere in an embedding (a corrupted upstream write,
+    # for example) makes the dot-product sum NaN, and NaN fails every
+    # comparison -- sorting on the raw score directly can scramble the
+    # OTHER, well-defined scores around it, not just misplace this one.
+    matches_query = _candidate(score=0.1, embedding=[1.0, 0.0])
+    corrupted = _candidate(score=0.1, embedding=[float("nan"), 0.0])
+    orthogonal = _candidate(score=0.9, embedding=[0.0, 1.0])
+
+    result = await DynamicReranking().execute(
+        [corrupted, orthogonal, matches_query], query_embedding=[1.0, 0.0]
+    )
+
+    assert result[0].score == pytest.approx(1.0)  # matches_query
+    assert result[1].score == pytest.approx(0.0)  # orthogonal
+    assert math.isnan(result[2].score)  # corrupted, sorted last
 
 
 async def test_empty_candidate_list_returns_empty_list():

@@ -1,3 +1,4 @@
+from src.mag.application.gating._scoring import safe_score
 from src.mag.domain.entities import GatingCandidate
 from src.shared.tokenization import count_tokens
 
@@ -14,9 +15,14 @@ class TokenBudgetAllocation:
     async def execute(
         self, candidates: list[GatingCandidate], token_budget: int
     ) -> list[GatingCandidate]:
-        if token_budget <= 0:
+        # Only a genuinely invalid (negative) budget short-circuits here.
+        # token_budget == 0 must still walk the list below: a zero-cost
+        # candidate (empty content_text) legitimately fits in zero tokens,
+        # and the per-candidate check two lines down already handles that
+        # correctly -- returning [] early was excluding it for no reason.
+        if token_budget < 0:
             return []
-        ranked = sorted(candidates, key=lambda c: c.score, reverse=True)
+        ranked = sorted(candidates, key=lambda c: safe_score(c.score), reverse=True)
         selected: list[GatingCandidate] = []
         running_total = 0
         for candidate in ranked:

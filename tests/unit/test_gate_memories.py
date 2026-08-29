@@ -64,7 +64,15 @@ async def test_execute_respects_the_token_budget():
 
     from src.shared.tokenization import count_tokens
 
-    assert sum(count_tokens(c.content_text) for c in result) <= 50
+    total_tokens = sum(count_tokens(c.content_text) for c in result)
+    assert total_tokens <= 50
+    # The budget invariant alone is satisfied trivially by an empty result
+    # -- both candidates are ~500+ tokens each, individually far too big
+    # for a 50-token budget, so TokenBudgetAllocation must skip both and
+    # this must come back empty. An assertion that only checks "<= 50"
+    # would pass identically whether the pipeline actually ran the walk or
+    # short-circuited to [] for the wrong reason.
+    assert result == []
 
 
 async def test_execute_orders_facts_before_episodes_via_hierarchical_assembly():
@@ -86,15 +94,22 @@ async def test_execute_skips_dynamic_reranking_when_no_query_embedding_is_given(
     now = datetime.now(UTC)
     episode = _episode(0.5, now)
 
+    # now=now pins the pipeline's own clock to the same instant the
+    # episode's age is computed against below, so decay is an exact,
+    # reproducible value instead of whatever a few microseconds of real
+    # wall-clock drift between fixture construction and pipeline execution
+    # happen to produce.
     result = await GateMemories().execute(
-        episodes=[episode], facts=[], graph_nodes=[], token_budget=10_000,
+        episodes=[episode], facts=[], graph_nodes=[], token_budget=10_000, now=now,
     )
 
     # No query_embedding -> DynamicReranking never runs, so the only thing
-    # that could have changed the original 0.5 score is recency decay
-    # (age ~0 here, so decay ~1.0) -- score should still be ~0.5, not
-    # replaced by a cosine-similarity value against nothing.
-    assert result[0].score > 0.49
+    # that could have changed the original 0.5 score is recency decay --
+    # age is exactly 0 (now == episode.timestamp), so decay is exactly
+    # 1.0. The result must equal 0.5 exactly, not merely be "close to it",
+    # or a cosine-similarity value slipping in unnoticed near 0.5 would
+    # pass just as easily as the correct behavior.
+    assert result[0].score == 0.5
 
 
 async def test_execute_applies_dynamic_reranking_when_a_query_embedding_is_given():
