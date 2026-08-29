@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from src.mag.application.commands.record_semantic_fact import RecordSemanticFact
 from src.mag.domain.entities import SemanticMemory
 from src.mag.domain.ports import SemanticMemoryIndex
-from tests.unit.mag_fakes import FakeSemanticMemoryRepository
+from tests.unit.mag_fakes import FakeMemoryGraphRepository, FakeSemanticMemoryRepository
 from tests.unit.rag_fakes import FakeEmbeddingModel
 
 
@@ -31,6 +31,7 @@ async def test_execute_saves_to_both_the_repository_and_the_index():
         semantic_memory_repository=repository,
         semantic_memory_index=index,
         embedding_model=FakeEmbeddingModel(),
+        memory_graph_repository=FakeMemoryGraphRepository(),
     )
 
     tenant_id = uuid.uuid4()
@@ -51,6 +52,7 @@ async def test_execute_embeds_the_fact_value_not_the_fact_key():
         semantic_memory_repository=repository,
         semantic_memory_index=index,
         embedding_model=embedder,
+        memory_graph_repository=FakeMemoryGraphRepository(),
     )
 
     fact = await command.execute(
@@ -78,6 +80,7 @@ async def test_execute_derives_the_same_id_for_the_same_user_and_fact_key():
         semantic_memory_repository=FakeSemanticMemoryRepository(),
         semantic_memory_index=FakeSemanticMemoryIndex(),
         embedding_model=FakeEmbeddingModel(),
+        memory_graph_repository=FakeMemoryGraphRepository(),
     )
     user_id = uuid.uuid4()
 
@@ -105,6 +108,7 @@ async def test_execute_defaults_confidence_to_one():
         semantic_memory_repository=FakeSemanticMemoryRepository(),
         semantic_memory_index=FakeSemanticMemoryIndex(),
         embedding_model=FakeEmbeddingModel(),
+        memory_graph_repository=FakeMemoryGraphRepository(),
     )
 
     fact = await command.execute(
@@ -119,6 +123,7 @@ async def test_execute_stores_the_given_user_id_fact_key_and_fact_value():
         semantic_memory_repository=FakeSemanticMemoryRepository(),
         semantic_memory_index=FakeSemanticMemoryIndex(),
         embedding_model=FakeEmbeddingModel(),
+        memory_graph_repository=FakeMemoryGraphRepository(),
     )
 
     user_id = uuid.uuid4()
@@ -149,6 +154,7 @@ async def test_execute_recording_the_same_key_twice_updates_the_fake_not_duplica
         semantic_memory_repository=repository,
         semantic_memory_index=FakeSemanticMemoryIndex(),
         embedding_model=FakeEmbeddingModel(),
+        memory_graph_repository=FakeMemoryGraphRepository(),
     )
     tenant_id = uuid.uuid4()
     user_id = uuid.uuid4()
@@ -163,3 +169,20 @@ async def test_execute_recording_the_same_key_twice_updates_the_fake_not_duplica
     found = await repository.find_by_key(user_id, "favorite_color", tenant_id)
     assert found is not None
     assert found.fact_value == "red"
+
+
+async def test_execute_upserts_a_fact_node_into_the_memory_graph():
+    graph = FakeMemoryGraphRepository()
+    command = RecordSemanticFact(
+        semantic_memory_repository=FakeSemanticMemoryRepository(),
+        semantic_memory_index=FakeSemanticMemoryIndex(),
+        embedding_model=FakeEmbeddingModel(),
+        memory_graph_repository=graph,
+    )
+    tenant_id = uuid.uuid4()
+
+    fact = await command.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), fact_key="k", fact_value="v"
+    )
+
+    assert graph.upserted_facts == [(fact, tenant_id)]

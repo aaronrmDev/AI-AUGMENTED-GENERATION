@@ -5,7 +5,11 @@ from datetime import UTC, datetime
 from src.mag.application.commands.consolidate_episodes import ConsolidateEpisodes
 from src.mag.domain.entities import EpisodicMemory, SemanticMemory
 from src.mag.domain.ports import SemanticMemoryIndex
-from tests.unit.mag_fakes import FakeEpisodicMemoryRepository, FakeSemanticMemoryRepository
+from tests.unit.mag_fakes import (
+    FakeEpisodicMemoryRepository,
+    FakeMemoryGraphRepository,
+    FakeSemanticMemoryRepository,
+)
 from tests.unit.rag_fakes import FakeEmbeddingModel
 
 
@@ -68,6 +72,7 @@ def _use_case(
     facts_repo: FakeSemanticMemoryRepository,
     index: _FakeSemanticMemoryIndex,
     chat_model: _ScriptedChatModel,
+    graph: FakeMemoryGraphRepository | None = None,
 ) -> ConsolidateEpisodes:
     return ConsolidateEpisodes(
         episodic_memory_repository=episodes_repo,
@@ -75,6 +80,7 @@ def _use_case(
         semantic_memory_index=index,
         embedding_model=FakeEmbeddingModel(),
         chat_model=chat_model,
+        memory_graph_repository=graph or FakeMemoryGraphRepository(),
     )
 
 
@@ -353,3 +359,54 @@ async def test_execute_respects_batch_size():
 
     remaining = await episodes_repo.get_unconsolidated_by_session(session_id, tenant_id, limit=10)
     assert len(remaining) == 3
+
+
+async def test_execute_links_abstracts_to_from_every_reflected_episode_to_each_written_fact():
+    # The reflection is one LLM call over the whole batch, not a 1:1
+    # episode:fact mapping -- every episode in the batch links to every
+    # fact the LLM extracted from reflecting on all of them together.
+    episodes_repo = FakeEpisodicMemoryRepository()
+    facts_repo = FakeSemanticMemoryRepository()
+    graph = FakeMemoryGraphRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    episode_a = _episode(session_id, {"input": "what language"})
+    episode_b = _episode(session_id, {"input": "what framework"})
+    await episodes_repo.save(episode_a, tenant_id)
+    await episodes_repo.save(episode_b, tenant_id)
+    chat_model = _ScriptedChatModel([_VALID_RESPONSE])
+    use_case = _use_case(
+        episodes_repo, facts_repo, _FakeSemanticMemoryIndex(), chat_model, graph=graph
+    )
+
+    result = await use_case.execute(
+        tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id
+    )
+
+    assert len(result) == 2  # two facts extracted (see _VALID_RESPONSE)
+    # 2 episodes x 2 facts = 4 abstracts_to edges.
+    assert len(graph.abstracts_to_links) == 4
+    linked_episode_ids = {episode_id for episode_id, _, _ in graph.abstracts_to_links}
+    linked_fact_ids = {fact_id for _, fact_id, _ in graph.abstracts_to_links}
+    assert linked_episode_ids == {episode_a.id, episode_b.id}
+    assert linked_fact_ids == {fact.id for fact in result}
+
+
+async def test_execute_links_no_abstracts_to_edges_when_reflection_finds_nothing():
+    episodes_repo = FakeEpisodicMemoryRepository()
+    graph = FakeMemoryGraphRepository()
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(_episode(session_id, {"input": "hi"}), tenant_id)
+    empty_response = json.dumps({"facts": []})
+    use_case = _use_case(
+        episodes_repo,
+        FakeSemanticMemoryRepository(),
+        _FakeSemanticMemoryIndex(),
+        _ScriptedChatModel([empty_response]),
+        graph=graph,
+    )
+
+    await use_case.execute(tenant_id=tenant_id, user_id=uuid.uuid4(), session_id=session_id)
+
+    assert graph.abstracts_to_links == []

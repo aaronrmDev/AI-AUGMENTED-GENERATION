@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 
 from src.mag.domain.entities import (
+    ActivatedNode,
     EpisodicMemory,
     ProceduralMemory,
     ScoredEpisode,
@@ -224,3 +225,78 @@ class WorkingMemoryStore(ABC):
         """limit <= 0 returns an empty list -- never the whole session
         (Redis's LRANGE key -0 -1 idiom for "the whole list" is the trap this
         guards against; see redis_working_memory_store.py)."""
+
+
+class MemoryGraphRepository(ABC):
+    # ensure_schema() (constraint/index provisioning) is deliberately NOT
+    # part of this port -- same established convention as
+    # EpisodicMemoryIndex/SemanticMemoryIndex's ensure_collection() above:
+    # a store-provisioning concern, concrete-only, not a domain operation.
+    #
+    # Every node this port writes carries a tenant_id property, and every
+    # method here filters on it -- Neo4j has no RLS equivalent to Postgres,
+    # so tenant isolation here is an application-level filter on every
+    # write AND every read, not a database-enforced guarantee (see
+    # DATABASE.md's own "three separate writes to three separate systems,
+    # not one atomic transaction" framing -- this store is honest about not
+    # inheriting Postgres's consistency model, not pretending to).
+    @abstractmethod
+    async def upsert_episode_node(self, episode: EpisodicMemory, tenant_id: uuid.UUID) -> None:
+        """Idempotent by episode.id -- re-upserting the same episode updates
+        the existing node rather than creating a duplicate, matching this
+        project's established upsert-by-key discipline elsewhere."""
+
+    @abstractmethod
+    async def upsert_fact_node(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
+        """Idempotent by fact.id, same reasoning as upsert_episode_node."""
+
+    @abstractmethod
+    async def link_participated_in(
+        self, user_id: uuid.UUID, session_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> None:
+        """Creates (or matches, if it already exists) User/Session nodes and
+        a PARTICIPATED_IN edge between them -- the only writer of User/
+        Session nodes in this batch, since neither needs any property
+        beyond its id to serve as an edge anchor."""
+
+    @abstractmethod
+    async def link_temporally_follows(
+        self, earlier_episode_id: uuid.UUID, later_episode_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> None:
+        """Both episode nodes must already exist (via upsert_episode_node)
+        -- this only creates the edge between them."""
+
+    @abstractmethod
+    async def link_mentions(
+        self, episode_id: uuid.UUID, entity_name: str, tenant_id: uuid.UUID
+    ) -> None:
+        """Upserts an Entity node by name (creating it if this is the first
+        time it's been mentioned) and links MENTIONS from the episode to
+        it. entity.embedding is deliberately not written here -- nothing in
+        this batch computes one; a future batch that needs Entity.embedding
+        populated (the index DATABASE.md documents) writes it separately."""
+
+    @abstractmethod
+    async def link_abstracts_to(
+        self, episode_id: uuid.UUID, fact_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> None:
+        """Both nodes must already exist -- this only creates the edge,
+        the graph's representation of Consolidation turning a raw episode
+        into a distilled semantic fact (DATABASE.md's own description)."""
+
+    @abstractmethod
+    async def spread_activation(
+        self,
+        tenant_id: uuid.UUID,
+        start_entity_names: list[str],
+        max_hops: int,
+        decay_factor: float,
+        activation_threshold: float,
+    ) -> list[ActivatedNode]:
+        """Starts from every Entity node whose name is in start_entity_names,
+        traverses outward up to max_hops (any edge type, any direction --
+        spreading activation per MAG.md has no notion of a "wrong direction"
+        edge to follow), and returns every node reached with activation
+        decay_factor ** hops, keeping the MAX activation for a node reached
+        by more than one path (not summed -- see the design spec for why).
+        Nodes at or below activation_threshold are excluded."""
