@@ -76,12 +76,19 @@ class Neo4jMemoryGraphRepository(MemoryGraphRepository):
             await session.run(
                 "MERGE (f:Fact {id: $id, tenant_id: $tenant_id}) "
                 "SET f.fact_key = $fact_key, f.fact_value = $fact_value, "
-                "    f.confidence = $confidence",
+                "    f.confidence = $confidence, f.valid_until = $valid_until, "
+                "    f.archived_at = $archived_at",
                 id=str(fact.id),
                 tenant_id=str(tenant_id),
                 fact_key=fact.fact_key,
                 fact_value=fact.fact_value,
                 confidence=fact.confidence,
+                # Neo4j has no null-vs-absent distinction that matters here
+                # -- None serializes to a property holding Neo4j's null,
+                # same isoformat-string convention QdrantSemanticMemoryIndex
+                # already uses for these two fields (MAG Batch F).
+                valid_until=fact.valid_until.isoformat() if fact.valid_until else None,
+                archived_at=fact.archived_at.isoformat() if fact.archived_at else None,
             )
 
     async def link_participated_in(

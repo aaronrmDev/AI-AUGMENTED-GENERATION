@@ -36,6 +36,11 @@ class SemanticMemory:
     confidence: float = 1.0
     source: str = ""
     valid_until: datetime | None = None
+    # Distinct from valid_until: valid_until means "this fact is
+    # wrong/stale" (Invalidate, MAG Batch F #63), archived_at means "this
+    # fact might still be true but is rarely needed" (Archive, #64). A
+    # fact can be either, both, or neither independently.
+    archived_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -114,3 +119,34 @@ class ProceduralMemory:
     workflow: dict[str, Any] = field(default_factory=dict)
     success_rate: float = 0.0
     last_used: datetime | None = None
+
+
+@dataclass(frozen=True)
+class SemanticMemoryHistoryEntry:
+    # A snapshot of a fact_value Update or Refine (MAG Batch F, #62/#66)
+    # is about to overwrite -- semantic_memory's upsert-by-(user_id,
+    # fact_key) constraint means the current row is the ONLY row for that
+    # key, so a superseded value has nowhere else to live. Invalidate and
+    # Archive never produce one of these: neither replaces fact_value, so
+    # there is nothing to snapshot.
+    id: uuid.UUID
+    original_fact_id: uuid.UUID
+    user_id: uuid.UUID
+    fact_key: str
+    fact_value: str
+    confidence: float
+    source: str
+    operation: str  # "update" | "refine"
+    superseded_at: datetime
+
+
+@dataclass(frozen=True)
+class FactEvolutionClassification:
+    # ClassifyFactEvolution's judgment of how a piece of new information
+    # relates to an existing fact -- answers MAG.md's "comparison" step
+    # (issue #16): is this a correction (update), a sign the old fact
+    # isn't true anymore with nothing to replace it (invalidate), added
+    # nuance rather than a contradiction (refine), or unrelated to this
+    # fact entirely (no_conflict)?
+    operation: str  # "update" | "invalidate" | "refine" | "no_conflict"
+    reasoning: str

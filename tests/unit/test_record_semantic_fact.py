@@ -2,26 +2,12 @@ import uuid
 from datetime import UTC, datetime
 
 from src.mag.application.commands.record_semantic_fact import RecordSemanticFact
-from src.mag.domain.entities import SemanticMemory
-from src.mag.domain.ports import SemanticMemoryIndex
-from tests.unit.mag_fakes import FakeMemoryGraphRepository, FakeSemanticMemoryRepository
+from tests.unit.mag_fakes import (
+    FakeMemoryGraphRepository,
+    FakeSemanticMemoryIndex,
+    FakeSemanticMemoryRepository,
+)
 from tests.unit.rag_fakes import FakeEmbeddingModel
-
-
-class FakeSemanticMemoryIndex(SemanticMemoryIndex):
-    def __init__(self) -> None:
-        self.upserted: list[tuple[SemanticMemory, uuid.UUID]] = []
-
-    async def ensure_collection(self) -> None:
-        pass
-
-    async def upsert(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
-        self.upserted.append((fact, tenant_id))
-
-    async def search(
-        self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
-    ) -> list[SemanticMemory]:
-        return []
 
 
 async def test_execute_saves_to_both_the_repository_and_the_index():

@@ -3,30 +3,16 @@ import uuid
 from datetime import UTC, datetime
 
 from src.mag.application.commands.consolidate_episodes import ConsolidateEpisodes
-from src.mag.domain.entities import EpisodicMemory, SemanticMemory
-from src.mag.domain.ports import SemanticMemoryIndex
+from src.mag.domain.entities import EpisodicMemory
 from tests.unit.mag_fakes import (
     FakeEpisodicMemoryRepository,
     FakeMemoryGraphRepository,
     FakeSemanticMemoryRepository,
 )
+from tests.unit.mag_fakes import (
+    FakeSemanticMemoryIndex as _FakeSemanticMemoryIndex,
+)
 from tests.unit.rag_fakes import FakeEmbeddingModel
-
-
-class _FakeSemanticMemoryIndex(SemanticMemoryIndex):
-    def __init__(self) -> None:
-        self.upserted: list[tuple[SemanticMemory, uuid.UUID]] = []
-
-    async def ensure_collection(self) -> None:
-        pass
-
-    async def upsert(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
-        self.upserted.append((fact, tenant_id))
-
-    async def search(
-        self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
-    ) -> list[SemanticMemory]:
-        return []
 
 
 class _ScriptedChatModel:

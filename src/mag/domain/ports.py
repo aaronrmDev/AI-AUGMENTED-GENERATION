@@ -11,6 +11,7 @@ from src.mag.domain.entities import (
     ScoredEpisode,
     ScoredFact,
     SemanticMemory,
+    SemanticMemoryHistoryEntry,
     WorkingMemoryTurn,
 )
 
@@ -136,7 +137,45 @@ class SemanticMemoryRepository(ABC):
     ) -> list[ScoredFact]:
         """Returned facts carry embedding=[] -- same convention as
         EpisodicMemoryRepository.search_by_similarity above. score is cosine
-        similarity, same scale rationale as that method's docstring."""
+        similarity, same scale rationale as that method's docstring.
+
+        Excludes a fact whose valid_until has passed or whose archived_at
+        is set (MAG Batch F, #63/#64) -- "exclude it from retrieval" is
+        Invalidate's own contract, and "move to cold storage" is Archive's;
+        neither means anything if this method still returns them. Use
+        find_by_key for a direct, keyed lookup that bypasses this filter
+        (a caller updating or refining a fact needs to read it regardless
+        of its current status)."""
+
+    @abstractmethod
+    async def invalidate(
+        self, user_id: uuid.UUID, fact_key: str, tenant_id: uuid.UUID, invalidated_at: datetime
+    ) -> None:
+        """Sets valid_until on the existing row -- a targeted status flip,
+        not a full re-upsert: no embedding change, so no reason to touch
+        the vector store's point."""
+
+    @abstractmethod
+    async def archive(
+        self, user_id: uuid.UUID, fact_key: str, tenant_id: uuid.UUID, archived_at: datetime
+    ) -> None:
+        """Sets archived_at on the existing row -- same reasoning as
+        invalidate above."""
+
+    @abstractmethod
+    async def save_history_entry(
+        self, entry: SemanticMemoryHistoryEntry, tenant_id: uuid.UUID
+    ) -> None:
+        """A plain insert -- history entries are never updated or upserted,
+        each one is a permanent snapshot of a value Update or Refine
+        (#62/#66) is about to overwrite."""
+
+    @abstractmethod
+    async def find_history(
+        self, user_id: uuid.UUID, fact_key: str, tenant_id: uuid.UUID
+    ) -> list[SemanticMemoryHistoryEntry]:
+        """Every superseded value for this (user_id, fact_key), newest
+        first."""
 
 
 class EpisodicMemoryIndex(ABC):
@@ -198,7 +237,30 @@ class SemanticMemoryIndex(ABC):
         embedding-bearing read path (see SemanticMemoryRepository above),
         L2-normalized rather than bit-identical to the upserted value (same
         COSINE-distance-collection behavior as EpisodicMemoryIndex.search
-        above)."""
+        above).
+
+        Same valid_until/archived_at exclusion as
+        SemanticMemoryRepository.search_by_similarity above -- this port
+        has its own implementation of the filter (Qdrant, not SQL), since
+        Invalidate/Archive's "exclude from retrieval" applies to whichever
+        search path a caller actually uses."""
+
+    @abstractmethod
+    async def update_status(
+        self,
+        fact_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        valid_until: datetime | None,
+        archived_at: datetime | None,
+    ) -> None:
+        """Updates only the named payload fields, leaving the stored
+        vector untouched -- upsert() always replaces the whole point,
+        including the vector, so reusing it from InvalidateMemory/
+        ArchiveMemory with the embedding-less entity find_by_key returns
+        (Postgres reads never carry a real embedding -- an established
+        convention since Batch A) would silently blank out the stored
+        vector. This method exists specifically so a status-only change
+        never goes anywhere near the vector."""
 
 
 class ProceduralMemoryRepository(ABC):
@@ -248,7 +310,12 @@ class MemoryGraphRepository(ABC):
 
     @abstractmethod
     async def upsert_fact_node(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
-        """Idempotent by fact.id, same reasoning as upsert_episode_node."""
+        """Idempotent by fact.id, same reasoning as upsert_episode_node.
+        Also syncs valid_until and archived_at onto the node (MAG Batch F)
+        -- every one of Update/Invalidate/Archive/Refine's best-effort
+        graph propagation calls this again with the fact's current state,
+        so the node's observable status stays in sync with Postgres
+        regardless of which operation changed it."""
 
     @abstractmethod
     async def link_participated_in(
