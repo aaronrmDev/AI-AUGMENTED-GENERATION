@@ -1,6 +1,6 @@
 import uuid
 
-from src.mag.domain.entities import SemanticMemory
+from src.mag.domain.entities import ScoredFact, SemanticMemory
 from src.mag.domain.ports import SemanticMemoryRepository
 
 
@@ -15,7 +15,7 @@ class FindSemanticFacts:
 
     async def by_similarity(
         self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
-    ) -> list[SemanticMemory]:
+    ) -> list[ScoredFact]:
         return await self._repository.search_by_similarity(
             query_embedding, user_id, tenant_id, top_k
         )

@@ -1,10 +1,13 @@
 import dataclasses
+import math
 import uuid
 from datetime import UTC, datetime
 
 from src.mag.domain.entities import (
     EpisodicMemory,
     ProceduralMemory,
+    ScoredEpisode,
+    ScoredFact,
     SemanticMemory,
     WorkingMemoryTurn,
 )
@@ -14,6 +17,20 @@ from src.mag.domain.ports import (
     SemanticMemoryRepository,
     WorkingMemoryStore,
 )
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    # Same quantity the real Postgres (1 - pgvector <=>) and Qdrant
+    # (COSINE-distance collection score) backends compute -- kept real here,
+    # not a stand-in constant, so a unit test asserting on result ORDER
+    # (not just membership) is asserting something a real backend would
+    # actually produce, matching this batch's score-carrying design.
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 
 class FakeEpisodicMemoryRepository(EpisodicMemoryRepository):
@@ -55,8 +72,47 @@ class FakeEpisodicMemoryRepository(EpisodicMemoryRepository):
 
     async def search_by_similarity(
         self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
+    ) -> list[ScoredEpisode]:
+        scored = [
+            ScoredEpisode(episode=e, score=_cosine_similarity(query_embedding, e.embedding))
+            for e in self._search_results
+        ]
+        scored.sort(key=lambda s: s.score, reverse=True)
+        return scored[:top_k]
+
+    async def get_by_session_in_window(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, start: datetime, end: datetime
     ) -> list[EpisodicMemory]:
-        return self._search_results[:top_k]
+        episodes = self._by_session.get(session_id, [])
+        matches = [e for e in episodes if start <= e.timestamp <= end]
+        return sorted(matches, key=lambda e: e.timestamp, reverse=True)
+
+    async def get_recent_by_session(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, limit: int
+    ) -> list[EpisodicMemory]:
+        episodes = self._by_session.get(session_id, [])
+        return sorted(episodes, key=lambda e: e.timestamp, reverse=True)[:limit]
+
+    async def get_by_session_ranked_by_salience(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
+    ) -> list[EpisodicMemory]:
+        episodes = self._by_session.get(session_id, [])
+        return sorted(episodes, key=lambda e: e.salience_score, reverse=True)[:top_k]
+
+    async def get_by_session_matching_entity(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, entity: str, top_k: int
+    ) -> list[EpisodicMemory]:
+        episodes = self._by_session.get(session_id, [])
+        needle = entity.lower()
+
+        def _matches(e: EpisodicMemory) -> bool:
+            structured = [str(x).lower() for x in e.content.get("entities", [])]
+            if needle in structured:
+                return True
+            return needle in str(e.content).lower()
+
+        matches = [e for e in episodes if _matches(e)]
+        return sorted(matches, key=lambda e: e.timestamp, reverse=True)[:top_k]
 
 
 class FakeSemanticMemoryRepository(SemanticMemoryRepository):
@@ -90,8 +146,13 @@ class FakeSemanticMemoryRepository(SemanticMemoryRepository):
 
     async def search_by_similarity(
         self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
-    ) -> list[SemanticMemory]:
-        return self._search_results[:top_k]
+    ) -> list[ScoredFact]:
+        scored = [
+            ScoredFact(fact=f, score=_cosine_similarity(query_embedding, f.embedding))
+            for f in self._search_results
+        ]
+        scored.sort(key=lambda s: s.score, reverse=True)
+        return scored[:top_k]
 
 
 class FakeProceduralMemoryRepository(ProceduralMemoryRepository):

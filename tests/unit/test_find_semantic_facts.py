@@ -1,7 +1,7 @@
 import uuid
 
 from src.mag.application.queries.find_semantic_facts import FindSemanticFacts
-from src.mag.domain.entities import SemanticMemory
+from src.mag.domain.entities import ScoredFact, SemanticMemory
 from tests.unit.mag_fakes import FakeSemanticMemoryRepository
 
 
@@ -48,4 +48,7 @@ async def test_by_similarity_delegates_to_search_by_similarity():
         query_embedding=[0.1] * 384, user_id=user_id, tenant_id=tenant_id, top_k=2
     )
 
-    assert result == facts[:2]
+    # All three fixtures share the query's own embedding, so every score
+    # ties at cosine similarity 1.0 and a stable sort preserves insertion
+    # order -- this asserts delegation and top_k truncation, not ranking.
+    assert result == [ScoredFact(fact=f, score=1.0) for f in facts[:2]]

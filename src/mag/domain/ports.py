@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 from src.mag.domain.entities import (
     EpisodicMemory,
     ProceduralMemory,
+    ScoredEpisode,
+    ScoredFact,
     SemanticMemory,
     WorkingMemoryTurn,
 )
@@ -45,12 +48,56 @@ class EpisodicMemoryRepository(ABC):
     @abstractmethod
     async def search_by_similarity(
         self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
-    ) -> list[EpisodicMemory]:
+    ) -> list[ScoredEpisode]:
         """Returned episodes carry embedding=[] -- Qdrant (EpisodicMemoryIndex)
         is this system's embedding-bearing read path, matching how
         PostgresDocumentRepository's chunk reads already work. A caller that
         needs the real vector back should go through the index, not this
-        repository."""
+        repository.
+
+        score is cosine SIMILARITY (1 - pgvector's <=> cosine distance), the
+        same quantity and scale Qdrant's search() below returns natively --
+        deliberately kept comparable across both backends so retrieval
+        strategies that fuse scores (MAG Batch C) aren't secretly mixing two
+        different conventions under one name."""
+
+    @abstractmethod
+    async def get_by_session_in_window(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, start: datetime, end: datetime
+    ) -> list[EpisodicMemory]:
+        """Episodes in [start, end], newest first. Used by temporal
+        retrieval when the caller supplies an explicit window; membership is
+        binary (in the window or not), so callers score every result the
+        same way rather than reading a graded signal out of this."""
+
+    @abstractmethod
+    async def get_recent_by_session(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, limit: int
+    ) -> list[EpisodicMemory]:
+        """The `limit` most recent episodes in the session, newest first.
+        Used by temporal retrieval when no explicit window is given -- a
+        plain recency fallback, distinct from get_by_session (which returns
+        everything, oldest first, for consolidation's backlog-drain use)."""
+
+    @abstractmethod
+    async def get_by_session_ranked_by_salience(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
+    ) -> list[EpisodicMemory]:
+        """The top_k episodes in the session by salience_score, highest
+        first. Only meaningful once something actually writes a non-default
+        salience_score -- see CaptureEpisode's salience-scoring step."""
+
+    @abstractmethod
+    async def get_by_session_matching_entity(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, entity: str, top_k: int
+    ) -> list[EpisodicMemory]:
+        """Episodes in the session whose content mentions `entity`, newest
+        first -- matched against a structured content["entities"] list when
+        present, and against the whole serialized content as a substring
+        fallback otherwise. Binary relevance: this system has no per-mention
+        confidence signal to grade matches by, so callers treat every
+        returned episode as equally relevant rather than inventing a
+        precision the underlying match doesn't have."""
 
 
 class SemanticMemoryRepository(ABC):
@@ -69,9 +116,10 @@ class SemanticMemoryRepository(ABC):
     @abstractmethod
     async def search_by_similarity(
         self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
-    ) -> list[SemanticMemory]:
+    ) -> list[ScoredFact]:
         """Returned facts carry embedding=[] -- same convention as
-        EpisodicMemoryRepository.search_by_similarity above."""
+        EpisodicMemoryRepository.search_by_similarity above. score is cosine
+        similarity, same scale rationale as that method's docstring."""
 
 
 class EpisodicMemoryIndex(ABC):
@@ -88,7 +136,7 @@ class EpisodicMemoryIndex(ABC):
     @abstractmethod
     async def search(
         self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
-    ) -> list[EpisodicMemory]:
+    ) -> list[ScoredEpisode]:
         """Returned episodes carry their real embedding -- this is the
         embedding-bearing read path (see EpisodicMemoryRepository above).
         That embedding is L2-normalized (unit length), not bit-identical to
@@ -119,7 +167,7 @@ class SemanticMemoryIndex(ABC):
     @abstractmethod
     async def search(
         self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
-    ) -> list[SemanticMemory]:
+    ) -> list[ScoredFact]:
         """Returned facts carry their real embedding -- this is the
         embedding-bearing read path (see SemanticMemoryRepository above),
         L2-normalized rather than bit-identical to the upserted value (same

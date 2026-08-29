@@ -159,7 +159,8 @@ async def test_search_by_similarity_orders_by_nearest_neighbor(db_session, embed
     result = await repo.search_by_similarity(query_embedding, tenant_id, top_k=2)
 
     assert len(result) == 2
-    assert result[0].id == about_cats.id
+    assert result[0].episode.id == about_cats.id
+    assert result[0].score > result[1].score
 
 
 async def test_get_unconsolidated_by_session_excludes_consolidated_episodes(db_session):
@@ -260,4 +261,4 @@ async def test_search_by_similarity_only_returns_the_given_tenants_episodes(
         embedding_model.embed("alpha content"), tenant_a, top_k=10
     )
 
-    assert {e.id for e in result} == {episode_a.id}
+    assert {s.episode.id for s in result} == {episode_a.id}

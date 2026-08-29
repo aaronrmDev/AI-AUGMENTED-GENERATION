@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 from src.mag.application.queries.retrieve_episodes import RetrieveEpisodes
-from src.mag.domain.entities import EpisodicMemory
+from src.mag.domain.entities import EpisodicMemory, ScoredEpisode
 from tests.unit.mag_fakes import FakeEpisodicMemoryRepository
 
 
@@ -63,4 +63,8 @@ async def test_by_similarity_delegates_to_search_by_similarity():
         query_embedding=[0.1] * 384, tenant_id=tenant_id, top_k=2
     )
 
-    assert result == episodes[:2]
+    # All three fixtures share the zero vector, so every score ties at 0.0
+    # and a stable sort preserves insertion order -- this asserts delegation
+    # and top_k truncation, not a real similarity ranking (see the entity-
+    # matching / temporal / salience strategy tests for ranking assertions).
+    assert result == [ScoredEpisode(episode=e, score=0.0) for e in episodes[:2]]

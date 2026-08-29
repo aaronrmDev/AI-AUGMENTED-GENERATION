@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.mag.domain.entities import SemanticMemory
+from src.mag.domain.entities import ScoredFact, SemanticMemory
 from src.mag.domain.ports import SemanticMemoryRepository
 
 
@@ -71,11 +71,12 @@ class PostgresSemanticMemoryRepository(SemanticMemoryRepository):
 
     async def search_by_similarity(
         self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
-    ) -> list[SemanticMemory]:
+    ) -> list[ScoredFact]:
         result = await self._session.execute(
             text(
                 """
-                SELECT id, user_id, fact_key, fact_value, confidence, source, valid_until
+                SELECT id, user_id, fact_key, fact_value, confidence, source, valid_until,
+                    1 - (embedding <=> CAST(:query_embedding AS vector)) AS score
                 FROM semantic_memory
                 WHERE user_id = :user_id AND tenant_id = :tenant_id
                 ORDER BY embedding <=> CAST(:query_embedding AS vector)
@@ -89,7 +90,10 @@ class PostgresSemanticMemoryRepository(SemanticMemoryRepository):
                 "top_k": top_k,
             },
         )
-        return [self._row_to_fact(row) for row in result.mappings()]
+        return [
+            ScoredFact(fact=self._row_to_fact(row), score=float(row["score"]))
+            for row in result.mappings()
+        ]
 
     @staticmethod
     def _row_to_fact(row: RowMapping) -> SemanticMemory:

@@ -150,4 +150,4 @@ async def test_execute_consolidates_real_episodes_with_a_real_ollama_model(
             query_embedding=embedding_model.embed(fact.fact_value), user_id=user_id,
             tenant_id=tenant_id, top_k=5,
         )
-        assert fact.id in {f.id for f in from_index}
+        assert fact.id in {r.fact.id for r in from_index}

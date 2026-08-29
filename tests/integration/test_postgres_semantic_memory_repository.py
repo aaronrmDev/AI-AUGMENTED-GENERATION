@@ -179,8 +179,9 @@ async def test_search_by_similarity_returns_real_nearest_neighbor_ordering(
     )
 
     assert len(results) == 2
-    assert results[0].fact_key == "pet"
-    assert results[1].fact_key == "job"
+    assert results[0].fact.fact_key == "pet"
+    assert results[1].fact.fact_key == "job"
+    assert results[0].score > results[1].score
 
 
 async def test_search_by_similarity_never_leaks_another_users_facts(db_session, embedding_model):
@@ -202,6 +203,6 @@ async def test_search_by_similarity_never_leaks_another_users_facts(db_session, 
         embedding, user_id=user_a, tenant_id=tenant_id, top_k=10
     )
 
-    fact_ids = {fact.id for fact in results}
+    fact_ids = {r.fact.id for r in results}
     assert fact_a.id in fact_ids
     assert fact_b.id not in fact_ids

@@ -29,10 +29,15 @@ async def test_upsert_then_search_finds_the_episode(qdrant_url):
     results = await index.search(query_embedding=[0.1] * 384, tenant_id=tenant_id, top_k=5)
 
     assert len(results) == 1
-    assert results[0].id == episode.id
-    assert results[0].session_id == episode.session_id
-    assert results[0].content == episode.content
-    assert results[0].salience_score == episode.salience_score
+    found = results[0].episode
+    assert found.id == episode.id
+    assert found.session_id == episode.session_id
+    assert found.content == episode.content
+    assert found.salience_score == episode.salience_score
+    # Identical vectors, so cosine similarity is 1.0 -- the same COSINE-
+    # distance-collection scale search_by_similarity's port docstring
+    # documents for the Postgres side of this same score-carrying contract.
+    assert results[0].score == pytest.approx(1.0)
 
 
 async def test_search_returns_an_l2_normalized_embedding_not_the_raw_upserted_one(qdrant_url):
@@ -55,7 +60,7 @@ async def test_search_returns_an_l2_normalized_embedding_not_the_raw_upserted_on
     assert len(results) == 1
     norm = sum(x * x for x in raw_embedding) ** 0.5
     expected_normalized = [x / norm for x in raw_embedding]
-    assert results[0].embedding == pytest.approx(expected_normalized, rel=1e-4)
+    assert results[0].episode.embedding == pytest.approx(expected_normalized, rel=1e-4)
 
 
 async def test_search_never_returns_another_tenants_episodes(qdrant_url):
@@ -71,6 +76,6 @@ async def test_search_never_returns_another_tenants_episodes(qdrant_url):
 
     results = await index.search(query_embedding=[0.2] * 384, tenant_id=tenant_a, top_k=10)
 
-    ids = {e.id for e in results}
+    ids = {s.episode.id for s in results}
     assert episode_a.id in ids
     assert episode_b.id not in ids

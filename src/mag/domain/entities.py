@@ -47,6 +47,27 @@ class WorkingMemoryTurn:
 
 
 @dataclass(frozen=True)
+class ScoredEpisode:
+    # Pairs a full EpisodicMemory with a relevance score, matching RAG's
+    # SearchResult precedent (src/rag/domain/entities.py) of carrying a
+    # score alongside retrieved content rather than discarding it -- unlike
+    # SearchResult, this wraps the whole entity instead of flattening
+    # fields, since retrieval-strategy consumers (fusion, salience
+    # weighting) need timestamp/salience_score/content, not just one field.
+    # score's scale depends on which strategy produced it: cosine similarity
+    # for semantic search, 0.0-1.0 heuristic relevance for the others -- see
+    # the retrieval strategy query classes for what each one means.
+    episode: EpisodicMemory
+    score: float
+
+
+@dataclass(frozen=True)
+class ScoredFact:
+    fact: SemanticMemory
+    score: float
+
+
+@dataclass(frozen=True)
 class ProceduralMemory:
     id: uuid.UUID
     user_id: uuid.UUID

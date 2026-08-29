@@ -23,9 +23,11 @@ async def test_upsert_then_search_finds_the_fact(qdrant_url):
         query_embedding=[0.1] * 384, user_id=user_id, tenant_id=tenant_id, top_k=5
     )
     assert len(results) == 1
-    assert results[0].id == fact.id
-    assert results[0].fact_key == "favorite_color"
-    assert results[0].fact_value == "blue"
+    found = results[0].fact
+    assert found.id == fact.id
+    assert found.fact_key == "favorite_color"
+    assert found.fact_value == "blue"
+    assert results[0].score == pytest.approx(1.0)
 
 
 async def test_search_returns_the_real_embedding_confidence_source_and_valid_until(qdrant_url):
@@ -52,7 +54,7 @@ async def test_search_returns_the_real_embedding_confidence_source_and_valid_unt
     )
 
     assert len(results) == 1
-    found = results[0]
+    found = results[0].fact
     assert found.confidence == pytest.approx(0.4)
     assert found.source == "inferred"
     assert found.valid_until == valid_until
@@ -88,7 +90,7 @@ async def test_search_returns_none_for_valid_until_when_the_fact_never_had_one(q
         query_embedding=[0.15] * 384, user_id=user_id, tenant_id=tenant_id, top_k=1
     )
 
-    assert results[0].valid_until is None
+    assert results[0].fact.valid_until is None
 
 
 async def test_search_never_returns_another_users_facts(qdrant_url):
@@ -112,7 +114,7 @@ async def test_search_never_returns_another_users_facts(qdrant_url):
     results = await index.search(
         query_embedding=[0.2] * 384, user_id=user_a, tenant_id=tenant_id, top_k=10
     )
-    fact_ids = {r.id for r in results}
+    fact_ids = {r.fact.id for r in results}
     assert fact_a.id in fact_ids
     assert fact_b.id not in fact_ids
 
@@ -138,6 +140,6 @@ async def test_search_never_returns_another_tenants_facts(qdrant_url):
     results = await index.search(
         query_embedding=[0.25] * 384, user_id=user_id, tenant_id=tenant_a, top_k=10
     )
-    fact_ids = {r.id for r in results}
+    fact_ids = {r.fact.id for r in results}
     assert fact_a.id in fact_ids
     assert fact_b.id not in fact_ids

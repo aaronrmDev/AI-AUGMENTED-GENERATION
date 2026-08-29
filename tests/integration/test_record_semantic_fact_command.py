@@ -65,7 +65,7 @@ async def test_execute_dual_writes_to_real_postgres_and_qdrant(
         query_embedding=embedding_model.embed("blue"), user_id=user_id, tenant_id=tenant_id,
         top_k=5,
     )
-    assert [f.id for f in from_qdrant] == [fact.id]
+    assert [r.fact.id for r in from_qdrant] == [fact.id]
 
 
 async def test_recording_the_same_key_twice_does_not_orphan_a_stale_qdrant_point(
@@ -120,4 +120,4 @@ async def test_recording_the_same_key_twice_does_not_orphan_a_stale_qdrant_point
         tenant_id=tenant_id, top_k=10,
     )
     assert len(from_qdrant) == 1
-    assert from_qdrant[0].fact_value == "red"
+    assert from_qdrant[0].fact.fact_value == "red"

@@ -13,6 +13,7 @@ from src.mag.infrastructure._consolidation_prompt import (
     CONSOLIDATION_SYSTEM_PROMPT,
     build_consolidation_user_message,
 )
+from src.mag.infrastructure._llm_json import strip_markdown_fence
 from src.rag.domain.ports import ChatModel, EmbeddingModel
 
 # Same reasoning as OllamaJudge.score() (#149): complete() has no forced
@@ -81,7 +82,7 @@ class ConsolidateEpisodes:
         for _ in range(_MAX_REFLECTION_ATTEMPTS):
             response = await self._chat_model.complete(prompt)
             try:
-                parsed = json.loads(_strip_markdown_fence(response))
+                parsed = json.loads(strip_markdown_fence(response))
                 facts = parsed["facts"]
                 if not isinstance(facts, list):
                     raise TypeError("'facts' must be a list")
@@ -144,19 +145,3 @@ def _validate_and_dedupe_facts(facts: list[Any]) -> list[dict[str, Any]]:
             seen_keys[fact_key] = len(validated)
             validated.append(record)
     return validated
-
-
-def _strip_markdown_fence(text: str) -> str:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        # Drop the opening fence (optionally "```json") and a trailing
-        # closing fence if present -- a model ignoring "no markdown
-        # fencing" is exactly the kind of non-compliance #149 established
-        # this project can't assume away.
-        if lines and lines[-1].strip() == "```":
-            lines = lines[1:-1]
-        else:
-            lines = lines[1:]
-        stripped = "\n".join(lines)
-    return stripped
