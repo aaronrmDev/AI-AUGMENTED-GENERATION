@@ -4,29 +4,15 @@ from datetime import UTC, datetime
 
 from src.mag.application.commands.consolidate_episodes import ConsolidateEpisodes
 from src.mag.domain.entities import EpisodicMemory, SemanticMemory
-from src.mag.domain.ports import SemanticMemoryIndex
 from tests.unit.mag_fakes import (
     FakeEpisodicMemoryRepository,
     FakeMemoryGraphRepository,
     FakeSemanticMemoryRepository,
 )
+from tests.unit.mag_fakes import (
+    FakeSemanticMemoryIndex as _FakeSemanticMemoryIndex,
+)
 from tests.unit.rag_fakes import FakeEmbeddingModel
-
-
-class _FakeSemanticMemoryIndex(SemanticMemoryIndex):
-    def __init__(self) -> None:
-        self.upserted: list[tuple[SemanticMemory, uuid.UUID]] = []
-
-    async def ensure_collection(self) -> None:
-        pass
-
-    async def upsert(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
-        self.upserted.append((fact, tenant_id))
-
-    async def search(
-        self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
-    ) -> list[SemanticMemory]:
-        return []
 
 
 class _ScriptedChatModel:
@@ -117,6 +103,45 @@ async def test_execute_writes_each_extracted_fact_via_record_semantic_fact():
     assert {f.fact_value for f in result} == {"Python", "Go"}
     assert len(facts_repo.saved) == 2
     assert all(fact.source == "consolidation" for fact, _ in facts_repo.saved)
+
+
+async def test_execute_preserves_an_existing_facts_archived_status():
+    # fact_key is unconstrained LLM free text over the same per-user
+    # namespace the memory-evolution operations (Update/Invalidate/
+    # Archive/Refine) manage -- a consolidation-derived fact_key can
+    # collide with one a user already Archived, and writing it via
+    # RecordSemanticFact must not silently un-archive it as a side
+    # effect (the same bug class this project's own review caught and
+    # fixed for UpdateMemory/RefineMemory).
+    episodes_repo = FakeEpisodicMemoryRepository()
+    facts_repo = FakeSemanticMemoryRepository()
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await episodes_repo.save(
+        _episode(session_id, {"input": "what language do you use", "output": "Python"}),
+        tenant_id,
+    )
+    archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await facts_repo.save(
+        SemanticMemory(
+            id=uuid.uuid5(uuid.NAMESPACE_OID, f"semantic_memory:{user_id}:primary_language"),
+            user_id=user_id,
+            fact_key="primary_language",
+            fact_value="stale value from before consolidation",
+            embedding=[],
+            archived_at=archived_at,
+        ),
+        tenant_id,
+    )
+    chat_model = _ScriptedChatModel([_VALID_RESPONSE])
+    use_case = _use_case(episodes_repo, facts_repo, _FakeSemanticMemoryIndex(), chat_model)
+
+    result = await use_case.execute(tenant_id=tenant_id, user_id=user_id, session_id=session_id)
+
+    primary = next(f for f in result if f.fact_key == "primary_language")
+    assert primary.fact_value == "Python"  # consolidation's new value landed
+    assert primary.archived_at == archived_at  # status wasn't reset
 
 
 async def test_execute_marks_the_consolidated_episodes_even_when_facts_are_extracted():

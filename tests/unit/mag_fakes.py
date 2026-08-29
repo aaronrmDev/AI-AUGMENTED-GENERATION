@@ -10,12 +10,14 @@ from src.mag.domain.entities import (
     ScoredEpisode,
     ScoredFact,
     SemanticMemory,
+    SemanticMemoryHistoryEntry,
     WorkingMemoryTurn,
 )
 from src.mag.domain.ports import (
     EpisodicMemoryRepository,
     MemoryGraphRepository,
     ProceduralMemoryRepository,
+    SemanticMemoryIndex,
     SemanticMemoryRepository,
     WorkingMemoryStore,
 )
@@ -145,6 +147,7 @@ class FakeSemanticMemoryRepository(SemanticMemoryRepository):
         # never catch that mismatch.
         self._by_key: dict[tuple[uuid.UUID, str], SemanticMemory] = {}
         self._search_results: list[SemanticMemory] = []
+        self._history: dict[tuple[uuid.UUID, str], list[SemanticMemoryHistoryEntry]] = {}
 
     async def save(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
         self.saved.append((fact, tenant_id))
@@ -153,6 +156,10 @@ class FakeSemanticMemoryRepository(SemanticMemoryRepository):
     async def find_by_key(
         self, user_id: uuid.UUID, fact_key: str, tenant_id: uuid.UUID
     ) -> SemanticMemory | None:
+        # Deliberately unfiltered by valid_until/archived_at -- a direct,
+        # keyed lookup, matching the real repository's identical choice
+        # (MAG Batch F): a caller updating or refining a fact needs to
+        # read it regardless of its current status.
         return self._by_key.get((user_id, fact_key))
 
     def set_search_results(self, results: list[SemanticMemory]) -> None:
@@ -161,12 +168,87 @@ class FakeSemanticMemoryRepository(SemanticMemoryRepository):
     async def search_by_similarity(
         self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
     ) -> list[ScoredFact]:
+        now = datetime.now(UTC)
+        eligible = [
+            f
+            for f in self._search_results
+            if (f.valid_until is None or f.valid_until > now) and f.archived_at is None
+        ]
         scored = [
             ScoredFact(fact=f, score=_cosine_similarity(query_embedding, f.embedding))
-            for f in self._search_results
+            for f in eligible
         ]
         scored.sort(key=lambda s: s.score, reverse=True)
         return scored[:top_k]
+
+    async def invalidate(
+        self,
+        user_id: uuid.UUID,
+        fact_key: str,
+        tenant_id: uuid.UUID,
+        invalidated_at: datetime | None,
+    ) -> datetime:
+        # None means "right now" -- mirrors the real repository's
+        # COALESCE(:invalidated_at, now()), just computed on this
+        # process's own clock since a fake has no separate database clock
+        # to defer to.
+        actual = invalidated_at or datetime.now(UTC)
+        existing = self._by_key.get((user_id, fact_key))
+        if existing is not None:
+            self._by_key[(user_id, fact_key)] = dataclasses.replace(existing, valid_until=actual)
+        return actual
+
+    async def archive(
+        self,
+        user_id: uuid.UUID,
+        fact_key: str,
+        tenant_id: uuid.UUID,
+        archived_at: datetime | None,
+    ) -> datetime:
+        actual = archived_at or datetime.now(UTC)
+        existing = self._by_key.get((user_id, fact_key))
+        if existing is not None:
+            self._by_key[(user_id, fact_key)] = dataclasses.replace(existing, archived_at=actual)
+        return actual
+
+    async def save_history_entry(
+        self, entry: SemanticMemoryHistoryEntry, tenant_id: uuid.UUID
+    ) -> None:
+        self._history.setdefault((entry.user_id, entry.fact_key), []).append(entry)
+
+    async def find_history(
+        self, user_id: uuid.UUID, fact_key: str, tenant_id: uuid.UUID
+    ) -> list[SemanticMemoryHistoryEntry]:
+        entries = self._history.get((user_id, fact_key), [])
+        return sorted(entries, key=lambda e: e.superseded_at, reverse=True)
+
+
+class FakeSemanticMemoryIndex(SemanticMemoryIndex):
+    def __init__(self) -> None:
+        self.upserted: list[tuple[SemanticMemory, uuid.UUID]] = []
+        self.valid_until_updates: list[tuple[uuid.UUID, uuid.UUID, datetime | None]] = []
+        self.archived_at_updates: list[tuple[uuid.UUID, uuid.UUID, datetime | None]] = []
+
+    async def ensure_collection(self) -> None:
+        pass
+
+    async def upsert(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
+        self.upserted.append((fact, tenant_id))
+
+    async def set_valid_until(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, valid_until: datetime | None
+    ) -> None:
+        self.valid_until_updates.append((fact_id, tenant_id, valid_until))
+
+    async def set_archived_at(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, archived_at: datetime | None
+    ) -> None:
+        self.archived_at_updates.append((fact_id, tenant_id, archived_at))
+
+    async def search(
+        self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
+    ) -> list[ScoredFact]:
+        return []
 
 
 class FakeProceduralMemoryRepository(ProceduralMemoryRepository):
@@ -201,6 +283,8 @@ class FakeMemoryGraphRepository(MemoryGraphRepository):
     def __init__(self) -> None:
         self.upserted_episodes: list[tuple[EpisodicMemory, uuid.UUID]] = []
         self.upserted_facts: list[tuple[SemanticMemory, uuid.UUID]] = []
+        self.fact_valid_until_updates: list[tuple[uuid.UUID, uuid.UUID, datetime | None]] = []
+        self.fact_archived_at_updates: list[tuple[uuid.UUID, uuid.UUID, datetime | None]] = []
         self.participated_in_links: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = []
         self.temporally_follows_links: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = []
         self.mentions_links: list[tuple[uuid.UUID, str, uuid.UUID]] = []
@@ -212,6 +296,16 @@ class FakeMemoryGraphRepository(MemoryGraphRepository):
 
     async def upsert_fact_node(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
         self.upserted_facts.append((fact, tenant_id))
+
+    async def set_fact_valid_until(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, valid_until: datetime | None
+    ) -> None:
+        self.fact_valid_until_updates.append((fact_id, tenant_id, valid_until))
+
+    async def set_fact_archived_at(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, archived_at: datetime | None
+    ) -> None:
+        self.fact_archived_at_updates.append((fact_id, tenant_id, archived_at))
 
     async def link_participated_in(
         self, user_id: uuid.UUID, session_id: uuid.UUID, tenant_id: uuid.UUID

@@ -36,6 +36,7 @@ class ConsolidateEpisodes:
         memory_graph_repository: MemoryGraphRepository,
     ) -> None:
         self._episodes = episodic_memory_repository
+        self._facts = semantic_memory_repository
         self._record_fact = RecordSemanticFact(
             semantic_memory_repository=semantic_memory_repository,
             semantic_memory_index=semantic_memory_index,
@@ -58,6 +59,17 @@ class ConsolidateEpisodes:
 
         written: list[SemanticMemory] = []
         for fact in facts_raw:
+            # A consolidation-derived fact_key can collide with one a
+            # user or agent already Invalidated/Archived via the memory
+            # evolution operations (fact_key is unconstrained LLM free
+            # text over the same per-user namespace those operations
+            # manage, not a source-partitioned one) -- without carrying
+            # the existing status through, this write would silently
+            # un-archive/un-invalidate it, the same bug class MAG Batch
+            # F's own review caught and fixed for UpdateMemory/
+            # RefineMemory. find_by_key returns None for a genuinely new
+            # fact_key, in which case there's nothing to preserve.
+            existing = await self._facts.find_by_key(user_id, fact["fact_key"], tenant_id)
             recorded = await self._record_fact.execute(
                 tenant_id=tenant_id,
                 user_id=user_id,
@@ -65,6 +77,8 @@ class ConsolidateEpisodes:
                 fact_value=fact["fact_value"],
                 confidence=float(fact.get("confidence", 1.0)),
                 source="consolidation",
+                valid_until=existing.valid_until if existing else None,
+                archived_at=existing.archived_at if existing else None,
             )
             written.append(recorded)
             # ABSTRACTS_TO from every episode reflected on to this fact --

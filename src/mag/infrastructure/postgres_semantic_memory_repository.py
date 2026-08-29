@@ -1,10 +1,12 @@
 import uuid
+from datetime import datetime
+from typing import cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.mag.domain.entities import ScoredFact, SemanticMemory
+from src.mag.domain.entities import ScoredFact, SemanticMemory, SemanticMemoryHistoryEntry
 from src.mag.domain.ports import SemanticMemoryRepository
 
 
@@ -24,11 +26,11 @@ class PostgresSemanticMemoryRepository(SemanticMemoryRepository):
                 """
                 INSERT INTO semantic_memory (
                     id, user_id, tenant_id, fact_key, fact_value, embedding,
-                    confidence, source, valid_until
+                    confidence, source, valid_until, archived_at
                 )
                 VALUES (
                     :id, :user_id, :tenant_id, :fact_key, :fact_value, :embedding,
-                    :confidence, :source, :valid_until
+                    :confidence, :source, :valid_until, :archived_at
                 )
                 ON CONFLICT (user_id, fact_key) DO UPDATE SET
                     id = EXCLUDED.id,
@@ -36,7 +38,8 @@ class PostgresSemanticMemoryRepository(SemanticMemoryRepository):
                     embedding = EXCLUDED.embedding,
                     confidence = EXCLUDED.confidence,
                     source = EXCLUDED.source,
-                    valid_until = EXCLUDED.valid_until
+                    valid_until = EXCLUDED.valid_until,
+                    archived_at = EXCLUDED.archived_at
                 """
             ),
             {
@@ -49,6 +52,7 @@ class PostgresSemanticMemoryRepository(SemanticMemoryRepository):
                 "confidence": fact.confidence,
                 "source": fact.source,
                 "valid_until": fact.valid_until,
+                "archived_at": fact.archived_at,
             },
         )
         await self._session.flush()
@@ -59,7 +63,8 @@ class PostgresSemanticMemoryRepository(SemanticMemoryRepository):
         result = await self._session.execute(
             text(
                 """
-                SELECT id, user_id, fact_key, fact_value, confidence, source, valid_until
+                SELECT id, user_id, fact_key, fact_value, confidence, source,
+                    valid_until, archived_at
                 FROM semantic_memory
                 WHERE user_id = :user_id AND fact_key = :fact_key AND tenant_id = :tenant_id
                 """
@@ -75,10 +80,13 @@ class PostgresSemanticMemoryRepository(SemanticMemoryRepository):
         result = await self._session.execute(
             text(
                 """
-                SELECT id, user_id, fact_key, fact_value, confidence, source, valid_until,
+                SELECT id, user_id, fact_key, fact_value, confidence, source,
+                    valid_until, archived_at,
                     1 - (embedding <=> CAST(:query_embedding AS vector)) AS score
                 FROM semantic_memory
                 WHERE user_id = :user_id AND tenant_id = :tenant_id
+                    AND (valid_until IS NULL OR valid_until > now())
+                    AND archived_at IS NULL
                 ORDER BY embedding <=> CAST(:query_embedding AS vector)
                 LIMIT :top_k
                 """
@@ -92,6 +100,130 @@ class PostgresSemanticMemoryRepository(SemanticMemoryRepository):
         )
         return [
             ScoredFact(fact=self._row_to_fact(row), score=float(row["score"]))
+            for row in result.mappings()
+        ]
+
+    async def invalidate(
+        self,
+        user_id: uuid.UUID,
+        fact_key: str,
+        tenant_id: uuid.UUID,
+        invalidated_at: datetime | None,
+    ) -> datetime:
+        # COALESCE(:invalidated_at, now()) rather than always taking a
+        # required, caller-supplied timestamp: when a caller wants "right
+        # now" (the common case -- InvalidateMemory's own invalidated_at
+        # defaults to None), letting Postgres compute its OWN now()
+        # avoids a clock-skew window where an application-clock timestamp
+        # sent over the wire could read as still-in-the-future from this
+        # same database's perspective when search_by_similarity later
+        # compares it against ITS now(). RETURNING hands back whichever
+        # value was actually used, so callers writing that same instant to
+        # Qdrant/Neo4j stay consistent with what Postgres -- the source of
+        # truth here -- actually recorded, rather than each store
+        # independently computing its own "now."
+        result = await self._session.execute(
+            text(
+                """
+                UPDATE semantic_memory SET valid_until = COALESCE(:invalidated_at, now())
+                WHERE user_id = :user_id AND fact_key = :fact_key AND tenant_id = :tenant_id
+                RETURNING valid_until
+                """
+            ),
+            {
+                "invalidated_at": invalidated_at,
+                "user_id": user_id,
+                "fact_key": fact_key,
+                "tenant_id": tenant_id,
+            },
+        )
+        await self._session.flush()
+        return cast(datetime, result.scalar_one())
+
+    async def archive(
+        self,
+        user_id: uuid.UUID,
+        fact_key: str,
+        tenant_id: uuid.UUID,
+        archived_at: datetime | None,
+    ) -> datetime:
+        # Same COALESCE-and-RETURNING reasoning as invalidate() above.
+        result = await self._session.execute(
+            text(
+                """
+                UPDATE semantic_memory SET archived_at = COALESCE(:archived_at, now())
+                WHERE user_id = :user_id AND fact_key = :fact_key AND tenant_id = :tenant_id
+                RETURNING archived_at
+                """
+            ),
+            {
+                "archived_at": archived_at,
+                "user_id": user_id,
+                "fact_key": fact_key,
+                "tenant_id": tenant_id,
+            },
+        )
+        await self._session.flush()
+        return cast(datetime, result.scalar_one())
+
+    async def save_history_entry(
+        self, entry: SemanticMemoryHistoryEntry, tenant_id: uuid.UUID
+    ) -> None:
+        await self._session.execute(
+            text(
+                """
+                INSERT INTO semantic_memory_history (
+                    id, original_fact_id, user_id, tenant_id, fact_key, fact_value,
+                    confidence, source, operation, superseded_at
+                )
+                VALUES (
+                    :id, :original_fact_id, :user_id, :tenant_id, :fact_key, :fact_value,
+                    :confidence, :source, :operation, :superseded_at
+                )
+                """
+            ),
+            {
+                "id": entry.id,
+                "original_fact_id": entry.original_fact_id,
+                "user_id": entry.user_id,
+                "tenant_id": tenant_id,
+                "fact_key": entry.fact_key,
+                "fact_value": entry.fact_value,
+                "confidence": entry.confidence,
+                "source": entry.source,
+                "operation": entry.operation,
+                "superseded_at": entry.superseded_at,
+            },
+        )
+        await self._session.flush()
+
+    async def find_history(
+        self, user_id: uuid.UUID, fact_key: str, tenant_id: uuid.UUID
+    ) -> list[SemanticMemoryHistoryEntry]:
+        result = await self._session.execute(
+            text(
+                """
+                SELECT id, original_fact_id, user_id, fact_key, fact_value,
+                    confidence, source, operation, superseded_at
+                FROM semantic_memory_history
+                WHERE user_id = :user_id AND fact_key = :fact_key AND tenant_id = :tenant_id
+                ORDER BY superseded_at DESC
+                """
+            ),
+            {"user_id": user_id, "fact_key": fact_key, "tenant_id": tenant_id},
+        )
+        return [
+            SemanticMemoryHistoryEntry(
+                id=row["id"],
+                original_fact_id=row["original_fact_id"],
+                user_id=row["user_id"],
+                fact_key=row["fact_key"],
+                fact_value=row["fact_value"],
+                confidence=row["confidence"],
+                source=row["source"],
+                operation=row["operation"],
+                superseded_at=row["superseded_at"],
+            )
             for row in result.mappings()
         ]
 
@@ -110,4 +242,5 @@ class PostgresSemanticMemoryRepository(SemanticMemoryRepository):
             confidence=row["confidence"],
             source=row["source"],
             valid_until=row["valid_until"],
+            archived_at=row["archived_at"],
         )

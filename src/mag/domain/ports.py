@@ -11,6 +11,7 @@ from src.mag.domain.entities import (
     ScoredEpisode,
     ScoredFact,
     SemanticMemory,
+    SemanticMemoryHistoryEntry,
     WorkingMemoryTurn,
 )
 
@@ -136,7 +137,64 @@ class SemanticMemoryRepository(ABC):
     ) -> list[ScoredFact]:
         """Returned facts carry embedding=[] -- same convention as
         EpisodicMemoryRepository.search_by_similarity above. score is cosine
-        similarity, same scale rationale as that method's docstring."""
+        similarity, same scale rationale as that method's docstring.
+
+        Excludes a fact whose valid_until has passed or whose archived_at
+        is set (MAG Batch F, #63/#64) -- "exclude it from retrieval" is
+        Invalidate's own contract, and "move to cold storage" is Archive's;
+        neither means anything if this method still returns them. Use
+        find_by_key for a direct, keyed lookup that bypasses this filter
+        (a caller updating or refining a fact needs to read it regardless
+        of its current status)."""
+
+    @abstractmethod
+    async def invalidate(
+        self,
+        user_id: uuid.UUID,
+        fact_key: str,
+        tenant_id: uuid.UUID,
+        invalidated_at: datetime | None,
+    ) -> datetime:
+        """Sets valid_until on the existing row -- a targeted status flip,
+        not a full re-upsert: no embedding change, so no reason to touch
+        the vector store's point.
+
+        invalidated_at may be None, meaning "right now" -- in which case
+        the value actually written is computed by the DATABASE's own
+        clock (COALESCE(:invalidated_at, now()) in the Postgres
+        implementation), not the calling application's, and returned to
+        the caller. This avoids a clock-skew window: search_by_similarity
+        later compares valid_until against this same database's own
+        now(), so a timestamp this database chose for itself is
+        guaranteed consistent with that later comparison in a way an
+        application-clock timestamp sent over the wire is not."""
+
+    @abstractmethod
+    async def archive(
+        self,
+        user_id: uuid.UUID,
+        fact_key: str,
+        tenant_id: uuid.UUID,
+        archived_at: datetime | None,
+    ) -> datetime:
+        """Sets archived_at on the existing row -- same reasoning as
+        invalidate above, including the None-means-database-computed-now
+        behavior and its return value."""
+
+    @abstractmethod
+    async def save_history_entry(
+        self, entry: SemanticMemoryHistoryEntry, tenant_id: uuid.UUID
+    ) -> None:
+        """A plain insert -- history entries are never updated or upserted,
+        each one is a permanent snapshot of a value Update or Refine
+        (#62/#66) is about to overwrite."""
+
+    @abstractmethod
+    async def find_history(
+        self, user_id: uuid.UUID, fact_key: str, tenant_id: uuid.UUID
+    ) -> list[SemanticMemoryHistoryEntry]:
+        """Every superseded value for this (user_id, fact_key), newest
+        first."""
 
 
 class EpisodicMemoryIndex(ABC):
@@ -198,7 +256,43 @@ class SemanticMemoryIndex(ABC):
         embedding-bearing read path (see SemanticMemoryRepository above),
         L2-normalized rather than bit-identical to the upserted value (same
         COSINE-distance-collection behavior as EpisodicMemoryIndex.search
-        above)."""
+        above).
+
+        Same valid_until/archived_at exclusion as
+        SemanticMemoryRepository.search_by_similarity above -- this port
+        has its own implementation of the filter (Qdrant, not SQL), since
+        Invalidate/Archive's "exclude from retrieval" applies to whichever
+        search path a caller actually uses."""
+
+    @abstractmethod
+    async def set_valid_until(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, valid_until: datetime | None
+    ) -> None:
+        """Updates ONLY the valid_until payload field (and its numeric-epoch
+        mirror used for range filtering) -- never archived_at, never the
+        stored vector. upsert() always replaces the whole point including
+        the vector, so reusing it from InvalidateMemory with the
+        embedding-less entity find_by_key returns (Postgres reads never
+        carry a real embedding -- an established convention since Batch A)
+        would silently blank out the stored vector; that's what this
+        method exists to avoid. Touching only valid_until, never
+        archived_at, also matters on its own: an earlier version took both
+        fields together, with the caller supplying whatever the OTHER
+        field's value happened to be at read time -- under a race between
+        a concurrent InvalidateMemory and ArchiveMemory call on the same
+        fact, whichever wrote second could silently clobber the other's
+        field back to a stale snapshot. Touching only the one field this
+        call actually owns removes that race entirely, matching how
+        SemanticMemoryRepository.invalidate/archive were already
+        single-column UPDATEs from the start."""
+
+    @abstractmethod
+    async def set_archived_at(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, archived_at: datetime | None
+    ) -> None:
+        """Updates ONLY the archived_at payload field (and its
+        numeric-epoch mirror) -- never valid_until, never the stored
+        vector. Same reasoning as set_valid_until above."""
 
 
 class ProceduralMemoryRepository(ABC):
@@ -248,7 +342,35 @@ class MemoryGraphRepository(ABC):
 
     @abstractmethod
     async def upsert_fact_node(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
-        """Idempotent by fact.id, same reasoning as upsert_episode_node."""
+        """Idempotent by fact.id, same reasoning as upsert_episode_node.
+        Also syncs valid_until and archived_at onto the node (MAG Batch F)
+        -- RecordSemanticFact (and therefore Update/Refine, which compose
+        it) calls this with the fact's current state, so the node's
+        observable status stays in sync with Postgres. Invalidate/Archive
+        do NOT call this for a status-only change -- see
+        set_fact_valid_until/set_fact_archived_at below for why."""
+
+    @abstractmethod
+    async def set_fact_valid_until(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, valid_until: datetime | None
+    ) -> None:
+        """Updates ONLY the valid_until property on an existing Fact node
+        (MATCH, not MERGE -- never creates one) -- never archived_at.
+        upsert_fact_node writes BOTH status properties together from
+        whatever SemanticMemory it's given; using it for a status-only
+        change means passing a snapshot read at the START of the calling
+        command's execute(), which can go stale if a concurrent write to
+        the OTHER field lands in between, silently clobbering it back.
+        Touching only the field this call actually owns removes that
+        race, matching SemanticMemoryIndex.set_valid_until's identical
+        reasoning for the Qdrant side of the same fix."""
+
+    @abstractmethod
+    async def set_fact_archived_at(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, archived_at: datetime | None
+    ) -> None:
+        """Updates ONLY the archived_at property -- never valid_until.
+        Same reasoning as set_fact_valid_until above."""
 
     @abstractmethod
     async def link_participated_in(
