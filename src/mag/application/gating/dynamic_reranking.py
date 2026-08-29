@@ -16,7 +16,18 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     norm_b = math.sqrt(sum(x * x for x in b))
     if norm_a == 0 or norm_b == 0:
         return 0.0
-    return dot / (norm_a * norm_b)
+    result = dot / (norm_a * norm_b)
+    # A NaN or Inf component anywhere in either embedding (a corrupted
+    # upstream write, not a case this project's own writers should ever
+    # produce, but nothing downstream validates embeddings on the way in)
+    # makes `result` non-finite. Every sort in this package already guards
+    # AGAINST a non-finite score via safe_score(), but that only protects
+    # comparisons -- it doesn't stop the raw NaN from being written into
+    # the returned candidate's own .score field, where a future consumer
+    # (JSON serialization, a sum/average for a relevance display) could be
+    # silently poisoned with no exception raised. Same "no honest signal"
+    # fallback as the zero-norm case above closes that gap at its source.
+    return result if math.isfinite(result) else 0.0
 
 
 class DynamicReranking:

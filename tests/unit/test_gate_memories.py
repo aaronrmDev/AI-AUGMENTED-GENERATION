@@ -67,7 +67,8 @@ async def test_execute_respects_the_token_budget():
     total_tokens = sum(count_tokens(c.content_text) for c in result)
     assert total_tokens <= 50
     # The budget invariant alone is satisfied trivially by an empty result
-    # -- both candidates are ~500+ tokens each, individually far too big
+    # -- the episode candidate is ~255 tokens and the fact candidate ~500
+    # (real tiktoken counts, not estimated), both individually far too big
     # for a 50-token budget, so TokenBudgetAllocation must skip both and
     # this must come back empty. An assertion that only checks "<= 50"
     # would pass identically whether the pipeline actually ran the walk or

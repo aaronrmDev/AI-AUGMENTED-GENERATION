@@ -66,10 +66,12 @@ async def test_a_tie_in_source_type_and_score_preserves_original_relative_order(
 
 async def test_nan_score_sorts_last_within_its_source_type_without_corrupting_the_rest():
     # NaN fails every comparison, so sorting on the raw score would let a
-    # single corrupted score (e.g. from DynamicReranking's cosine
-    # similarity against a corrupted embedding) scramble the well-defined
-    # scores around it too, not just the NaN one. It must land last within
-    # its own source-type group instead.
+    # single corrupted candidate scramble the well-defined scores around
+    # it too, not just misplace itself. This strategy has no way to
+    # confirm every candidate it's handed came through a source that
+    # sanitizes its own output (see DynamicReranking's own NaN guard), so
+    # it must defend itself here regardless. It must land last within its
+    # own source-type group instead.
     high = _candidate("fact", 0.9)
     corrupted = _candidate("fact", float("nan"))
     low = _candidate("fact", 0.1)

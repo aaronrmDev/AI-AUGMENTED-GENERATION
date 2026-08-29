@@ -105,6 +105,25 @@ async def test_zero_budget_still_includes_a_genuinely_zero_cost_candidate():
     assert result == [zero_cost]
 
 
+async def test_zero_budget_selects_only_the_zero_cost_candidates_from_a_mixed_pool():
+    # A single-candidate case (the test above) can't catch a future
+    # refactor that special-cases token_budget == 0 differently from the
+    # general walk, or that stops the walk early on the first oversized
+    # miss instead of skipping past it -- a zero-cost candidate ranked
+    # BEHIND a higher-scored, non-zero-cost one must still be found and
+    # included, and in score order among the survivors.
+    high_but_costly = _candidate("this one costs real tokens", score=10.0)
+    mid_zero_cost = _candidate("", score=5.0)
+    low_but_costly = _candidate("this one also costs real tokens", score=3.0)
+    low_zero_cost = _candidate("", score=1.0)
+
+    result = await TokenBudgetAllocation().execute(
+        [high_but_costly, mid_zero_cost, low_but_costly, low_zero_cost], 0
+    )
+
+    assert result == [mid_zero_cost, low_zero_cost]
+
+
 async def test_empty_candidate_list_returns_empty_list():
     result = await TokenBudgetAllocation().execute([], 1000)
 
