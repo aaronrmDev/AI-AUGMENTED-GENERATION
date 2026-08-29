@@ -309,6 +309,20 @@ async def test_upsert_fact_node_never_leaks_across_tenants(repo, neo4j_url):
     fact = _fact()
     await repo.upsert_fact_node(fact, tenant_a)
 
+    # Positive case first -- a review caught that without this, a version
+    # of upsert_fact_node that dropped tenant_id from its MERGE key
+    # entirely (leaving the node with no tenant_id property at all) would
+    # ALSO return 0 for the tenant_b query below, passing this test
+    # vacuously: "not found under the wrong tenant" proves nothing if it's
+    # not found under the RIGHT tenant either.
+    found_under_correct_tenant = await _raw_query(
+        neo4j_url,
+        "MATCH (f:Fact {id: $id, tenant_id: $tenant_id}) RETURN count(f) AS c",
+        id=str(fact.id),
+        tenant_id=str(tenant_a),
+    )
+    assert found_under_correct_tenant == 1
+
     count = await _raw_query(
         neo4j_url,
         "MATCH (f:Fact {id: $id, tenant_id: $tenant_id}) RETURN count(f) AS c",
@@ -324,6 +338,18 @@ async def test_link_participated_in_never_leaks_across_tenants(repo, neo4j_url):
     user_id = uuid.uuid4()
     session_id = uuid.uuid4()
     await repo.link_participated_in(user_id, session_id, tenant_a)
+
+    # Positive case first -- same reasoning as
+    # test_upsert_fact_node_never_leaks_across_tenants: without this, a
+    # version that dropped tenant_id from the User MERGE key entirely
+    # would also return 0 under tenant_b, passing vacuously.
+    found_under_correct_tenant = await _raw_query(
+        neo4j_url,
+        "MATCH (u:User {id: $user_id, tenant_id: $tenant_id}) RETURN count(u) AS c",
+        user_id=str(user_id),
+        tenant_id=str(tenant_a),
+    )
+    assert found_under_correct_tenant == 1
 
     count = await _raw_query(
         neo4j_url,
@@ -398,6 +424,39 @@ async def test_link_mentions_does_not_create_a_dangling_entity_when_the_episode_
     assert count == 0
 
 
+async def test_link_mentions_never_leaks_the_entity_node_across_tenants(repo, neo4j_url):
+    # A scoped re-review caught that the four cross-tenant tests added
+    # alongside this one's sibling (dangling-entity) fix missed a sixth
+    # write method: link_mentions also MERGEs a tenant-scoped node
+    # (Entity), the same class of risk upsert_fact_node/
+    # link_participated_in/link_temporally_follows/link_abstracts_to were
+    # given tests for, and nothing here had covered it.
+    tenant_a = uuid.uuid4()
+    tenant_b = uuid.uuid4()
+    episode = _episode()
+    await repo.upsert_episode_node(episode, tenant_a)
+
+    await repo.link_mentions(episode.id, "SameNameAcrossTenants", tenant_a)
+
+    found_under_correct_tenant = await _raw_query(
+        neo4j_url,
+        "MATCH (:Episode {id: $episode_id})-[:MENTIONS]->"
+        "(ent:Entity {name: $name, tenant_id: $tenant_id}) RETURN count(*) AS c",
+        episode_id=str(episode.id),
+        name="SameNameAcrossTenants",
+        tenant_id=str(tenant_a),
+    )
+    assert found_under_correct_tenant == 1
+
+    count = await _raw_query(
+        neo4j_url,
+        "MATCH (ent:Entity {name: $name, tenant_id: $tenant_id}) RETURN count(ent) AS c",
+        name="SameNameAcrossTenants",
+        tenant_id=str(tenant_b),
+    )
+    assert count == 0
+
+
 async def test_spread_activation_rejects_max_hops_out_of_range(repo):
     with pytest.raises(ValueError, match="max_hops"):
         await repo.spread_activation(
@@ -415,6 +474,24 @@ async def test_spread_activation_rejects_max_hops_out_of_range(repo):
             decay_factor=0.5,
             activation_threshold=0.05,
         )
+
+
+async def test_spread_activation_accepts_max_hops_at_the_upper_boundary(repo):
+    # A scoped re-review caught that only invalid values (0, 11) were ever
+    # tested -- max_hops=10, the documented ceiling itself, was never
+    # exercised as a value that should NOT raise. Without this, an
+    # off-by-one in the validation (e.g. "< _MAX_HOPS" instead of
+    # "<= _MAX_HOPS", silently shrinking the real valid range to [1, 9])
+    # would pass every other test in this file while incorrectly rejecting
+    # every real caller who requests the documented maximum.
+    result = await repo.spread_activation(
+        tenant_id=uuid.uuid4(),
+        start_entity_names=["x"],
+        max_hops=10,
+        decay_factor=0.5,
+        activation_threshold=0.05,
+    )
+    assert result == []  # no matching entity -- just confirms no ValueError
 
 
 async def test_spread_activation_rejects_decay_factor_out_of_range(repo):
