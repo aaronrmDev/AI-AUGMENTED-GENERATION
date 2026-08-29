@@ -1,6 +1,3 @@
-import json
-from typing import Any
-
 PROCEDURE_CONSOLIDATION_SYSTEM_PROMPT = """You are reflecting on a batch of episodic memories \
 (past interactions) from a single conversation session, looking for a REPEATED task pattern \
 -- the same kind of task attempted more than once -- and the workflow that made it succeed.
@@ -15,12 +12,3 @@ Respond with ONLY this JSON shape, no other text, no markdown fencing:
 {"procedures": [{"task_pattern": <str>, "workflow": {"steps": [<str>, ...]}, \
 "success_rate": <float, 0.0-1.0>}, ...]}
 """
-
-
-def build_procedure_consolidation_user_message(episodes: list[dict[str, Any]]) -> str:
-    numbered = "\n\n".join(
-        f"Episode {i} ({episode.get('timestamp', 'unknown time')}):\n"
-        f"{json.dumps(episode['content'], sort_keys=True)}"
-        for i, episode in enumerate(episodes, start=1)
-    )
-    return f"Episodes (oldest first):\n\n{numbered}"

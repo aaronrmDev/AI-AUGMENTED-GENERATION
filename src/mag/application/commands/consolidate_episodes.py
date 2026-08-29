@@ -10,12 +10,9 @@ from src.mag.domain.ports import (
     SemanticMemoryIndex,
     SemanticMemoryRepository,
 )
-from src.mag.infrastructure._consolidation_prompt import (
-    CONSOLIDATION_SYSTEM_PROMPT,
-    build_consolidation_user_message,
-)
+from src.mag.infrastructure._consolidation_prompt import CONSOLIDATION_SYSTEM_PROMPT
 from src.mag.infrastructure._graph_write_safety import best_effort_graph_write
-from src.mag.infrastructure._llm_json import strip_markdown_fence
+from src.mag.infrastructure._llm_json import format_episodes_for_reflection, strip_markdown_fence
 from src.rag.domain.ports import ChatModel, EmbeddingModel
 
 # Same reasoning as OllamaJudge.score() (#149): complete() has no forced
@@ -101,12 +98,9 @@ class ConsolidateEpisodes:
         return written
 
     async def _reflect(self, episodes: list[EpisodicMemory]) -> list[dict[str, Any]]:
-        episode_dicts = [
-            {"content": e.content, "timestamp": e.timestamp.isoformat()} for e in episodes
-        ]
         prompt = (
             f"{CONSOLIDATION_SYSTEM_PROMPT}\n\n"
-            f"{build_consolidation_user_message(episode_dicts)}"
+            f"{format_episodes_for_reflection(episodes)}"
         )
         for _ in range(_MAX_REFLECTION_ATTEMPTS):
             response = await self._chat_model.complete(prompt)

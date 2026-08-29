@@ -181,12 +181,35 @@ async def test_execute_retries_when_workflow_is_not_an_object():
     assert len(result) == 1
 
 
+async def test_execute_retries_when_workflow_is_empty():
+    responses = [
+        json.dumps(
+            {"procedures": [{"task_pattern": "deploy", "workflow": {}, "success_rate": 1.0}]}
+        ),
+        _VALID_RESPONSE,
+    ]
+    chat_model = _ScriptedChatModel(responses)
+    use_case = _use_case(FakeProceduralMemoryRepository(), chat_model)
+    episodes = [_episode({"input": "deploy", "outcome": "success"})]
+
+    result = await use_case.execute(
+        tenant_id=uuid.uuid4(), user_id=uuid.uuid4(), episodes=episodes
+    )
+
+    assert chat_model.call_count == 2
+    assert len(result) == 1
+
+
 async def test_execute_retries_when_success_rate_is_not_a_number():
     responses = [
         json.dumps(
             {
                 "procedures": [
-                    {"task_pattern": "deploy", "workflow": {}, "success_rate": "high"}
+                    {
+                        "task_pattern": "deploy",
+                        "workflow": {"steps": ["a"]},
+                        "success_rate": "high",
+                    }
                 ]
             }
         ),
@@ -209,7 +232,11 @@ async def test_execute_retries_when_success_rate_is_a_bool():
     # slip past a naive isinstance(x, (int, float)) check.
     responses = [
         json.dumps(
-            {"procedures": [{"task_pattern": "deploy", "workflow": {}, "success_rate": True}]}
+            {
+                "procedures": [
+                    {"task_pattern": "deploy", "workflow": {"steps": ["a"]}, "success_rate": True}
+                ]
+            }
         ),
         _VALID_RESPONSE,
     ]
@@ -228,7 +255,11 @@ async def test_execute_retries_when_success_rate_is_a_bool():
 async def test_execute_retries_when_success_rate_is_out_of_range():
     responses = [
         json.dumps(
-            {"procedures": [{"task_pattern": "deploy", "workflow": {}, "success_rate": 1.5}]}
+            {
+                "procedures": [
+                    {"task_pattern": "deploy", "workflow": {"steps": ["a"]}, "success_rate": 1.5}
+                ]
+            }
         ),
         _VALID_RESPONSE,
     ]

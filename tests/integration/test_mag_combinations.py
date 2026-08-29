@@ -138,14 +138,24 @@ async def test_living_agent_semantic_knowledge_compounds_across_sessions(
     session_1_summary = [(f.fact_key, f.fact_value) for f in facts_from_session_1]
     print(f"\nLiving Agent, session 1 facts (real Ollama, {_MODEL_ID}): {session_1_summary}")
     assert len(facts_from_session_1) >= 1
+    session_1_fact_keys = {f.fact_key for f in facts_from_session_1}
 
     session_2 = await _create_session(db_session, tenant_id, user_id)
     await set_tenant_context(db_session, tenant_id)
+    # A second, DIFFERENT self-reported preference -- not a request/
+    # recommendation exchange like an earlier draft of this fixture used
+    # (review-caught: that phrasing gives the consolidation prompt's
+    # user-preference extraction criterion nothing to extract, matching
+    # the exact bug the session-1 fixture above was already fixed for,
+    # meaning facts_from_session_2 would silently stay empty every run).
+    # This tests the *other* half of the archetype's compounding claim
+    # the loose version of this test never checked: a genuinely NEW
+    # fact_key appearing in session 2, not just an old one surviving it.
     await capture.execute(
         tenant_id, user_id, session_2,
         {
-            "input": "I need help structuring a REST API.",
-            "output": "FastAPI is a solid choice for that.",
+            "input": "I always deploy my side projects to AWS -- it's just what I know best.",
+            "output": "Good to know, I'll keep AWS in mind for infrastructure suggestions.",
         },
     )
     await db_session.commit()
@@ -155,16 +165,23 @@ async def test_living_agent_semantic_knowledge_compounds_across_sessions(
     await db_session.commit()
     session_2_summary = [(f.fact_key, f.fact_value) for f in facts_from_session_2]
     print(f"Living Agent, session 2 facts (real Ollama, {_MODEL_ID}): {session_2_summary}")
+    # New knowledge accumulating -- the spec's first, previously-unasserted
+    # half of the compounding claim.
+    assert len(facts_from_session_2) >= 1
 
-    # The loop's own claim: knowledge from session 1 must still be
+    # The loop's sharper claim: knowledge from session 1 must still be
     # retrievable after session 2's own, entirely separate consolidation
     # pass has run -- not overwritten, not lost, genuinely compounding.
+    # Tied back to session 1's own fact_key identity, not a bare "python"
+    # substring match -- a substring match can't distinguish "session 1's
+    # fact survived" from "session 2 independently produced some other
+    # fact that happens to contain the same substring" (review-caught).
     await set_tenant_context(db_session, tenant_id)
     all_facts = await fact_repo.search_by_similarity(
         embedding_model.embed("What programming language does the user prefer?"),
         user_id, tenant_id, top_k=10,
     )
-    assert any("python" in f.fact.fact_value.lower() for f in all_facts)
+    assert any(f.fact.fact_key in session_1_fact_keys for f in all_facts)
     await graph.close()
 
 
@@ -301,6 +318,110 @@ async def test_self_improving_agent_extracts_a_procedure_from_a_repeated_task_pa
     procedure = procedures[0]
     assert "deploy" in procedure.task_pattern.lower()
     assert procedure.workflow  # non-empty -- real steps were extracted, not a blank object
+    # Ties the extracted workflow back to the ACTUAL repeated steps, not
+    # just any non-empty object -- both fixture episodes above share the
+    # same three-tool workflow (Docker/Gunicorn/Nginx), so a genuine
+    # two-episode synthesis should recognizably reflect at least one of
+    # them (review-caught: generic non-emptiness alone can't distinguish
+    # correct two-episode pattern recognition from a hypothetical bug
+    # that only reflected on one episode, given how similar the two
+    # fixture episodes already are).
+    workflow_text = str(procedure.workflow).lower()
+    assert any(tool in workflow_text for tool in ("docker", "gunicorn", "nginx"))
+    # The system prompt only extracts a pattern when every occurrence
+    # succeeded -- both fixture episodes above report outcome="success".
+    assert procedure.success_rate > 0.0
+    await graph.close()
+
+
+async def test_consolidate_procedures_composes_safely_with_consolidate_episodes_over_the_same_batch(
+    db_session, qdrant_url, embedding_model, neo4j_url
+):
+    # Batch G's adversarial review caught a HIGH-severity composition
+    # hazard the design spec only vaguely gestured at (line 33: "running
+    # both ConsolidateEpisodes and ConsolidateProcedures over the same
+    # unconsolidated episode batch is the caller's own composition"):
+    # ConsolidateEpisodes.execute() unconditionally marks every episode it
+    # fetches as consolidated, regardless of whether a fact was extracted.
+    # A caller that builds ConsolidateProcedures's episode batch by calling
+    # get_unconsolidated_by_session AFTER ConsolidateEpisodes has already
+    # run over that window gets [] back -- silently, no exception, no log
+    # -- and a genuinely repeated task pattern never gets extracted into a
+    # procedure. This test proves both halves: that the hazard is real
+    # (get_unconsolidated_by_session really does return [] after
+    # ConsolidateEpisodes runs), and that the documented fix -- fetch the
+    # batch ONCE via the unfiltered get_by_session, independent of
+    # whichever order ConsolidateEpisodes runs in -- actually works
+    # end-to-end against real infrastructure and a live model, not just on
+    # paper.
+    tenant_id = uuid.uuid4()
+    user_id, session_id = await _create_user_and_session(db_session, tenant_id)
+    episode_repo = PostgresEpisodicMemoryRepository(db_session)
+    episode_index = QdrantEpisodicMemoryIndex(qdrant_url)
+    await episode_index.ensure_collection()
+    fact_repo = PostgresSemanticMemoryRepository(db_session)
+    fact_index = QdrantSemanticMemoryIndex(qdrant_url)
+    await fact_index.ensure_collection()
+    procedures_repo = PostgresProceduralMemoryRepository(db_session)
+    graph = await _memory_graph_repository(neo4j_url)
+    chat_model = OllamaChatModel(client=ollama.AsyncClient(), model_id=_MODEL_ID)
+    capture = CaptureEpisode(episode_repo, episode_index, embedding_model, chat_model, graph)
+    consolidate_episodes = ConsolidateEpisodes(
+        episode_repo, fact_repo, fact_index, embedding_model, chat_model, graph
+    )
+    consolidate_procedures = ConsolidateProcedures(procedures_repo, chat_model)
+
+    await set_tenant_context(db_session, tenant_id)
+    await capture.execute(
+        tenant_id, user_id, session_id,
+        {
+            "input": "Deploy my FastAPI app to production",
+            "output": "Deployed successfully.",
+            "outcome": "success",
+            "workflow": ["containerize with Docker", "run under Gunicorn", "front with Nginx"],
+        },
+    )
+    await capture.execute(
+        tenant_id, user_id, session_id,
+        {
+            "input": "Deploy the new FastAPI service the same way as last time",
+            "output": "Deployed successfully using the same approach.",
+            "outcome": "success",
+            "workflow": ["containerize with Docker", "run under Gunicorn", "front with Nginx"],
+        },
+    )
+    await db_session.commit()
+
+    # The safe pattern: fetch the batch ONCE via the UNFILTERED
+    # get_by_session (no consolidated_at predicate) and hand that same
+    # list to ConsolidateProcedures -- never get_unconsolidated_by_session
+    # for this purpose, since ConsolidateEpisodes below will flip
+    # consolidated_at on both episodes regardless of call order.
+    await set_tenant_context(db_session, tenant_id)
+    episodes_for_procedures = await episode_repo.get_by_session(session_id, tenant_id)
+    assert len(episodes_for_procedures) == 2
+
+    facts = await consolidate_episodes.execute(tenant_id, user_id, session_id)
+    await db_session.commit()
+    print(f"\nComposition safety, facts from ConsolidateEpisodes: {len(facts)}")
+
+    # Confirms the hazard is real: the natural, obviously-named fetch
+    # method is now poisoned for this session.
+    await set_tenant_context(db_session, tenant_id)
+    poisoned = await episode_repo.get_unconsolidated_by_session(session_id, tenant_id, limit=10)
+    assert poisoned == []
+
+    # ...but ConsolidateProcedures, given the batch captured via
+    # get_by_session BEFORE ConsolidateEpisodes ran, still extracts the
+    # procedure correctly -- the safe composition pattern actually works.
+    procedures = await consolidate_procedures.execute(
+        tenant_id, user_id, episodes_for_procedures
+    )
+    await db_session.commit()
+    procedures_summary = [(p.task_pattern, p.workflow) for p in procedures]
+    print(f"Composition safety, procedures (real Ollama, {_MODEL_ID}): {procedures_summary}")
+    assert len(procedures) >= 1
+    assert "deploy" in procedures[0].task_pattern.lower()
     await graph.close()
 
 

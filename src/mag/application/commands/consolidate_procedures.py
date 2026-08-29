@@ -5,10 +5,9 @@ from typing import Any
 from src.mag.application.commands.record_procedure import RecordProcedure
 from src.mag.domain.entities import EpisodicMemory, ProceduralMemory
 from src.mag.domain.ports import ProceduralMemoryRepository
-from src.mag.infrastructure._llm_json import strip_markdown_fence
+from src.mag.infrastructure._llm_json import format_episodes_for_reflection, strip_markdown_fence
 from src.mag.infrastructure._procedure_consolidation_prompt import (
     PROCEDURE_CONSOLIDATION_SYSTEM_PROMPT,
-    build_procedure_consolidation_user_message,
 )
 from src.rag.domain.ports import ChatModel
 
@@ -41,6 +40,27 @@ class ConsolidateProcedures:
     # shape), rather than this command silently depending on
     # ConsolidateEpisodes not having already flipped consolidated_at on
     # the same batch.
+    #
+    # THE COMPOSITION HAZARD (Batch G adversarial review, HIGH severity):
+    # ConsolidateEpisodes.execute() unconditionally calls mark_consolidated
+    # on every episode it fetches, regardless of whether a fact was
+    # extracted. If a caller composing the two commands builds this
+    # method's episode batch by calling
+    # EpisodicMemoryRepository.get_unconsolidated_by_session AFTER
+    # ConsolidateEpisodes has already run over that window, the query
+    # returns [] and this command silently returns [] right back (no
+    # exception, no log) -- permanently skipping procedure extraction for
+    # that batch. THE FIX: build the batch via the UNFILTERED
+    # get_by_session (no consolidated_at predicate) instead of
+    # get_unconsolidated_by_session whenever the same window is also
+    # going through ConsolidateEpisodes -- get_by_session's result is
+    # unaffected by mark_consolidated, so the fetch order relative to
+    # ConsolidateEpisodes stops mattering. See
+    # tests/integration/test_mag_combinations.py's
+    # test_consolidate_procedures_composes_safely_with_consolidate_episodes_over_the_same_batch
+    # for this pattern proven end-to-end, including a direct demonstration
+    # that get_unconsolidated_by_session really does starve after
+    # ConsolidateEpisodes runs.
     def __init__(
         self,
         procedural_memory_repository: ProceduralMemoryRepository,
@@ -70,12 +90,9 @@ class ConsolidateProcedures:
         return written
 
     async def _reflect(self, episodes: list[EpisodicMemory]) -> list[dict[str, Any]]:
-        episode_dicts = [
-            {"content": e.content, "timestamp": e.timestamp.isoformat()} for e in episodes
-        ]
         prompt = (
             f"{PROCEDURE_CONSOLIDATION_SYSTEM_PROMPT}\n\n"
-            f"{build_procedure_consolidation_user_message(episode_dicts)}"
+            f"{format_episodes_for_reflection(episodes)}"
         )
         for _ in range(_MAX_REFLECTION_ATTEMPTS):
             response = await self._chat_model.complete(prompt)
@@ -106,12 +123,24 @@ def _validate_and_dedupe_procedures(procedures: list[Any]) -> list[dict[str, Any
         workflow = item["workflow"]
         if not isinstance(task_pattern, str) or not task_pattern.strip():
             raise TypeError("task_pattern must be a non-empty string")
-        if not isinstance(workflow, dict):
-            raise TypeError("workflow must be a JSON object")
+        # Non-empty, not just the right type -- an LLM confidently naming
+        # a repeated task_pattern while returning workflow={} would
+        # otherwise persist a stepless "procedure" with no error anywhere
+        # downstream (RecordProcedure, the frozen ProceduralMemory
+        # dataclass, and the Alembic schema all accept {} silently),
+        # defeating the whole point of extracting a reusable workflow.
+        if not isinstance(workflow, dict) or not workflow:
+            raise TypeError("workflow must be a non-empty JSON object")
         task_pattern = task_pattern.strip()
         # bool is a subclass of int in Python -- same guard
         # CaptureEpisode's salience validator and ConsolidateEpisodes's
         # confidence validator already use, applied here to success_rate.
+        # Defaults to 1.0 (not RecordProcedure's own bare-call default of
+        # 0.0) because this default only fires when the LLM omits the
+        # field entirely, and the system prompt's own extraction
+        # criterion requires a successful outcome each occurrence for a
+        # pattern to be extracted at all -- mirrors ConsolidateEpisodes's
+        # identically-reasoned confidence-defaults-to-1.0 idiom.
         raw_success_rate = item.get("success_rate", 1.0)
         if isinstance(raw_success_rate, bool) or not isinstance(raw_success_rate, (int, float)):
             raise TypeError("success_rate must be a number")
