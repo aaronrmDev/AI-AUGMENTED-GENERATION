@@ -19,13 +19,13 @@ class TemporalRetrieval:
         if within is not None:
             start, end = within
             episodes = await self._episodes.get_by_session_in_window(
-                session_id, tenant_id, start, end
+                session_id, tenant_id, start, end, top_k
             )
             # Membership in the window is binary -- see
             # get_by_session_in_window's docstring -- so every match scores
             # the same rather than inventing a graded "how in-window" signal
             # this system has no basis for.
-            return [ScoredEpisode(episode=e, score=1.0) for e in episodes[:top_k]]
+            return [ScoredEpisode(episode=e, score=1.0) for e in episodes]
 
         episodes = await self._episodes.get_recent_by_session(
             session_id, tenant_id, limit=top_k

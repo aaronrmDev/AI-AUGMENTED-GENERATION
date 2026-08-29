@@ -131,3 +131,75 @@ async def test_a_real_fusion_pass_ranks_a_causally_relevant_recent_episode_above
     assert len(result) == 2
     assert result[0].episode.id == failure_episode.id
     assert result[0].score > result[1].score
+
+
+async def test_a_real_fusion_pass_isolates_the_causal_leg_via_weights(
+    db_session, qdrant_url, embedding_model
+):
+    # The test above proves the full pipeline agrees on the obvious answer,
+    # but a Batch C review caught that it can't actually tell whether the
+    # real Ollama causal call is doing meaningful work: salience, recency,
+    # semantic similarity, and entity match ALL independently favor the same
+    # episode by a wide margin there, so causal's leg could silently fall
+    # back to its flat 0.0-for-everyone failure mode (see
+    # retrieve_by_causal_relevance.py's exhausted-retry path) and the test
+    # would still pass. This test isolates causal as the ONLY leg that can
+    # possibly differentiate the two episodes: identical salience_score,
+    # identical timestamp (so decay is identical too), and no
+    # query_embedding/entity given at all (so semantic/entity never run).
+    # weights zeroes out temporal and salience explicitly, so even though
+    # they still execute, only causal's real Ollama-produced score
+    # determines the fused ranking.
+    tenant_id = uuid.uuid4()
+    session_id = await _insert_user_and_session(db_session, tenant_id)
+    await set_tenant_context(db_session, tenant_id)
+
+    repo = PostgresEpisodicMemoryRepository(db_session)
+    index = QdrantEpisodicMemoryIndex(qdrant_url)
+    await index.ensure_collection()
+    now = datetime.now(UTC)
+
+    causal_content = {
+        "input": "deploy the payments service to production",
+        "reasoning": "ran the deploy script without checking the health endpoint first",
+        "output": "Traceback (most recent call last): ConnectionRefusedError: "
+        "database connection failed",
+        "outcome": "failure",
+    }
+    causal_episode = _episode(
+        session_id, causal_content, embedding_model.embed("irrelevant"),
+        timestamp=now, salience_score=0.5,
+    )
+
+    unrelated_content = {"input": "what are some good names for a goldfish", "output": "Bubbles"}
+    unrelated_episode = _episode(
+        session_id, unrelated_content, embedding_model.embed("irrelevant2"),
+        timestamp=now, salience_score=0.5,
+    )
+
+    await repo.save(causal_episode, tenant_id)
+    await repo.save(unrelated_episode, tenant_id)
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_id)
+    chat_model = OllamaChatModel(client=ollama.AsyncClient(), model_id=_MODEL_ID)
+    fusion = RecencyDecayFusionRetrieval(
+        episodic_memory_repository=repo, episodic_memory_index=index, chat_model=chat_model,
+    )
+
+    result = await fusion.execute(
+        tenant_id=tenant_id,
+        session_id=session_id,
+        top_k=2,
+        causal_query="why did it fail",
+        now=now,
+        weights={"temporal": 0.0, "salience": 0.0, "causal": 1.0},
+    )
+
+    print(
+        f"\nFusion causal-isolated (real Postgres+Ollama, {_MODEL_ID}): "
+        + ", ".join(f"{s.episode.content.get('outcome')}={s.score:.4f}" for s in result)
+    )
+    assert len(result) == 2
+    assert result[0].episode.id == causal_episode.id
+    assert result[0].score > result[1].score

@@ -262,3 +262,128 @@ async def test_search_by_similarity_only_returns_the_given_tenants_episodes(
     )
 
     assert {s.episode.id for s in result} == {episode_a.id}
+
+
+# Session-isolation coverage for the four MAG Batch C repository methods
+# below (get_by_session_in_window, get_recent_by_session,
+# get_by_session_ranked_by_salience, get_by_session_matching_entity). A
+# review caught that every existing integration test for these methods
+# (written in their own dedicated test_retrieve_by_*_query.py files)
+# populated exactly one session per tenant, so the WHERE session_id = ...
+# clause -- a plain application-level filter with no RLS backstop, unlike
+# tenant_id -- was never actually exercised against a second, sibling
+# session under the SAME tenant. These four tests close that gap directly
+# against the real repository.
+
+
+async def test_get_by_session_in_window_does_not_leak_a_sibling_sessions_episode(db_session):
+    tenant_id = uuid.uuid4()
+    session_a = await _insert_user_and_session(db_session, tenant_id)
+    session_b = await _insert_user_and_session(db_session, tenant_id)
+    await set_tenant_context(db_session, tenant_id)
+
+    repo = PostgresEpisodicMemoryRepository(db_session)
+    base = datetime.now(UTC)
+    episode_a = _episode(session_a, {"who": "a"}, [0.1] * 384, timestamp=base)
+    episode_b = _episode(session_b, {"who": "b"}, [0.1] * 384, timestamp=base)
+    await repo.save(episode_a, tenant_id)
+    await repo.save(episode_b, tenant_id)
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_id)
+    result = await repo.get_by_session_in_window(
+        session_a, tenant_id, base - timedelta(minutes=1), base + timedelta(minutes=1), top_k=10
+    )
+
+    assert [e.id for e in result] == [episode_a.id]
+
+
+async def test_get_recent_by_session_does_not_leak_a_sibling_sessions_episode(db_session):
+    tenant_id = uuid.uuid4()
+    session_a = await _insert_user_and_session(db_session, tenant_id)
+    session_b = await _insert_user_and_session(db_session, tenant_id)
+    await set_tenant_context(db_session, tenant_id)
+
+    repo = PostgresEpisodicMemoryRepository(db_session)
+    episode_a = _episode(session_a, {"who": "a"}, [0.1] * 384)
+    episode_b = _episode(session_b, {"who": "b"}, [0.1] * 384)
+    await repo.save(episode_a, tenant_id)
+    await repo.save(episode_b, tenant_id)
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_id)
+    result = await repo.get_recent_by_session(session_a, tenant_id, limit=10)
+
+    assert [e.id for e in result] == [episode_a.id]
+
+
+async def test_get_by_session_ranked_by_salience_does_not_leak_a_sibling_sessions_episode(
+    db_session,
+):
+    tenant_id = uuid.uuid4()
+    session_a = await _insert_user_and_session(db_session, tenant_id)
+    session_b = await _insert_user_and_session(db_session, tenant_id)
+    await set_tenant_context(db_session, tenant_id)
+
+    repo = PostgresEpisodicMemoryRepository(db_session)
+    episode_a = _episode(session_a, {"who": "a"}, [0.1] * 384, salience_score=0.2)
+    # Higher salience than episode_a, but in a different session -- must
+    # never outrank/appear in session_a's own ranked results.
+    episode_b = _episode(session_b, {"who": "b"}, [0.1] * 384, salience_score=0.9)
+    await repo.save(episode_a, tenant_id)
+    await repo.save(episode_b, tenant_id)
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_id)
+    result = await repo.get_by_session_ranked_by_salience(session_a, tenant_id, top_k=10)
+
+    assert [e.id for e in result] == [episode_a.id]
+
+
+async def test_get_by_session_matching_entity_does_not_leak_a_sibling_sessions_episode(
+    db_session,
+):
+    tenant_id = uuid.uuid4()
+    session_a = await _insert_user_and_session(db_session, tenant_id)
+    session_b = await _insert_user_and_session(db_session, tenant_id)
+    await set_tenant_context(db_session, tenant_id)
+
+    repo = PostgresEpisodicMemoryRepository(db_session)
+    episode_a = _episode(session_a, {"entities": ["acme-corp"]}, [0.1] * 384)
+    episode_b = _episode(session_b, {"entities": ["acme-corp"]}, [0.1] * 384)
+    await repo.save(episode_a, tenant_id)
+    await repo.save(episode_b, tenant_id)
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_id)
+    result = await repo.get_by_session_matching_entity(
+        session_a, tenant_id, entity="acme-corp", top_k=10
+    )
+
+    assert [e.id for e in result] == [episode_a.id]
+
+
+async def test_get_by_session_matching_entity_escapes_like_wildcard_metacharacters(db_session):
+    # Regression test: an earlier version built the ILIKE fallback pattern
+    # with unescaped %/_ from the caller-supplied entity string, so
+    # entity="v1.2_beta" matched any single character in place of the
+    # underscore (ILIKE's wildcard semantics) instead of only the literal
+    # string "v1.2_beta" -- a real, silent over-matching bug a review caught.
+    tenant_id = uuid.uuid4()
+    session_id = await _insert_user_and_session(db_session, tenant_id)
+    await set_tenant_context(db_session, tenant_id)
+
+    repo = PostgresEpisodicMemoryRepository(db_session)
+    # Contains "v1.2Xbeta" (X standing in for the underscore) but never the
+    # literal substring "v1.2_beta" -- would only match if _ were treated as
+    # a real ILIKE wildcard instead of a literal underscore.
+    decoy = _episode(session_id, {"input": "shipped v1.2Xbeta to staging"}, [0.1] * 384)
+    await repo.save(decoy, tenant_id)
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_id)
+    result = await repo.get_by_session_matching_entity(
+        session_id, tenant_id, entity="v1.2_beta", top_k=10
+    )
+
+    assert result == []

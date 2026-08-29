@@ -70,7 +70,10 @@ async def test_execute_dual_writes_to_real_postgres_and_qdrant(
     assert from_postgres[0].content == content
 
     from_qdrant = await index.search(
-        query_embedding=episode.embedding, tenant_id=tenant_id, top_k=5
+        query_embedding=episode.embedding,
+        tenant_id=tenant_id,
+        session_id=session_id,
+        top_k=5,
     )
     assert [s.episode.id for s in from_qdrant] == [episode.id]
     # Not a dedicated live-measurement of the salience score itself (see

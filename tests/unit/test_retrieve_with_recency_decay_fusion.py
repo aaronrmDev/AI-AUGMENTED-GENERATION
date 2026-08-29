@@ -1,6 +1,8 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from src.mag.application.queries.retrieve_with_recency_decay_fusion import (
     RecencyDecayFusionRetrieval,
 )
@@ -29,7 +31,11 @@ class _FakeEpisodicMemoryIndex(EpisodicMemoryIndex):
         raise NotImplementedError
 
     async def search(
-        self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
+        self,
+        query_embedding: list[float],
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        top_k: int,
     ) -> list[ScoredEpisode]:
         self.search_called = True
         return self._results[:top_k]
@@ -241,3 +247,32 @@ async def test_a_flat_score_distribution_within_one_strategy_normalizes_to_full_
 
     assert len(result) == 2
     assert all(s.score > 0.0 for s in result)
+
+
+async def test_a_zero_decay_half_life_raises_instead_of_dividing_by_zero():
+    # Regression test: _recency_decay's age_hours / half_life_hours division
+    # raised a bare ZeroDivisionError with no context when
+    # decay_half_life_hours=0.0 was passed straight through -- a review
+    # caught this deep in a private helper. Rejected explicitly at the entry
+    # point instead, with a message that says what's actually wrong.
+    repo = FakeEpisodicMemoryRepository()
+
+    with pytest.raises(ValueError, match="decay_half_life_hours must be positive"):
+        await _fusion(repo).execute(
+            tenant_id=uuid.uuid4(),
+            session_id=uuid.uuid4(),
+            top_k=5,
+            decay_half_life_hours=0.0,
+        )
+
+
+async def test_a_negative_decay_half_life_raises_instead_of_inverting_the_curve():
+    repo = FakeEpisodicMemoryRepository()
+
+    with pytest.raises(ValueError, match="decay_half_life_hours must be positive"):
+        await _fusion(repo).execute(
+            tenant_id=uuid.uuid4(),
+            session_id=uuid.uuid4(),
+            top_k=5,
+            decay_half_life_hours=-24.0,
+        )

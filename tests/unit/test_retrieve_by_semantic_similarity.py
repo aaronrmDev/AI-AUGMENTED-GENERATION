@@ -13,7 +13,7 @@ class _FakeEpisodicMemoryIndex(EpisodicMemoryIndex):
     # test_capture_episode.py's identical convention for the same port.
     def __init__(self, results: list[ScoredEpisode]) -> None:
         self._results = results
-        self.last_call: tuple[list[float], uuid.UUID, int] | None = None
+        self.last_call: tuple[list[float], uuid.UUID, uuid.UUID, int] | None = None
 
     async def ensure_collection(self) -> None:
         pass
@@ -22,9 +22,13 @@ class _FakeEpisodicMemoryIndex(EpisodicMemoryIndex):
         raise NotImplementedError
 
     async def search(
-        self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
+        self,
+        query_embedding: list[float],
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        top_k: int,
     ) -> list[ScoredEpisode]:
-        self.last_call = (query_embedding, tenant_id, top_k)
+        self.last_call = (query_embedding, tenant_id, session_id, top_k)
         return self._results[:top_k]
 
 
@@ -43,21 +47,22 @@ async def test_execute_delegates_to_the_index_search_and_returns_its_scored_resu
     results = [_scored_episode(0.9), _scored_episode(0.5)]
     index = _FakeEpisodicMemoryIndex(results)
     tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
     query_embedding = [0.2] * 384
 
     result = await SemanticSimilarityRetrieval(index).execute(
-        tenant_id=tenant_id, query_embedding=query_embedding, top_k=2
+        tenant_id=tenant_id, session_id=session_id, query_embedding=query_embedding, top_k=2
     )
 
     assert result == results
-    assert index.last_call == (query_embedding, tenant_id, 2)
+    assert index.last_call == (query_embedding, tenant_id, session_id, 2)
 
 
 async def test_execute_returns_an_empty_list_when_the_index_has_no_matches():
     index = _FakeEpisodicMemoryIndex([])
 
     result = await SemanticSimilarityRetrieval(index).execute(
-        tenant_id=uuid.uuid4(), query_embedding=[0.1] * 384, top_k=5
+        tenant_id=uuid.uuid4(), session_id=uuid.uuid4(), query_embedding=[0.1] * 384, top_k=5
     )
 
     assert result == []

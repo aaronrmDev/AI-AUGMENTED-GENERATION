@@ -81,11 +81,16 @@ class FakeEpisodicMemoryRepository(EpisodicMemoryRepository):
         return scored[:top_k]
 
     async def get_by_session_in_window(
-        self, session_id: uuid.UUID, tenant_id: uuid.UUID, start: datetime, end: datetime
+        self,
+        session_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        start: datetime,
+        end: datetime,
+        top_k: int,
     ) -> list[EpisodicMemory]:
         episodes = self._by_session.get(session_id, [])
         matches = [e for e in episodes if start <= e.timestamp <= end]
-        return sorted(matches, key=lambda e: e.timestamp, reverse=True)
+        return sorted(matches, key=lambda e: e.timestamp, reverse=True)[:top_k]
 
     async def get_recent_by_session(
         self, session_id: uuid.UUID, tenant_id: uuid.UUID, limit: int
@@ -103,13 +108,20 @@ class FakeEpisodicMemoryRepository(EpisodicMemoryRepository):
         self, session_id: uuid.UUID, tenant_id: uuid.UUID, entity: str, top_k: int
     ) -> list[EpisodicMemory]:
         episodes = self._by_session.get(session_id, [])
-        needle = entity.lower()
 
         def _matches(e: EpisodicMemory) -> bool:
-            structured = [str(x).lower() for x in e.content.get("entities", [])]
-            if needle in structured:
+            # Case-sensitive here, matching real Postgres's JSONB containment
+            # (content->'entities' @> to_jsonb(ARRAY[:entity]::text[])),
+            # which is exact-match, not case-folded -- only the ILIKE
+            # substring fallback below is genuinely case-insensitive in the
+            # real backend. A Batch C review caught an earlier version of
+            # this fake lowercasing BOTH paths, which could make a
+            # structured-match unit test pass here while the same case
+            # mismatch would fail against real Postgres.
+            structured = [str(x) for x in e.content.get("entities", [])]
+            if entity in structured:
                 return True
-            return needle in str(e.content).lower()
+            return entity.lower() in str(e.content).lower()
 
         matches = [e for e in episodes if _matches(e)]
         return sorted(matches, key=lambda e: e.timestamp, reverse=True)[:top_k]

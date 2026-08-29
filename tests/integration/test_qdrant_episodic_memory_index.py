@@ -7,10 +7,12 @@ from src.mag.domain.entities import EpisodicMemory
 from src.mag.infrastructure.qdrant_episodic_memory_index import QdrantEpisodicMemoryIndex
 
 
-def _episode(content: dict, embedding: list[float]) -> EpisodicMemory:
+def _episode(
+    content: dict, embedding: list[float], session_id: uuid.UUID | None = None
+) -> EpisodicMemory:
     return EpisodicMemory(
         id=uuid.uuid4(),
-        session_id=uuid.uuid4(),
+        session_id=session_id or uuid.uuid4(),
         content=content,
         embedding=embedding,
         timestamp=datetime.now(UTC),
@@ -26,7 +28,12 @@ async def test_upsert_then_search_finds_the_episode(qdrant_url):
     episode = _episode({"input": "hello", "output": "hi there"}, [0.1] * 384)
     await index.upsert(episode, tenant_id)
 
-    results = await index.search(query_embedding=[0.1] * 384, tenant_id=tenant_id, top_k=5)
+    results = await index.search(
+        query_embedding=[0.1] * 384,
+        tenant_id=tenant_id,
+        session_id=episode.session_id,
+        top_k=5,
+    )
 
     assert len(results) == 1
     found = results[0].episode
@@ -55,7 +62,12 @@ async def test_search_returns_an_l2_normalized_embedding_not_the_raw_upserted_on
     episode = _episode({"input": "hello"}, raw_embedding)
     await index.upsert(episode, tenant_id)
 
-    results = await index.search(query_embedding=raw_embedding, tenant_id=tenant_id, top_k=1)
+    results = await index.search(
+        query_embedding=raw_embedding,
+        tenant_id=tenant_id,
+        session_id=episode.session_id,
+        top_k=1,
+    )
 
     assert len(results) == 1
     norm = sum(x * x for x in raw_embedding) ** 0.5
@@ -69,12 +81,43 @@ async def test_search_never_returns_another_tenants_episodes(qdrant_url):
 
     tenant_a = uuid.uuid4()
     tenant_b = uuid.uuid4()
-    episode_a = _episode({"who": "a"}, [0.2] * 384)
-    episode_b = _episode({"who": "b"}, [0.2] * 384)
+    # Same session_id under both tenants, isolating tenant_id as the only
+    # variable this test probes -- session isolation is a separate test below.
+    session_id = uuid.uuid4()
+    episode_a = _episode({"who": "a"}, [0.2] * 384, session_id=session_id)
+    episode_b = _episode({"who": "b"}, [0.2] * 384, session_id=session_id)
     await index.upsert(episode_a, tenant_a)
     await index.upsert(episode_b, tenant_b)
 
-    results = await index.search(query_embedding=[0.2] * 384, tenant_id=tenant_a, top_k=10)
+    results = await index.search(
+        query_embedding=[0.2] * 384, tenant_id=tenant_a, session_id=session_id, top_k=10
+    )
+
+    ids = {s.episode.id for s in results}
+    assert episode_a.id in ids
+    assert episode_b.id not in ids
+
+
+async def test_search_never_returns_another_sessions_episodes_within_the_same_tenant(qdrant_url):
+    # Regression test: an earlier version of search() filtered only by
+    # tenant_id, so SemanticSimilarityRetrieval (the sole caller of this
+    # method) silently returned another session's episodes within the same
+    # tenant -- a real cross-session leak a Batch C review caught, directly
+    # contradicting this batch's own "no cross-session retrieval" design.
+    index = QdrantEpisodicMemoryIndex(qdrant_url)
+    await index.ensure_collection()
+
+    tenant_id = uuid.uuid4()
+    session_a = uuid.uuid4()
+    session_b = uuid.uuid4()
+    episode_a = _episode({"who": "a"}, [0.4] * 384, session_id=session_a)
+    episode_b = _episode({"who": "b"}, [0.4] * 384, session_id=session_b)
+    await index.upsert(episode_a, tenant_id)
+    await index.upsert(episode_b, tenant_id)
+
+    results = await index.search(
+        query_embedding=[0.4] * 384, tenant_id=tenant_id, session_id=session_a, top_k=10
+    )
 
     ids = {s.episode.id for s in results}
     assert episode_a.id in ids

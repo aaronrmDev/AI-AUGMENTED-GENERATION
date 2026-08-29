@@ -16,6 +16,10 @@ class SemanticSimilarityRetrieval:
         self._index = episodic_memory_index
 
     async def execute(
-        self, tenant_id: uuid.UUID, query_embedding: list[float], top_k: int
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        query_embedding: list[float],
+        top_k: int,
     ) -> list[ScoredEpisode]:
-        return await self._index.search(query_embedding, tenant_id, top_k)
+        return await self._index.search(query_embedding, tenant_id, session_id, top_k)

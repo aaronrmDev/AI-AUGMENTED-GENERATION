@@ -46,7 +46,7 @@ class QdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
         )
 
     async def search(
-        self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
+        self, query_embedding: list[float], tenant_id: uuid.UUID, session_id: uuid.UUID, top_k: int
     ) -> list[ScoredEpisode]:
         # Design choice the next batch's retrieval strategies build on: this
         # index returns full EpisodicMemory objects reconstructed from payload
@@ -55,6 +55,14 @@ class QdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
         # that needs the whole episode never has to round-trip back to
         # Postgres just to get it. A caller that only needs a fast existence
         # or ranking check can ignore the extra fields.
+        #
+        # session_id is filtered here, not just tenant_id: a Batch C review
+        # caught SemanticSimilarityRetrieval (the sole caller of this method)
+        # returning another session's episodes within the same tenant, which
+        # directly contradicted this batch's own design spec ("All five
+        # non-fusion strategies scope their candidate set to a single
+        # session_id"). Fixed at the source rather than filtering results
+        # after the fact, so a caller can't accidentally skip the scoping.
         response = await self._client.query_points(
             collection_name=_COLLECTION_NAME,
             query=query_embedding,
@@ -62,7 +70,10 @@ class QdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
                 must=[
                     qmodels.FieldCondition(
                         key="tenant_id", match=qmodels.MatchValue(value=str(tenant_id))
-                    )
+                    ),
+                    qmodels.FieldCondition(
+                        key="session_id", match=qmodels.MatchValue(value=str(session_id))
+                    ),
                 ]
             ),
             limit=top_k,

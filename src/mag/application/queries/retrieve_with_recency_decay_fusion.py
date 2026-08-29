@@ -53,6 +53,18 @@ class RecencyDecayFusionRetrieval:
         decay_half_life_hours: float = 24.0,
         now: datetime | None = None,
     ) -> list[ScoredEpisode]:
+        if decay_half_life_hours <= 0:
+            # A zero half-life divides by zero inside _recency_decay; a
+            # negative one silently inverts the curve so OLDER episodes
+            # score higher, the opposite of "recency decay." Rejected here,
+            # at the entry point, rather than left to fail deep inside a
+            # helper with a confusing traceback -- inconsistent with this
+            # batch's "retrieval-time failures degrade, they don't crash the
+            # caller" philosophy elsewhere (CausalRetrieval, CaptureEpisode)
+            # only in that those are LLM-response failures the caller can't
+            # control; a caller-supplied invalid parameter is a programming
+            # error and should fail loudly and immediately instead.
+            raise ValueError("decay_half_life_hours must be positive")
         now = now or datetime.now(UTC)
         fetch_k = max(top_k * _FETCH_MULTIPLIER, _MIN_FETCH_K)
 
@@ -72,7 +84,10 @@ class RecencyDecayFusionRetrieval:
         }
         if query_embedding is not None:
             coroutines["semantic"] = self._semantic.execute(
-                tenant_id=tenant_id, query_embedding=query_embedding, top_k=fetch_k
+                tenant_id=tenant_id,
+                session_id=session_id,
+                query_embedding=query_embedding,
+                top_k=fetch_k,
             )
         if causal_query is not None:
             coroutines["causal"] = self._causal.execute(

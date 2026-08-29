@@ -59,7 +59,15 @@ class CaptureEpisode:
             response = await self._chat_model.complete(prompt)
             try:
                 parsed = json.loads(strip_markdown_fence(response))
-                score = float(parsed["salience_score"])
+                raw_score = parsed["salience_score"]
+                # bool is a subclass of int in Python, so isinstance(True, (int,
+                # float)) is True and float(True) == 1.0 -- without this guard a
+                # model returning {"salience_score": true} would silently pass
+                # the range check as a maximal score, on the first attempt, with
+                # no retry. Same guard CausalRetrieval's _validate_scores uses.
+                if isinstance(raw_score, bool) or not isinstance(raw_score, (int, float)):
+                    raise TypeError("salience_score must be a number")
+                score = float(raw_score)
                 if not (0.0 <= score <= 1.0):
                     raise ValueError("salience_score out of [0.0, 1.0] range")
                 return score

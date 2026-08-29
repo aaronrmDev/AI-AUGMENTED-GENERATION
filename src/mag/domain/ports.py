@@ -63,12 +63,19 @@ class EpisodicMemoryRepository(ABC):
 
     @abstractmethod
     async def get_by_session_in_window(
-        self, session_id: uuid.UUID, tenant_id: uuid.UUID, start: datetime, end: datetime
+        self,
+        session_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        start: datetime,
+        end: datetime,
+        top_k: int,
     ) -> list[EpisodicMemory]:
-        """Episodes in [start, end], newest first. Used by temporal
-        retrieval when the caller supplies an explicit window; membership is
-        binary (in the window or not), so callers score every result the
-        same way rather than reading a graded signal out of this."""
+        """Episodes in [start, end], newest first, LIMIT top_k -- pushed down
+        to SQL like every sibling method here, not truncated in Python after
+        an unbounded fetch (a Batch C review caught the original version
+        doing exactly that). Membership is binary (in the window or not), so
+        callers score every result the same way rather than reading a graded
+        signal out of this."""
 
     @abstractmethod
     async def get_recent_by_session(
@@ -135,7 +142,11 @@ class EpisodicMemoryIndex(ABC):
 
     @abstractmethod
     async def search(
-        self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
+        self,
+        query_embedding: list[float],
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        top_k: int,
     ) -> list[ScoredEpisode]:
         """Returned episodes carry their real embedding -- this is the
         embedding-bearing read path (see EpisodicMemoryRepository above).
@@ -146,6 +157,11 @@ class EpisodicMemoryIndex(ABC):
         test_qdrant_semantic_memory_index.py's regression test for the
         sibling index). Same direction, unit length -- correct for
         similarity comparisons, just not the original values.
+
+        Scoped to session_id as well as tenant_id -- a Batch C review caught
+        an earlier version of this method (tenant_id-only) returning another
+        session's episodes within the same tenant to SemanticSimilarityRetrieval,
+        contradicting this batch's own "no cross-session retrieval" design.
 
         consolidated_at is ALWAYS None from this path, regardless of the
         real value in Postgres -- upsert() doesn't write it to the payload

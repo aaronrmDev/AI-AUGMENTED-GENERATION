@@ -23,7 +23,11 @@ class FakeQdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
         self.upserted.append((episode, tenant_id))
 
     async def search(
-        self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
+        self,
+        query_embedding: list[float],
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        top_k: int,
     ) -> list[ScoredEpisode]:
         return []
 
@@ -183,6 +187,24 @@ async def test_execute_defaults_salience_score_to_zero_when_out_of_range():
     repo = FakeEpisodicMemoryRepository()
     index = FakeQdrantEpisodicMemoryIndex()
     chat_model = FakeChatModel(response='{"salience_score": 1.5}')
+
+    episode = await _use_case(repo, index, chat_model=chat_model).execute(
+        tenant_id=uuid.uuid4(), session_id=uuid.uuid4(), content={"input": "hi"}
+    )
+
+    assert episode.salience_score == 0.0
+
+
+async def test_execute_defaults_salience_score_to_zero_when_the_model_returns_a_boolean():
+    # Regression test: bool is a subclass of int in Python, so
+    # float(True) == 1.0 -- without an explicit isinstance(x, bool) guard, a
+    # model returning {"salience_score": true} would silently pass the
+    # 0.0-1.0 range check as a maximal score on the first attempt, with no
+    # retry. A review caught this gap (present in retrieve_by_causal_
+    # relevance.py's validator but missing here) before it shipped.
+    repo = FakeEpisodicMemoryRepository()
+    index = FakeQdrantEpisodicMemoryIndex()
+    chat_model = FakeChatModel(response='{"salience_score": true}')
 
     episode = await _use_case(repo, index, chat_model=chat_model).execute(
         tenant_id=uuid.uuid4(), session_id=uuid.uuid4(), content={"input": "hi"}
