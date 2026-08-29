@@ -299,4 +299,13 @@ class MemoryGraphRepository(ABC):
         edge to follow), and returns every node reached with activation
         decay_factor ** hops, keeping the MAX activation for a node reached
         by more than one path (not summed -- see the design spec for why).
-        Nodes at or below activation_threshold are excluded."""
+        Nodes at or below activation_threshold are excluded, EXCEPT the
+        start entities themselves (hops == 0, always activation 1.0),
+        which are never excluded regardless of activation_threshold -- a
+        caller's own query anchor isn't a decayed-relevance discovery to
+        filter out. max_hops must be in [1, 10] and decay_factor in
+        (0.0, 1.0) -- both raise ValueError otherwise (a Cypher limitation
+        requires max_hops to be a literal in the traversal bound, so it
+        can't fail safely deep in a query string; decay_factor >= 1.0 would
+        make activation grow instead of decay with distance, inverting
+        "most activated" from nearest to farthest)."""

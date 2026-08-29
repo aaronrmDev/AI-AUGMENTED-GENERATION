@@ -287,6 +287,14 @@ starting node.
 
 - **No `RELATED_TO` edge writer** — deferred, see Part 3, no existing
   command naturally produces entity-to-entity relatedness as a side effect.
+- **No `Concept` node writer** — Part 2's schema table names `Concept`
+  alongside the five node types this batch does write, but no command
+  produces one: nothing in this batch's scope (episode capture, fact
+  recording, consolidation) naturally distinguishes "an abstract concept"
+  from "an entity" as a separate write target the way `MENTIONS`/
+  `ABSTRACTS_TO` already cover entities and facts. `ensure_schema()` also
+  creates no constraint for it. A review caught this batch's own scope
+  list not disclosing it — corrected here rather than left implicit.
 - **No graph-write transactional consistency with Postgres/Qdrant** — a
   Neo4j write failure is logged and swallowed, not retried or reconciled;
   this project has no outbox/saga mechanism, and building one is out of

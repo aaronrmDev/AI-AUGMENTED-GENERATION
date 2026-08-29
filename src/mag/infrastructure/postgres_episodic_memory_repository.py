@@ -153,7 +153,17 @@ class PostgresEpisodicMemoryRepository(EpisodicMemoryRepository):
                 f"SELECT {_SELECT_COLUMNS} "
                 "FROM episodic_memory "
                 "WHERE session_id = :session_id AND tenant_id = :tenant_id "
-                "ORDER BY timestamp DESC "
+                # id DESC as a secondary key: a review caught that timestamp
+                # alone leaves a tie's row order unspecified by Postgres (it
+                # can vary by query plan, VACUUM, etc.), and CaptureEpisode
+                # uses this method's result to pick "the previous episode"
+                # for TEMPORALLY_FOLLOWS -- a tie shouldn't be allowed to
+                # nondeterministically change which episode that edge points
+                # to from one call to the next. This doesn't recover true
+                # chronological order for a genuine timestamp collision (no
+                # higher-resolution or monotonic column exists to do that),
+                # only determinism: the same data always sorts the same way.
+                "ORDER BY timestamp DESC, id DESC "
                 "LIMIT :limit"
             ),
             {"session_id": session_id, "tenant_id": tenant_id, "limit": limit},

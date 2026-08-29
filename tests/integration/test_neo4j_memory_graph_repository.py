@@ -301,3 +301,151 @@ async def test_spread_activation_never_reaches_across_tenants(repo):
     ids = {node.node_id for node in result}
     assert str(episode_a.id) in ids
     assert str(episode_b.id) not in ids
+
+
+async def test_upsert_fact_node_never_leaks_across_tenants(repo, neo4j_url):
+    tenant_a = uuid.uuid4()
+    tenant_b = uuid.uuid4()
+    fact = _fact()
+    await repo.upsert_fact_node(fact, tenant_a)
+
+    count = await _raw_query(
+        neo4j_url,
+        "MATCH (f:Fact {id: $id, tenant_id: $tenant_id}) RETURN count(f) AS c",
+        id=str(fact.id),
+        tenant_id=str(tenant_b),
+    )
+    assert count == 0
+
+
+async def test_link_participated_in_never_leaks_across_tenants(repo, neo4j_url):
+    tenant_a = uuid.uuid4()
+    tenant_b = uuid.uuid4()
+    user_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    await repo.link_participated_in(user_id, session_id, tenant_a)
+
+    count = await _raw_query(
+        neo4j_url,
+        "MATCH (u:User {id: $user_id, tenant_id: $tenant_id}) RETURN count(u) AS c",
+        user_id=str(user_id),
+        tenant_id=str(tenant_b),
+    )
+    assert count == 0
+
+
+async def test_link_temporally_follows_never_links_across_tenants(repo, neo4j_url):
+    # Both episodes exist, but under different tenants -- both MATCH
+    # clauses are tenant-scoped, so this must be a clean no-op, not a
+    # cross-tenant edge.
+    tenant_a = uuid.uuid4()
+    tenant_b = uuid.uuid4()
+    earlier = _episode()
+    later = _episode()
+    await repo.upsert_episode_node(earlier, tenant_a)
+    await repo.upsert_episode_node(later, tenant_b)
+
+    await repo.link_temporally_follows(earlier.id, later.id, tenant_a)
+
+    count = await _raw_query(
+        neo4j_url,
+        "MATCH (:Episode {id: $later_id})-[:TEMPORALLY_FOLLOWS]->(:Episode {id: $earlier_id}) "
+        "RETURN count(*) AS c",
+        later_id=str(later.id),
+        earlier_id=str(earlier.id),
+    )
+    assert count == 0
+
+
+async def test_link_abstracts_to_never_links_across_tenants(repo, neo4j_url):
+    tenant_a = uuid.uuid4()
+    tenant_b = uuid.uuid4()
+    episode = _episode()
+    fact = _fact()
+    await repo.upsert_episode_node(episode, tenant_a)
+    await repo.upsert_fact_node(fact, tenant_b)
+
+    await repo.link_abstracts_to(episode.id, fact.id, tenant_a)
+
+    count = await _raw_query(
+        neo4j_url,
+        "MATCH (:Episode {id: $episode_id})-[:ABSTRACTS_TO]->(:Fact {id: $fact_id}) "
+        "RETURN count(*) AS c",
+        episode_id=str(episode.id),
+        fact_id=str(fact.id),
+    )
+    assert count == 0
+
+
+async def test_link_mentions_does_not_create_a_dangling_entity_when_the_episode_is_missing(
+    repo, neo4j_url
+):
+    # Regression test: an earlier version MERGEd the Entity node BEFORE
+    # matching the Episode, so a call for an episode that was never (or not
+    # yet) upserted still created a persisted, edge-less Entity node -- a
+    # review caught this. The episode is deliberately never saved here.
+    tenant_id = uuid.uuid4()
+    never_saved_episode_id = uuid.uuid4()
+
+    await repo.link_mentions(never_saved_episode_id, "GhostEntity", tenant_id)
+
+    count = await _raw_query(
+        neo4j_url,
+        "MATCH (ent:Entity {name: $name, tenant_id: $tenant_id}) RETURN count(ent) AS c",
+        name="GhostEntity",
+        tenant_id=str(tenant_id),
+    )
+    assert count == 0
+
+
+async def test_spread_activation_rejects_max_hops_out_of_range(repo):
+    with pytest.raises(ValueError, match="max_hops"):
+        await repo.spread_activation(
+            tenant_id=uuid.uuid4(),
+            start_entity_names=["x"],
+            max_hops=0,
+            decay_factor=0.5,
+            activation_threshold=0.05,
+        )
+    with pytest.raises(ValueError, match="max_hops"):
+        await repo.spread_activation(
+            tenant_id=uuid.uuid4(),
+            start_entity_names=["x"],
+            max_hops=11,
+            decay_factor=0.5,
+            activation_threshold=0.05,
+        )
+
+
+async def test_spread_activation_rejects_decay_factor_out_of_range(repo):
+    for bad_decay in (0.0, 1.0, 1.5, -0.1):
+        with pytest.raises(ValueError, match="decay_factor"):
+            await repo.spread_activation(
+                tenant_id=uuid.uuid4(),
+                start_entity_names=["x"],
+                max_hops=3,
+                decay_factor=bad_decay,
+                activation_threshold=0.05,
+            )
+
+
+async def test_spread_activation_never_excludes_a_start_entity_regardless_of_threshold(repo):
+    tenant_id = uuid.uuid4()
+    episode = _episode()
+    await repo.upsert_episode_node(episode, tenant_id)
+    await repo.link_mentions(episode.id, "Paris", tenant_id)
+
+    # A threshold of 1.0 would exclude every non-start node (their
+    # activation is always < 1.0 for decay_factor < 1.0), but the start
+    # entity itself (activation exactly 1.0) must still come back.
+    result = await repo.spread_activation(
+        tenant_id=tenant_id,
+        start_entity_names=["Paris"],
+        max_hops=1,
+        decay_factor=0.5,
+        activation_threshold=1.0,
+    )
+
+    by_id = {node.node_id: node for node in result}
+    assert "Paris" in by_id
+    assert by_id["Paris"].activation == pytest.approx(1.0)

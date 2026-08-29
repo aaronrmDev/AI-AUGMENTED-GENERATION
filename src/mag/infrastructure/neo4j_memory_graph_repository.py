@@ -14,6 +14,14 @@ from src.mag.domain.ports import MemoryGraphRepository
 # there were chosen the way they were.
 _NODE_LABELS = ("User", "Session", "Entity", "Concept", "Episode", "Fact")
 
+# A hard ceiling on spread_activation's max_hops -- not just "must be
+# positive": an unbounded value lets a caller request a traversal across
+# the whole graph regardless of decay, which is expensive and defeats the
+# point of a distance-decayed relevance signal. 10 is generous relative to
+# the design spec's own default of 3 and MAG.md's worked examples, which
+# never traverse more than a handful of hops.
+_MAX_HOPS = 10
+
 
 class Neo4jMemoryGraphRepository(MemoryGraphRepository):
     def __init__(self, url: str, auth: tuple[str, str]) -> None:
@@ -111,9 +119,17 @@ class Neo4jMemoryGraphRepository(MemoryGraphRepository):
     ) -> None:
         async with self._driver.session() as session:
             await session.run(
-                "MERGE (ent:Entity {name: $entity_name, tenant_id: $tenant_id}) "
-                "WITH ent "
+                # Episode MATCHed first, Entity MERGEd second -- a review
+                # caught the reverse order creating a dangling Entity node
+                # with no edge when the episode didn't exist (e.g. its own
+                # upsert_episode_node call failed earlier): MERGE with no
+                # preceding MATCH runs and persists unconditionally, so
+                # putting it before the Episode MATCH meant a missing
+                # episode silently left an orphaned Entity behind instead
+                # of this call being a clean no-op like its siblings
+                # (link_temporally_follows, link_abstracts_to) already are.
                 "MATCH (ep:Episode {id: $episode_id, tenant_id: $tenant_id}) "
+                "MERGE (ent:Entity {name: $entity_name, tenant_id: $tenant_id}) "
                 "MERGE (ep)-[:MENTIONS]->(ent)",
                 entity_name=entity_name,
                 episode_id=str(episode_id),
@@ -141,14 +157,27 @@ class Neo4jMemoryGraphRepository(MemoryGraphRepository):
         decay_factor: float,
         activation_threshold: float,
     ) -> list[ActivatedNode]:
+        # Validated here, at the entry point, before any Cypher is built --
+        # a review caught that neither this value nor decay_factor was
+        # bounded anywhere in the call chain. max_hops<1 or >_MAX_HOPS
+        # would either fail Cypher parsing (a negative bound) or let an
+        # unbounded traversal run against the whole graph; decay_factor
+        # outside (0, 1) either doesn't decay at all (1.0) or makes
+        # activation GROW with distance instead of decaying (>1), inverting
+        # "most activated" from nearest to farthest.
+        if not (1 <= max_hops <= _MAX_HOPS):
+            raise ValueError(f"max_hops must be between 1 and {_MAX_HOPS}, got {max_hops}")
+        if not (0.0 < decay_factor < 1.0):
+            raise ValueError(f"decay_factor must be in (0.0, 1.0), got {decay_factor}")
         # max_hops is interpolated directly into the query text, not bound
         # as a parameter: Cypher's variable-length relationship syntax
         # ([*1..N]) requires N to be a literal at parse time, not a runtime
         # parameter -- a real Cypher limitation, not an oversight. Safe here
-        # specifically because max_hops is typed int at the port boundary
-        # (never a caller-supplied string), and int() below is a defensive
-        # cast, not a trust boundary -- every other value in this query
-        # (tenant_id, start_entity_names) is still a real bound parameter.
+        # specifically because max_hops is now validated as a bounded int
+        # immediately above, and int() below is a defensive cast on an
+        # already-validated value, not a trust boundary -- every other
+        # value in this query (tenant_id, start_entity_names) is still a
+        # real bound parameter.
         hops = int(max_hops)
         query = (
             "MATCH (start:Entity {tenant_id: $tenant_id}) "
@@ -178,7 +207,14 @@ class Neo4jMemoryGraphRepository(MemoryGraphRepository):
             node = record["node"]
             node_hops = record["hops"]
             activation = decay_factor**node_hops
-            if activation <= activation_threshold:
+            # A start entity (hops == 0, activation always exactly 1.0) is
+            # exempt from the threshold -- it's the thing the caller
+            # explicitly asked about, not a decayed-relevance discovery, so
+            # a caller picking a high threshold (even >= 1.0, "only the
+            # strongest matches") shouldn't silently drop the entity their
+            # own query was anchored on. A review caught this excluding
+            # start entities whenever activation_threshold >= 1.0.
+            if node_hops > 0 and activation <= activation_threshold:
                 continue
             node_id = _node_identifier(node)
             existing = activated.get(node_id)

@@ -55,7 +55,18 @@ services:
     volumes:
       - neo4j_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      # cypher-shell against Bolt (7687), not an HTTP spider check against
+      # the browser console (7474) -- Bolt is the protocol the Python
+      # driver and Neo4jMemoryGraphRepository actually use, matching how
+      # postgres's pg_isready and redis's redis-cli ping both verify the
+      # real serving protocol rather than a secondary interface. A review
+      # caught the original HTTP-only check as a real gap: the browser
+      # console can respond before Bolt is actually ready.
+      test:
+        [
+          "CMD-SHELL",
+          "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-unified_ai_neo4j} 'RETURN 1' || exit 1",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
