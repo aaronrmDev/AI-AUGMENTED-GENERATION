@@ -344,10 +344,33 @@ class MemoryGraphRepository(ABC):
     async def upsert_fact_node(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
         """Idempotent by fact.id, same reasoning as upsert_episode_node.
         Also syncs valid_until and archived_at onto the node (MAG Batch F)
-        -- every one of Update/Invalidate/Archive/Refine's best-effort
-        graph propagation calls this again with the fact's current state,
-        so the node's observable status stays in sync with Postgres
-        regardless of which operation changed it."""
+        -- RecordSemanticFact (and therefore Update/Refine, which compose
+        it) calls this with the fact's current state, so the node's
+        observable status stays in sync with Postgres. Invalidate/Archive
+        do NOT call this for a status-only change -- see
+        set_fact_valid_until/set_fact_archived_at below for why."""
+
+    @abstractmethod
+    async def set_fact_valid_until(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, valid_until: datetime | None
+    ) -> None:
+        """Updates ONLY the valid_until property on an existing Fact node
+        (MATCH, not MERGE -- never creates one) -- never archived_at.
+        upsert_fact_node writes BOTH status properties together from
+        whatever SemanticMemory it's given; using it for a status-only
+        change means passing a snapshot read at the START of the calling
+        command's execute(), which can go stale if a concurrent write to
+        the OTHER field lands in between, silently clobbering it back.
+        Touching only the field this call actually owns removes that
+        race, matching SemanticMemoryIndex.set_valid_until's identical
+        reasoning for the Qdrant side of the same fix."""
+
+    @abstractmethod
+    async def set_fact_archived_at(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, archived_at: datetime | None
+    ) -> None:
+        """Updates ONLY the archived_at property -- never valid_until.
+        Same reasoning as set_fact_valid_until above."""
 
     @abstractmethod
     async def link_participated_in(

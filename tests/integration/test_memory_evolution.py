@@ -349,7 +349,7 @@ async def test_a_fact_both_invalidated_and_archived_is_excluded_from_both_search
     )
 
     await set_tenant_context(db_session, tenant_id)
-    await record.execute(
+    fact = await record.execute(
         tenant_id=tenant_id, user_id=user_id, fact_key="k", fact_value="stale and rarely needed"
     )
     await db_session.commit()
@@ -384,6 +384,15 @@ async def test_a_fact_both_invalidated_and_archived_is_excluded_from_both_search
         embedding_model.embed("stale and rarely needed"), user_id, tenant_id, top_k=5
     )
     assert from_qdrant == []
+
+    # Both Neo4j properties set too -- proves set_fact_valid_until and
+    # set_fact_archived_at (targeted, single-field writes) don't clobber
+    # each other the way a combined upsert_fact_node(dataclasses.replace(
+    # stale snapshot)) call used to be able to.
+    graph_valid_until = await _raw_neo4j_fact_property(neo4j_url, fact.id, tenant_id, "valid_until")
+    graph_archived_at = await _raw_neo4j_fact_property(neo4j_url, fact.id, tenant_id, "archived_at")
+    assert graph_valid_until == invalidated_at.isoformat()
+    assert graph_archived_at == archived_at.isoformat()
     await graph.close()
 
 

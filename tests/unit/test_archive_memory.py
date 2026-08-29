@@ -141,18 +141,22 @@ async def test_execute_does_not_raise_when_the_index_status_sync_fails():
     assert found.archived_at is not None
 
 
-async def test_execute_best_effort_syncs_the_graph_fact_node():
+async def test_execute_best_effort_syncs_only_the_graph_facts_archived_at():
     graph = FakeMemoryGraphRepository()
     repository = FakeSemanticMemoryRepository()
     tenant_id = uuid.uuid4()
     user_id = uuid.uuid4()
     archive, record = _wire(repository, FakeSemanticMemoryIndex(), graph)
-    await record.execute(tenant_id=tenant_id, user_id=user_id, fact_key="k", fact_value="v")
+    fact = await record.execute(tenant_id=tenant_id, user_id=user_id, fact_key="k", fact_value="v")
     archived_at = datetime(2026, 1, 1, tzinfo=UTC)
 
-    result = await archive.execute(
+    await archive.execute(
         tenant_id=tenant_id, user_id=user_id, fact_key="k", archived_at=archived_at
     )
 
-    assert graph.upserted_facts[-1] == (result, tenant_id)
-    assert graph.upserted_facts[-1][0].archived_at == archived_at
+    # set_fact_archived_at, not upsert_fact_node -- same
+    # stale-sibling-snapshot race reasoning as InvalidateMemory's
+    # equivalent test.
+    assert graph.fact_archived_at_updates == [(fact.id, tenant_id, archived_at)]
+    assert graph.fact_valid_until_updates == []
+    assert len(graph.upserted_facts) == 1

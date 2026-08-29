@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
@@ -73,31 +74,81 @@ async def test_execute_sends_the_refine_prompt_with_existing_value_and_new_infor
     # still parse successfully against FakeChatModel's fixed canned
     # response -- confirmed as a real gap by review. Asserting on the
     # actual prompt content sent is the only way to catch either mistake
-    # at this level.
+    # at this level. Deliberately NOT "prefers Python"/"data analysis" --
+    # REFINE_SYSTEM_PROMPT's own worked example contains that exact text,
+    # so .find() would locate it in the constant system-prompt portion
+    # regardless of argument order, making the ordering check vacuous (a
+    # real bug in an earlier version of this test, confirmed by review
+    # with an empirical reproduction: swapping the real arguments still
+    # passed). These fixture values appear nowhere in either system
+    # prompt's own text.
     repository = FakeSemanticMemoryRepository()
     tenant_id = uuid.uuid4()
     user_id = uuid.uuid4()
     chat_model = FakeChatModel(response=json.dumps({"merged_fact_value": "merged"}))
     refine, record = _wire(repository, chat_model)
     await record.execute(
-        tenant_id=tenant_id, user_id=user_id, fact_key="language", fact_value="prefers Python"
+        tenant_id=tenant_id, user_id=user_id, fact_key="hobby", fact_value="enjoys hiking"
     )
 
     await refine.execute(
         tenant_id=tenant_id,
         user_id=user_id,
-        fact_key="language",
-        new_information="especially for data analysis",
+        fact_key="hobby",
+        new_information="especially in national parks during autumn",
     )
 
     prompt = chat_model.last_prompt
     assert "merging an existing fact" in prompt.lower()
     assert "comparing an existing fact" not in prompt.lower()
-    existing_index = prompt.find("prefers Python")
-    new_index = prompt.find("especially for data analysis")
+    existing_index = prompt.find("enjoys hiking")
+    new_index = prompt.find("especially in national parks during autumn")
     assert existing_index != -1
     assert new_index != -1
     assert existing_index < new_index
+
+
+async def test_execute_preserves_a_previously_archived_status():
+    # RefineMemory had ZERO coverage of status preservation before this
+    # (review flagged: only 1 of the 4 UpdateMemory/RefineMemory x
+    # valid_until/archived_at combinations had any test at all).
+    repository = FakeSemanticMemoryRepository()
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    chat_model = FakeChatModel(response=json.dumps({"merged_fact_value": "merged"}))
+    refine, record = _wire(repository, chat_model)
+    await record.execute(
+        tenant_id=tenant_id, user_id=user_id, fact_key="k", fact_value="rarely needed but true"
+    )
+    archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await repository.archive(user_id, "k", tenant_id, archived_at)
+
+    refined = await refine.execute(
+        tenant_id=tenant_id, user_id=user_id, fact_key="k", new_information="more nuance"
+    )
+
+    assert refined.archived_at == archived_at
+    assert refined.fact_value == "merged"
+
+
+async def test_execute_preserves_a_previously_set_valid_until():
+    repository = FakeSemanticMemoryRepository()
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    chat_model = FakeChatModel(response=json.dumps({"merged_fact_value": "merged"}))
+    refine, record = _wire(repository, chat_model)
+    await record.execute(
+        tenant_id=tenant_id, user_id=user_id, fact_key="k", fact_value="has a pet named Rex"
+    )
+    invalidated_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await repository.invalidate(user_id, "k", tenant_id, invalidated_at)
+
+    refined = await refine.execute(
+        tenant_id=tenant_id, user_id=user_id, fact_key="k", new_information="more nuance"
+    )
+
+    assert refined.valid_until == invalidated_at
+    assert refined.fact_value == "merged"
 
 
 async def test_execute_carries_over_the_existing_confidence_and_source():

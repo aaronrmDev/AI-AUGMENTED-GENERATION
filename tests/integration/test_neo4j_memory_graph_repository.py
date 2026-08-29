@@ -81,6 +81,90 @@ async def test_upsert_fact_node_is_idempotent(repo, neo4j_url):
     assert count == 1
 
 
+async def _raw_property(neo4j_url: tuple[str, str, str], fact_id: uuid.UUID, prop: str) -> object:
+    url, username, password = neo4j_url
+    driver = AsyncGraphDatabase.driver(url, auth=(username, password))
+    try:
+        async with driver.session() as session:
+            result = await session.run(
+                f"MATCH (f:Fact {{id: $id}}) RETURN f.{prop} AS value", id=str(fact_id)
+            )
+            record = await result.single()
+            return record["value"] if record else None
+    finally:
+        await driver.close()
+
+
+async def test_set_fact_valid_until_touches_only_that_property(repo, neo4j_url):
+    # MAG Batch F: a targeted, single-property write -- unlike
+    # upsert_fact_node, which writes both valid_until AND archived_at
+    # together from whatever entity it's given (a stale snapshot risk
+    # InvalidateMemory/ArchiveMemory used to be exposed to under a
+    # concurrent race, closed by giving each command a method that only
+    # ever touches the one property it actually owns).
+    tenant_id = uuid.uuid4()
+    fact = _fact()
+    await repo.upsert_fact_node(fact, tenant_id)
+    valid_until = datetime(2026, 1, 1, tzinfo=UTC)
+
+    await repo.set_fact_valid_until(fact.id, tenant_id, valid_until)
+
+    assert await _raw_property(neo4j_url, fact.id, "valid_until") == valid_until.isoformat()
+    # archived_at, set by the original upsert to null, is untouched.
+    assert await _raw_property(neo4j_url, fact.id, "archived_at") is None
+
+
+async def test_set_fact_archived_at_touches_only_that_property(repo, neo4j_url):
+    tenant_id = uuid.uuid4()
+    fact = _fact()
+    await repo.upsert_fact_node(fact, tenant_id)
+    archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+
+    await repo.set_fact_archived_at(fact.id, tenant_id, archived_at)
+
+    assert await _raw_property(neo4j_url, fact.id, "archived_at") == archived_at.isoformat()
+    assert await _raw_property(neo4j_url, fact.id, "valid_until") is None
+
+
+async def test_set_fact_valid_until_and_set_fact_archived_at_do_not_clobber_each_other(
+    repo, neo4j_url
+):
+    # The actual regression this split exists to prevent: calling BOTH
+    # targeted methods on the same fact must leave both fields set
+    # correctly, not have the second call silently wipe the first's
+    # property back to null the way a combined upsert_fact_node call
+    # (built from a stale pre-write snapshot) used to be able to.
+    tenant_id = uuid.uuid4()
+    fact = _fact()
+    await repo.upsert_fact_node(fact, tenant_id)
+    valid_until = datetime(2026, 1, 1, tzinfo=UTC)
+    archived_at = datetime(2026, 2, 1, tzinfo=UTC)
+
+    await repo.set_fact_valid_until(fact.id, tenant_id, valid_until)
+    await repo.set_fact_archived_at(fact.id, tenant_id, archived_at)
+
+    assert await _raw_property(neo4j_url, fact.id, "valid_until") == valid_until.isoformat()
+    assert await _raw_property(neo4j_url, fact.id, "archived_at") == archived_at.isoformat()
+
+
+async def test_set_fact_valid_until_does_not_create_a_node_for_a_nonexistent_fact(
+    repo, neo4j_url
+):
+    # MATCH, not MERGE -- if this fact's own upsert_fact_node write never
+    # landed (best-effort, can silently fail), there's no legitimate
+    # reason for a status-only sync to create a bare Fact node holding
+    # only a status property and none of the others.
+    tenant_id = uuid.uuid4()
+    never_upserted_id = uuid.uuid4()
+
+    await repo.set_fact_valid_until(never_upserted_id, tenant_id, datetime(2026, 1, 1, tzinfo=UTC))
+
+    count = await _raw_query(
+        neo4j_url, "MATCH (n:Fact {id: $id}) RETURN count(n) AS c", id=str(never_upserted_id)
+    )
+    assert count == 0
+
+
 async def test_link_participated_in_creates_user_session_and_edge(repo, neo4j_url):
     tenant_id = uuid.uuid4()
     user_id = uuid.uuid4()

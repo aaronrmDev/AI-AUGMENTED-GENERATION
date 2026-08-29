@@ -91,6 +91,45 @@ class Neo4jMemoryGraphRepository(MemoryGraphRepository):
                 archived_at=fact.archived_at.isoformat() if fact.archived_at else None,
             )
 
+    async def set_fact_valid_until(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, valid_until: datetime | None
+    ) -> None:
+        # MATCH, not MERGE -- InvalidateMemory only ever calls this on a
+        # fact that's already been recorded (find_by_key confirmed it
+        # exists in Postgres first), so there's no legitimate reason to
+        # create a bare Fact node here; if this node's own upsert_fact_node
+        # write happened to fail earlier (best-effort, can silently not
+        # land), MATCH correctly no-ops rather than creating a Fact node
+        # with only a status property and none of the others. Touches
+        # ONLY valid_until -- never archived_at -- closing the same
+        # stale-sibling-snapshot race the Qdrant index's equivalent split
+        # (set_valid_until/set_archived_at) closed: the previous version
+        # of this method (upsert_fact_node called with a dataclasses.
+        # replace()'d snapshot) wrote BOTH fields from whatever the
+        # command had read at the START of its own execute() call, so a
+        # concurrent ArchiveMemory write landing in between could be
+        # silently clobbered back to a stale value.
+        async with self._driver.session() as session:
+            await session.run(
+                "MATCH (f:Fact {id: $id, tenant_id: $tenant_id}) SET f.valid_until = $valid_until",
+                id=str(fact_id),
+                tenant_id=str(tenant_id),
+                valid_until=valid_until.isoformat() if valid_until else None,
+            )
+
+    async def set_fact_archived_at(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, archived_at: datetime | None
+    ) -> None:
+        # Same reasoning as set_fact_valid_until above, mirrored for the
+        # other field.
+        async with self._driver.session() as session:
+            await session.run(
+                "MATCH (f:Fact {id: $id, tenant_id: $tenant_id}) SET f.archived_at = $archived_at",
+                id=str(fact_id),
+                tenant_id=str(tenant_id),
+                archived_at=archived_at.isoformat() if archived_at else None,
+            )
+
     async def link_participated_in(
         self, user_id: uuid.UUID, session_id: uuid.UUID, tenant_id: uuid.UUID
     ) -> None:

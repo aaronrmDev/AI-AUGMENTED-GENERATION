@@ -77,6 +77,34 @@ async def test_execute_preserves_the_deterministic_id_across_the_overwrite():
     assert updated.id == original.id
 
 
+async def test_execute_preserves_a_previously_set_valid_until():
+    # Complements the integration-level regression test for archived_at
+    # (test_update_on_a_previously_archived_fact_preserves_its_archived_
+    # status) -- that test alone can't prove valid_until forwarding works
+    # too, since its fixture only ever archives (never invalidates)
+    # first, leaving valid_until at None throughout (indistinguishable
+    # from the pre-fix default). This exercises the OTHER field, at the
+    # unit level, closing a coverage gap review flagged: only 1 of the 4
+    # (UpdateMemory/RefineMemory x valid_until/archived_at) combinations
+    # had any test at all.
+    repository = FakeSemanticMemoryRepository()
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    update, record = _wire(repository)
+    await record.execute(
+        tenant_id=tenant_id, user_id=user_id, fact_key="pet", fact_value="has a pet named Rex"
+    )
+    invalidated_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await repository.invalidate(user_id, "pet", tenant_id, invalidated_at)
+
+    updated = await update.execute(
+        tenant_id=tenant_id, user_id=user_id, fact_key="pet", new_fact_value="got a new pet"
+    )
+
+    assert updated.valid_until == invalidated_at
+    assert updated.fact_value == "got a new pet"
+
+
 async def test_execute_writes_the_old_value_to_history_before_overwriting():
     repository = FakeSemanticMemoryRepository()
     tenant_id = uuid.uuid4()

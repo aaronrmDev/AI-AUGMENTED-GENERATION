@@ -63,8 +63,18 @@ class InvalidateMemory:
             self._index.set_valid_until(existing.id, tenant_id, actual_invalidated_at),
             "set valid_until (invalidate)",
         )
-        updated = dataclasses.replace(existing, valid_until=actual_invalidated_at)
+        # set_fact_valid_until (not upsert_fact_node) for the same reason
+        # as set_valid_until above, one layer further: upsert_fact_node
+        # writes BOTH valid_until and archived_at from whatever entity
+        # it's given, so building that entity via dataclasses.replace on
+        # `existing` (read at the TOP of this method) would ship a stale
+        # snapshot of archived_at -- a concurrent ArchiveMemory call
+        # landing in between could be silently clobbered back to that
+        # stale value. set_fact_valid_until touches only its own
+        # property, closing that race for Neo4j the same way
+        # set_valid_until already closes it for Qdrant.
         await best_effort_graph_write(
-            self._graph.upsert_fact_node(updated, tenant_id), "upsert fact node (invalidate)"
+            self._graph.set_fact_valid_until(existing.id, tenant_id, actual_invalidated_at),
+            "set fact valid_until (invalidate)",
         )
-        return updated
+        return dataclasses.replace(existing, valid_until=actual_invalidated_at)

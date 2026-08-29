@@ -55,8 +55,11 @@ class ArchiveMemory:
             self._index.set_archived_at(existing.id, tenant_id, actual_archived_at),
             "set archived_at (archive)",
         )
-        updated = dataclasses.replace(existing, archived_at=actual_archived_at)
+        # set_fact_archived_at (not upsert_fact_node), same
+        # stale-sibling-snapshot race reasoning as InvalidateMemory's
+        # identical fix.
         await best_effort_graph_write(
-            self._graph.upsert_fact_node(updated, tenant_id), "upsert fact node (archive)"
+            self._graph.set_fact_archived_at(existing.id, tenant_id, actual_archived_at),
+            "set fact archived_at (archive)",
         )
-        return updated
+        return dataclasses.replace(existing, archived_at=actual_archived_at)

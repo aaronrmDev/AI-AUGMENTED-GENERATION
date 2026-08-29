@@ -72,10 +72,19 @@ async def test_execute_sends_the_classification_prompt_with_arguments_unswapped(
     # Same reasoning as RefineMemory's equivalent test: a swapped-argument
     # or wrong-system-prompt bug would still parse against FakeChatModel's
     # fixed canned response, so only asserting on the actual prompt
-    # content sent can catch it.
+    # content sent can catch it. Deliberately NOT "lives in New York"/
+    # "moved to Berlin last week" -- FACT_EVOLUTION_SYSTEM_PROMPT's own
+    # worked example contains that exact text (as do its invalidate and
+    # refine examples, "has a pet named Rex"/"Rex passed away" and
+    # "prefers Python"/"data analysis"), so .find() would locate it in
+    # the constant system-prompt portion regardless of argument order,
+    # making the ordering check vacuous (a real bug in an earlier version
+    # of this test, confirmed by review with an empirical reproduction:
+    # swapping the real arguments still passed). These fixture values
+    # appear nowhere in the system prompt's own text.
     repository = FakeSemanticMemoryRepository()
     tenant_id, user_id = uuid.uuid4(), uuid.uuid4()
-    await _seed(repository, tenant_id, user_id, "location", "lives in New York")
+    await _seed(repository, tenant_id, user_id, "employer", "works at Acme Corp")
     chat_model = FakeChatModel(
         response=json.dumps({"operation": "update", "reasoning": "r"})
     )
@@ -86,15 +95,15 @@ async def test_execute_sends_the_classification_prompt_with_arguments_unswapped(
     await classify.execute(
         tenant_id=tenant_id,
         user_id=user_id,
-        fact_key="location",
-        new_information="moved to Berlin last week",
+        fact_key="employer",
+        new_information="changed jobs to Globex last month",
     )
 
     prompt = chat_model.last_prompt
     assert "comparing an existing fact" in prompt.lower()
     assert "merging an existing fact" not in prompt.lower()
-    existing_index = prompt.find("lives in New York")
-    new_index = prompt.find("moved to Berlin last week")
+    existing_index = prompt.find("works at Acme Corp")
+    new_index = prompt.find("changed jobs to Globex last month")
     assert existing_index != -1
     assert new_index != -1
     assert existing_index < new_index

@@ -283,6 +283,8 @@ class FakeMemoryGraphRepository(MemoryGraphRepository):
     def __init__(self) -> None:
         self.upserted_episodes: list[tuple[EpisodicMemory, uuid.UUID]] = []
         self.upserted_facts: list[tuple[SemanticMemory, uuid.UUID]] = []
+        self.fact_valid_until_updates: list[tuple[uuid.UUID, uuid.UUID, datetime | None]] = []
+        self.fact_archived_at_updates: list[tuple[uuid.UUID, uuid.UUID, datetime | None]] = []
         self.participated_in_links: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = []
         self.temporally_follows_links: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = []
         self.mentions_links: list[tuple[uuid.UUID, str, uuid.UUID]] = []
@@ -294,6 +296,16 @@ class FakeMemoryGraphRepository(MemoryGraphRepository):
 
     async def upsert_fact_node(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
         self.upserted_facts.append((fact, tenant_id))
+
+    async def set_fact_valid_until(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, valid_until: datetime | None
+    ) -> None:
+        self.fact_valid_until_updates.append((fact_id, tenant_id, valid_until))
+
+    async def set_fact_archived_at(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, archived_at: datetime | None
+    ) -> None:
+        self.fact_archived_at_updates.append((fact_id, tenant_id, archived_at))
 
     async def link_participated_in(
         self, user_id: uuid.UUID, session_id: uuid.UUID, tenant_id: uuid.UUID
