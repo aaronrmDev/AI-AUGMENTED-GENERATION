@@ -84,6 +84,26 @@ class ActivatedNode:
 
 
 @dataclass(frozen=True)
+class GatingCandidate:
+    # The normalized wrapper Memory Gating (Batch E) needs to operate over
+    # a mixed pool of ScoredEpisode/ScoredFact/ActivatedNode uniformly --
+    # same precedent ActivatedNode already set for normalizing across
+    # heterogeneous graph node types, applied here one level up, across
+    # heterogeneous retrieval STRATEGIES. `origin` stays the single source
+    # of truth; the other fields are a flattened, uniform read of it so
+    # gating strategies never need isinstance branching on three different
+    # source types. See src/mag/application/gating/_candidates.py for how
+    # each source type populates these.
+    content_text: str
+    score: float
+    salience: float
+    timestamp: datetime | None
+    source_type: str  # "episode" | "fact" | "graph_node"
+    origin: EpisodicMemory | SemanticMemory | ActivatedNode
+    embedding: list[float]
+
+
+@dataclass(frozen=True)
 class ProceduralMemory:
     id: uuid.UUID
     user_id: uuid.UUID
