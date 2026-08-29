@@ -114,8 +114,31 @@ async def test_execute_syncs_status_to_the_index_without_touching_the_vector():
         tenant_id=tenant_id, user_id=user_id, fact_key="k", archived_at=archived_at
     )
 
-    assert index.status_updates == [(fact.id, tenant_id, None, archived_at)]
+    assert index.archived_at_updates == [(fact.id, tenant_id, archived_at)]
+    # Never valid_until_updates -- Archive never touches the sibling
+    # field, closing the race a combined update_status(both fields) call
+    # used to have.
+    assert index.valid_until_updates == []
     assert len(index.upserted) == 1
+
+
+async def test_execute_does_not_raise_when_the_index_status_sync_fails():
+    class _RaisingIndex(FakeSemanticMemoryIndex):
+        async def set_archived_at(self, fact_id, tenant_id, archived_at) -> None:
+            raise RuntimeError("simulated missing Qdrant point")
+
+    repository = FakeSemanticMemoryRepository()
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    archive, record = _wire(repository, _RaisingIndex(), FakeMemoryGraphRepository())
+    await record.execute(tenant_id=tenant_id, user_id=user_id, fact_key="k", fact_value="v")
+
+    result = await archive.execute(tenant_id=tenant_id, user_id=user_id, fact_key="k")
+
+    assert result.archived_at is not None
+    found = await repository.find_by_key(user_id, "k", tenant_id)
+    assert found is not None
+    assert found.archived_at is not None
 
 
 async def test_execute_best_effort_syncs_the_graph_fact_node():

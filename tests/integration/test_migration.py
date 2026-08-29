@@ -148,3 +148,28 @@ async def test_procedural_memory_has_a_unique_constraint_on_user_id_and_task_pat
         )
     )
     assert result.scalar_one_or_none() == "uq_procedural_memory_user_id_task_pattern"
+
+
+async def test_semantic_memory_history_table_exists_with_rls_enabled(db_session):
+    # Same one-test-per-RLS-table convention every prior migration
+    # established (sessions, documents/chunks, episodic_memory,
+    # semantic_memory, procedural_memory) -- this table (migration 0005)
+    # had been missing its pair, a gap adversarial review caught: nothing
+    # would have noticed a typo'd table name or a dropped FORCE ROW LEVEL
+    # SECURITY on this table letting one tenant's superseded fact values
+    # leak to another.
+    result = await db_session.execute(
+        text("SELECT relrowsecurity FROM pg_class WHERE relname = 'semantic_memory_history'")
+    )
+    assert result.scalar_one() is True
+
+
+async def test_tenant_isolation_policy_exists_on_semantic_memory_history(db_session):
+    result = await db_session.execute(
+        text(
+            "SELECT tablename FROM pg_policies "
+            "WHERE policyname = 'tenant_isolation' AND tablename = 'semantic_memory_history'"
+        )
+    )
+    tables = {row.tablename for row in result}
+    assert tables == {"semantic_memory_history"}

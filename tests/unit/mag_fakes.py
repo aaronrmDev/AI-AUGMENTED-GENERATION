@@ -182,22 +182,34 @@ class FakeSemanticMemoryRepository(SemanticMemoryRepository):
         return scored[:top_k]
 
     async def invalidate(
-        self, user_id: uuid.UUID, fact_key: str, tenant_id: uuid.UUID, invalidated_at: datetime
-    ) -> None:
+        self,
+        user_id: uuid.UUID,
+        fact_key: str,
+        tenant_id: uuid.UUID,
+        invalidated_at: datetime | None,
+    ) -> datetime:
+        # None means "right now" -- mirrors the real repository's
+        # COALESCE(:invalidated_at, now()), just computed on this
+        # process's own clock since a fake has no separate database clock
+        # to defer to.
+        actual = invalidated_at or datetime.now(UTC)
         existing = self._by_key.get((user_id, fact_key))
         if existing is not None:
-            self._by_key[(user_id, fact_key)] = dataclasses.replace(
-                existing, valid_until=invalidated_at
-            )
+            self._by_key[(user_id, fact_key)] = dataclasses.replace(existing, valid_until=actual)
+        return actual
 
     async def archive(
-        self, user_id: uuid.UUID, fact_key: str, tenant_id: uuid.UUID, archived_at: datetime
-    ) -> None:
+        self,
+        user_id: uuid.UUID,
+        fact_key: str,
+        tenant_id: uuid.UUID,
+        archived_at: datetime | None,
+    ) -> datetime:
+        actual = archived_at or datetime.now(UTC)
         existing = self._by_key.get((user_id, fact_key))
         if existing is not None:
-            self._by_key[(user_id, fact_key)] = dataclasses.replace(
-                existing, archived_at=archived_at
-            )
+            self._by_key[(user_id, fact_key)] = dataclasses.replace(existing, archived_at=actual)
+        return actual
 
     async def save_history_entry(
         self, entry: SemanticMemoryHistoryEntry, tenant_id: uuid.UUID
@@ -214,9 +226,8 @@ class FakeSemanticMemoryRepository(SemanticMemoryRepository):
 class FakeSemanticMemoryIndex(SemanticMemoryIndex):
     def __init__(self) -> None:
         self.upserted: list[tuple[SemanticMemory, uuid.UUID]] = []
-        self.status_updates: list[
-            tuple[uuid.UUID, uuid.UUID, datetime | None, datetime | None]
-        ] = []
+        self.valid_until_updates: list[tuple[uuid.UUID, uuid.UUID, datetime | None]] = []
+        self.archived_at_updates: list[tuple[uuid.UUID, uuid.UUID, datetime | None]] = []
 
     async def ensure_collection(self) -> None:
         pass
@@ -224,14 +235,15 @@ class FakeSemanticMemoryIndex(SemanticMemoryIndex):
     async def upsert(self, fact: SemanticMemory, tenant_id: uuid.UUID) -> None:
         self.upserted.append((fact, tenant_id))
 
-    async def update_status(
-        self,
-        fact_id: uuid.UUID,
-        tenant_id: uuid.UUID,
-        valid_until: datetime | None,
-        archived_at: datetime | None,
+    async def set_valid_until(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, valid_until: datetime | None
     ) -> None:
-        self.status_updates.append((fact_id, tenant_id, valid_until, archived_at))
+        self.valid_until_updates.append((fact_id, tenant_id, valid_until))
+
+    async def set_archived_at(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, archived_at: datetime | None
+    ) -> None:
+        self.archived_at_updates.append((fact_id, tenant_id, archived_at))
 
     async def search(
         self, query_embedding: list[float], user_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int

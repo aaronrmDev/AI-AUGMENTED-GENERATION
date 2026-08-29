@@ -1,6 +1,6 @@
 import dataclasses
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 from src.mag.domain.entities import SemanticMemory
 from src.mag.domain.ports import (
@@ -9,6 +9,7 @@ from src.mag.domain.ports import (
     SemanticMemoryRepository,
 )
 from src.mag.infrastructure._graph_write_safety import best_effort_graph_write
+from src.mag.infrastructure._index_write_safety import best_effort_index_write
 
 
 class InvalidateMemory:
@@ -38,16 +39,31 @@ class InvalidateMemory:
             raise ValueError(
                 f"no existing fact for user_id={user_id} fact_key={fact_key!r} to invalidate"
             )
-        invalidated_at = invalidated_at or datetime.now(UTC)
-        await self._repository.invalidate(user_id, fact_key, tenant_id, invalidated_at)
-        # A targeted payload update, not a full re-upsert -- update_status
-        # (unlike upsert()) never touches the stored vector, which matters
-        # here since `existing` never carries a real embedding (Postgres
-        # isn't this system's embedding-bearing read path).
-        await self._index.update_status(
-            existing.id, tenant_id, invalidated_at, existing.archived_at
+        # invalidated_at=None flows through to the repository as "use the
+        # database's own now()" -- avoids a clock-skew window against the
+        # later valid_until > now() comparison search_by_similarity makes
+        # using that same database's clock. The repository hands back
+        # whichever value it actually used, so Qdrant/Neo4j stay
+        # consistent with Postgres rather than each computing their own.
+        actual_invalidated_at = await self._repository.invalidate(
+            user_id, fact_key, tenant_id, invalidated_at
         )
-        updated = dataclasses.replace(existing, valid_until=invalidated_at)
+        # set_valid_until (unlike upsert()) never touches the stored
+        # vector, which matters since `existing` never carries a real
+        # embedding (Postgres isn't this system's embedding-bearing read
+        # path) -- and never touches archived_at either, closing a race
+        # where a concurrent ArchiveMemory call could otherwise be
+        # clobbered by a stale snapshot of the field it owns. Best-effort:
+        # if this fact's Qdrant point is missing (an earlier write already
+        # failed -- DATABASE.md's own documented non-atomic-stores
+        # consequence), the Postgres UPDATE above has already committed,
+        # so an uncaught exception here would misrepresent a partially-
+        # successful, recoverable state as a hard failure.
+        await best_effort_index_write(
+            self._index.set_valid_until(existing.id, tenant_id, actual_invalidated_at),
+            "set valid_until (invalidate)",
+        )
+        updated = dataclasses.replace(existing, valid_until=actual_invalidated_at)
         await best_effort_graph_write(
             self._graph.upsert_fact_node(updated, tenant_id), "upsert fact node (invalidate)"
         )

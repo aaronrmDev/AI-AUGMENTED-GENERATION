@@ -118,11 +118,38 @@ async def test_execute_syncs_status_to_the_index_without_touching_the_vector():
         tenant_id=tenant_id, user_id=user_id, fact_key="k", invalidated_at=invalidated_at
     )
 
-    assert index.status_updates == [(fact.id, tenant_id, invalidated_at, None)]
-    # update_status was called, not upsert() again -- upsert() would have
-    # replaced the point's vector with the embedding-less entity find_by_key
-    # returns.
+    assert index.valid_until_updates == [(fact.id, tenant_id, invalidated_at)]
+    # set_valid_until was called, not upsert() again -- upsert() would
+    # have replaced the point's vector with the embedding-less entity
+    # find_by_key returns. And never archived_at_updates -- Invalidate
+    # never touches the sibling field at all, closing the race a
+    # combined update_status(both fields) call used to have.
+    assert index.archived_at_updates == []
     assert len(index.upserted) == 1  # only RecordSemanticFact's original upsert
+
+
+async def test_execute_does_not_raise_when_the_index_status_sync_fails():
+    # Simulates a fact whose Qdrant point is missing (e.g. an earlier
+    # write already failed -- DATABASE.md's own documented consequence of
+    # three non-atomic stores): set_valid_until raising must not abort
+    # the command, since the Postgres UPDATE has already committed by
+    # this point.
+    class _RaisingIndex(FakeSemanticMemoryIndex):
+        async def set_valid_until(self, fact_id, tenant_id, valid_until) -> None:
+            raise RuntimeError("simulated missing Qdrant point")
+
+    repository = FakeSemanticMemoryRepository()
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    invalidate, record = _wire(repository, _RaisingIndex(), FakeMemoryGraphRepository())
+    await record.execute(tenant_id=tenant_id, user_id=user_id, fact_key="k", fact_value="v")
+
+    result = await invalidate.execute(tenant_id=tenant_id, user_id=user_id, fact_key="k")
+
+    assert result.valid_until is not None
+    found = await repository.find_by_key(user_id, "k", tenant_id)
+    assert found is not None
+    assert found.valid_until is not None
 
 
 async def test_execute_best_effort_syncs_the_graph_fact_node():

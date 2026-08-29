@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 
 from src.mag.domain.entities import FactEvolutionClassification
@@ -12,6 +13,7 @@ from src.rag.domain.ports import ChatModel
 
 _MAX_CLASSIFICATION_ATTEMPTS = 3
 _VALID_OPERATIONS = {"update", "invalidate", "refine", "no_conflict"}
+logger = logging.getLogger(__name__)
 
 
 class ClassifyFactEvolution:
@@ -58,7 +60,23 @@ class ClassifyFactEvolution:
         # Exhausted retries: no_conflict, the least destructive outcome --
         # a caller dispatching on this takes no action, which is always
         # safe, unlike guessing "update" and overwriting a fact on a
-        # response this method couldn't actually make sense of.
+        # response this method couldn't actually make sense of. But
+        # "safe" only means "never wrongly overwrites a fact" -- it does
+        # NOT mean "never lets a genuinely stale fact silently persist,"
+        # which is exactly what happens if the fact actually needed
+        # invalidating and the model just couldn't produce parseable
+        # JSON. A genuine no_conflict judgment and this fallback are
+        # otherwise indistinguishable to a caller, so this is logged
+        # (matching _graph_write_safety.py's best_effort_graph_write --
+        # fail safe, but never fail silently) rather than left with no
+        # observable trace at all.
+        logger.warning(
+            "ClassifyFactEvolution exhausted %d attempts without a parseable response for "
+            "fact_key=%r; defaulting to no_conflict (no-op). Last response: %r",
+            _MAX_CLASSIFICATION_ATTEMPTS,
+            fact_key,
+            response,
+        )
         return FactEvolutionClassification(
             operation="no_conflict",
             reasoning="classification failed after retries; defaulting to no-op",

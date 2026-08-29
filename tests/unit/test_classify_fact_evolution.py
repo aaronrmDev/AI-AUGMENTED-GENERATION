@@ -68,6 +68,38 @@ async def test_execute_returns_the_llm_classified_operation_and_reasoning():
     assert result.reasoning == "direct contradiction"
 
 
+async def test_execute_sends_the_classification_prompt_with_arguments_unswapped():
+    # Same reasoning as RefineMemory's equivalent test: a swapped-argument
+    # or wrong-system-prompt bug would still parse against FakeChatModel's
+    # fixed canned response, so only asserting on the actual prompt
+    # content sent can catch it.
+    repository = FakeSemanticMemoryRepository()
+    tenant_id, user_id = uuid.uuid4(), uuid.uuid4()
+    await _seed(repository, tenant_id, user_id, "location", "lives in New York")
+    chat_model = FakeChatModel(
+        response=json.dumps({"operation": "update", "reasoning": "r"})
+    )
+    classify = ClassifyFactEvolution(
+        semantic_memory_repository=repository, chat_model=chat_model
+    )
+
+    await classify.execute(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        fact_key="location",
+        new_information="moved to Berlin last week",
+    )
+
+    prompt = chat_model.last_prompt
+    assert "comparing an existing fact" in prompt.lower()
+    assert "merging an existing fact" not in prompt.lower()
+    existing_index = prompt.find("lives in New York")
+    new_index = prompt.find("moved to Berlin last week")
+    assert existing_index != -1
+    assert new_index != -1
+    assert existing_index < new_index
+
+
 @pytest.mark.parametrize("operation", ["update", "invalidate", "refine", "no_conflict"])
 async def test_execute_accepts_every_valid_operation(operation):
     repository = FakeSemanticMemoryRepository()

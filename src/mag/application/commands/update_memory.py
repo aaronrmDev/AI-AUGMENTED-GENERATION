@@ -54,6 +54,13 @@ class UpdateMemory:
         # The actual overwrite (Postgres upsert, Qdrant upsert, best-effort
         # Neo4j sync) is exactly what RecordSemanticFact already does --
         # composing it here rather than duplicating that three-store dance.
+        # valid_until/archived_at are explicitly carried over from the
+        # existing fact -- RecordSemanticFact defaults both to None, and
+        # without this an Update on a previously Invalidated or Archived
+        # fact would silently reset its status as an unrelated side effect
+        # of a content correction (confirmed as a real bug by review).
+        # Content and status are independent; updating one must not
+        # silently clear the other.
         return await self._record_semantic_fact.execute(
             tenant_id=tenant_id,
             user_id=user_id,
@@ -61,4 +68,6 @@ class UpdateMemory:
             fact_value=new_fact_value,
             confidence=confidence,
             source=source,
+            valid_until=existing.valid_until,
+            archived_at=existing.archived_at,
         )

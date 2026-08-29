@@ -50,6 +50,9 @@ class RefineMemory:
             ),
             tenant_id,
         )
+        # Same status-preservation reasoning as UpdateMemory -- Refine
+        # merges content, it must not silently un-invalidate or
+        # un-archive a fact as a side effect.
         return await self._record_semantic_fact.execute(
             tenant_id=tenant_id,
             user_id=user_id,
@@ -57,6 +60,8 @@ class RefineMemory:
             fact_value=merged_fact_value,
             confidence=existing.confidence,
             source=existing.source,
+            valid_until=existing.valid_until,
+            archived_at=existing.archived_at,
         )
 
     async def _merge(self, existing_fact_value: str, new_information: str) -> str:

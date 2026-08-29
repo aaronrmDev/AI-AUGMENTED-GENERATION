@@ -4,7 +4,12 @@ from datetime import UTC, datetime
 from sqlalchemy import text
 
 from src.identity.infrastructure.db import set_tenant_context
-from src.mag.domain.entities import EpisodicMemory, ProceduralMemory, SemanticMemory
+from src.mag.domain.entities import (
+    EpisodicMemory,
+    ProceduralMemory,
+    SemanticMemory,
+    SemanticMemoryHistoryEntry,
+)
 from src.mag.infrastructure.postgres_episodic_memory_repository import (
     PostgresEpisodicMemoryRepository,
 )
@@ -128,6 +133,59 @@ async def test_semantic_memory_rls_returns_zero_cross_tenant_rows_without_an_app
 
     assert fact_values == {"tenant a's fact"}
     assert "tenant b's fact" not in fact_values
+
+
+async def test_semantic_memory_history_rls_returns_zero_cross_tenant_rows(
+    db_session, embedding_model
+):
+    # Same shape as the semantic_memory test above, added by adversarial
+    # review of MAG Batch F: this table (migration 0005) had no
+    # cross-tenant behavioral check at all before this.
+    tenant_a = uuid.uuid4()
+    tenant_b = uuid.uuid4()
+    repo = PostgresSemanticMemoryRepository(db_session)
+
+    await set_tenant_context(db_session, tenant_a)
+    user_a = await _create_user(db_session, tenant_a)
+    fact_a = SemanticMemory(
+        id=uuid.uuid4(), user_id=user_a, fact_key="k",
+        fact_value="tenant a's fact", embedding=embedding_model.embed("blue"),
+    )
+    await repo.save(fact_a, tenant_a)
+    await repo.save_history_entry(
+        SemanticMemoryHistoryEntry(
+            id=uuid.uuid4(), original_fact_id=fact_a.id, user_id=user_a, fact_key="k",
+            fact_value="tenant a's old value", confidence=1.0, source="", operation="update",
+            superseded_at=datetime.now(UTC),
+        ),
+        tenant_a,
+    )
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_b)
+    user_b = await _create_user(db_session, tenant_b)
+    fact_b = SemanticMemory(
+        id=uuid.uuid4(), user_id=user_b, fact_key="k",
+        fact_value="tenant b's fact", embedding=embedding_model.embed("red"),
+    )
+    await repo.save(fact_b, tenant_b)
+    await repo.save_history_entry(
+        SemanticMemoryHistoryEntry(
+            id=uuid.uuid4(), original_fact_id=fact_b.id, user_id=user_b, fact_key="k",
+            fact_value="tenant b's old value", confidence=1.0, source="", operation="update",
+            superseded_at=datetime.now(UTC),
+        ),
+        tenant_b,
+    )
+    await db_session.commit()
+
+    await set_tenant_context(db_session, tenant_a)
+    # Deliberately no WHERE tenant_id = ... -- RLS alone must do the filtering.
+    result = await db_session.execute(text("SELECT fact_value FROM semantic_memory_history"))
+    fact_values = {row.fact_value for row in result}
+
+    assert fact_values == {"tenant a's old value"}
+    assert "tenant b's old value" not in fact_values
 
 
 async def test_procedural_memory_rls_returns_zero_cross_tenant_rows_without_an_app_level_filter(

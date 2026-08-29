@@ -33,6 +33,7 @@ class RecordSemanticFact:
         confidence: float = 1.0,
         source: str = "",
         valid_until: datetime | None = None,
+        archived_at: datetime | None = None,
     ) -> SemanticMemory:
         # fact_value, not fact_key, is what a future query semantically
         # searches against -- fact_key is an identifier ("favorite_color"),
@@ -58,6 +59,7 @@ class RecordSemanticFact:
             confidence=confidence,
             source=source,
             valid_until=valid_until,
+            archived_at=archived_at,
         )
         await self._repository.save(fact, tenant_id)
         await self._index.upsert(fact, tenant_id)

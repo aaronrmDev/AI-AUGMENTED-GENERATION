@@ -1,6 +1,6 @@
 import dataclasses
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 from src.mag.domain.entities import SemanticMemory
 from src.mag.domain.ports import (
@@ -9,6 +9,7 @@ from src.mag.domain.ports import (
     SemanticMemoryRepository,
 )
 from src.mag.infrastructure._graph_write_safety import best_effort_graph_write
+from src.mag.infrastructure._index_write_safety import best_effort_index_write
 
 
 class ArchiveMemory:
@@ -42,10 +43,19 @@ class ArchiveMemory:
             raise ValueError(
                 f"no existing fact for user_id={user_id} fact_key={fact_key!r} to archive"
             )
-        archived_at = archived_at or datetime.now(UTC)
-        await self._repository.archive(user_id, fact_key, tenant_id, archived_at)
-        await self._index.update_status(existing.id, tenant_id, existing.valid_until, archived_at)
-        updated = dataclasses.replace(existing, archived_at=archived_at)
+        # Same None-means-database-computed-now and Qdrant-consistency
+        # reasoning as InvalidateMemory.
+        actual_archived_at = await self._repository.archive(
+            user_id, fact_key, tenant_id, archived_at
+        )
+        # Same set_archived_at reasoning as InvalidateMemory's
+        # set_valid_until: never touches valid_until or the vector, and
+        # best-effort for the same missing-Qdrant-point scenario.
+        await best_effort_index_write(
+            self._index.set_archived_at(existing.id, tenant_id, actual_archived_at),
+            "set archived_at (archive)",
+        )
+        updated = dataclasses.replace(existing, archived_at=actual_archived_at)
         await best_effort_graph_write(
             self._graph.upsert_fact_node(updated, tenant_id), "upsert fact node (archive)"
         )

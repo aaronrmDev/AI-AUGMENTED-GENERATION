@@ -1,9 +1,11 @@
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
 from src.mag.application.commands.record_semantic_fact import RecordSemanticFact
 from src.mag.application.commands.update_memory import UpdateMemory
+from src.mag.domain.entities import SemanticMemoryHistoryEntry
 from tests.unit.mag_fakes import (
     FakeMemoryGraphRepository,
     FakeSemanticMemoryIndex,
@@ -100,6 +102,37 @@ async def test_execute_writes_the_old_value_to_history_before_overwriting():
     assert entry.confidence == 0.8
     assert entry.source == "conversation"
     assert entry.operation == "update"
+
+
+async def test_find_history_orders_multiple_entries_newest_first():
+    # find_history's port docstring documents "newest first" -- every
+    # existing test only ever produced a single history row, which can't
+    # actually prove ordering (any order of one element is trivially
+    # correct), and a fact genuinely updated more than once is normal,
+    # real usage. Explicit, manually-differentiated superseded_at values
+    # (rather than two back-to-back datetime.now(UTC) calls through
+    # UpdateMemory, which risks landing on the identical microsecond on
+    # a fast machine) make this deterministic rather than timing-flaky.
+    repository = FakeSemanticMemoryRepository()
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    original_fact_id = uuid.uuid4()
+    older = SemanticMemoryHistoryEntry(
+        id=uuid.uuid4(), original_fact_id=original_fact_id, user_id=user_id,
+        fact_key="location", fact_value="New York", confidence=1.0, source="",
+        operation="update", superseded_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    newer = SemanticMemoryHistoryEntry(
+        id=uuid.uuid4(), original_fact_id=original_fact_id, user_id=user_id,
+        fact_key="location", fact_value="Chicago", confidence=1.0, source="",
+        operation="update", superseded_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    await repository.save_history_entry(older, tenant_id)
+    await repository.save_history_entry(newer, tenant_id)
+
+    history = await repository.find_history(user_id, "location", tenant_id)
+
+    assert [entry.fact_value for entry in history] == ["Chicago", "New York"]
 
 
 async def test_execute_defaults_confidence_and_source_for_the_new_value():

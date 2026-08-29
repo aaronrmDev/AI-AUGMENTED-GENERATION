@@ -16,7 +16,9 @@ from tests.unit.rag_fakes import FakeChatModel, FakeEmbeddingModel
 
 
 def _wire(
-    repository: FakeSemanticMemoryRepository, classify_chat_model: FakeChatModel
+    repository: FakeSemanticMemoryRepository,
+    classify_chat_model: FakeChatModel,
+    refine_chat_model: FakeChatModel | None = None,
 ) -> tuple[EvolveMemory, RecordSemanticFact]:
     index = FakeSemanticMemoryIndex()
     graph = FakeMemoryGraphRepository()
@@ -41,10 +43,15 @@ def _wire(
         refine_memory=RefineMemory(
             semantic_memory_repository=repository,
             record_semantic_fact=record,
-            # RefineMemory's own LLM call shares this fake's fixed response
-            # in every test below that doesn't classify as "refine" -- it's
-            # never reached in those cases, so its content doesn't matter.
-            chat_model=classify_chat_model,
+            # A SEPARATE chat model from classification's, not the same
+            # instance reused -- sharing one fake's fixed response across
+            # both LLM call sites made it structurally impossible for a
+            # test to tell "the classify call got its own prompt" apart
+            # from "the refine call got its own prompt" (a real gap
+            # confirmed by review). Defaults to classify_chat_model only
+            # for tests where refine is never actually reached (its
+            # content then genuinely doesn't matter).
+            chat_model=refine_chat_model or classify_chat_model,
         ),
     )
     return evolve, record
@@ -99,19 +106,24 @@ async def test_execute_dispatches_to_invalidate_on_invalidate_classification():
 async def test_execute_dispatches_to_refine_on_refine_classification():
     repository = FakeSemanticMemoryRepository()
     tenant_id, user_id = uuid.uuid4(), uuid.uuid4()
-    # ClassifyFactEvolution and RefineMemory's _merge share this fake's one
-    # fixed response -- valid JSON for both call shapes at once, so the
-    # dispatch (classify -> refine's own LLM merge call) both parse cleanly.
-    chat_model = FakeChatModel(
+    # Two DISTINCT chat models, one per LLM call site -- not one fake
+    # reused for both. If EvolveMemory/RefineMemory ever routed the wrong
+    # prompt to the wrong model (a swapped-argument or wrong-system-prompt
+    # bug), classify_chat_model's response (which has no
+    # merged_fact_value key) would fail RefineMemory._merge's JSON
+    # parsing, or refine_chat_model's response (which has no operation
+    # key) would fail ClassifyFactEvolution's parsing -- either mistake
+    # is now distinguishable, unlike sharing one blob that satisfies both
+    # shapes at once.
+    classify_chat_model = FakeChatModel(
+        response=json.dumps({"operation": "refine", "reasoning": "adds nuance"})
+    )
+    refine_chat_model = FakeChatModel(
         response=json.dumps(
-            {
-                "operation": "refine",
-                "reasoning": "adds nuance",
-                "merged_fact_value": "prefers Python, especially for data analysis",
-            }
+            {"merged_fact_value": "prefers Python, especially for data analysis"}
         )
     )
-    evolve, record = _wire(repository, chat_model)
+    evolve, record = _wire(repository, classify_chat_model, refine_chat_model)
     await record.execute(
         tenant_id=tenant_id, user_id=user_id, fact_key="language", fact_value="prefers Python"
     )
@@ -126,6 +138,11 @@ async def test_execute_dispatches_to_refine_on_refine_classification():
     assert classification.operation == "refine"
     assert result is not None
     assert result.fact_value == "prefers Python, especially for data analysis"
+    # Each call site actually received its own distinct prompt, not the
+    # other's -- proves the dispatch routed correctly rather than merely
+    # happening to parse.
+    assert "comparing an existing fact" in classify_chat_model.last_prompt.lower()
+    assert "merging an existing fact" in refine_chat_model.last_prompt.lower()
 
 
 async def test_execute_does_nothing_on_no_conflict_classification():

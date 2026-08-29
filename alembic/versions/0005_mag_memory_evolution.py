@@ -59,10 +59,10 @@ def upgrade() -> None:
         sa.Column("fact_value", sa.Text, nullable=False),
         sa.Column("confidence", sa.Float, nullable=False),
         sa.Column("source", sa.String, nullable=False),
-        # 'update' | 'invalidate' is never written here -- Invalidate (#63)
-        # flips a status on the SAME value rather than replacing it, so it
-        # has nothing to snapshot. Only Update and Refine overwrite
-        # fact_value, so only those two operation names appear.
+        # 'invalidate' is never written here -- Invalidate (#63) flips a
+        # status on the SAME value rather than replacing it, so it has
+        # nothing to snapshot. Only 'update' and 'refine' appear: Update
+        # and Refine are the two operations that overwrite fact_value.
         sa.Column("operation", sa.String, nullable=False),
         sa.Column(
             "superseded_at",

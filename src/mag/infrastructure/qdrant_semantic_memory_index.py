@@ -61,26 +61,39 @@ class QdrantSemanticMemoryIndex(SemanticMemoryIndex):
             ],
         )
 
-    async def update_status(
-        self,
-        fact_id: uuid.UUID,
-        tenant_id: uuid.UUID,
-        valid_until: datetime | None,
-        archived_at: datetime | None,
+    async def set_valid_until(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, valid_until: datetime | None
     ) -> None:
-        # set_payload merges the given keys into the existing point's
-        # payload and leaves the vector (and every other payload field)
-        # untouched -- unlike upsert(), which always replaces the whole
-        # point. InvalidateMemory/ArchiveMemory only ever have an
-        # embedding-less SemanticMemory to work with (find_by_key never
-        # returns a real embedding -- Postgres isn't this system's
-        # embedding-bearing read path), so going through upsert() here
-        # would silently blank out the stored vector.
+        # set_payload merges only the GIVEN keys into the existing point's
+        # payload -- never archived_at, never the vector, never any other
+        # field -- unlike upsert(), which always replaces the whole point.
+        # InvalidateMemory only ever has an embedding-less SemanticMemory
+        # to work with (find_by_key never returns a real embedding --
+        # Postgres isn't this system's embedding-bearing read path), so
+        # going through upsert() here would silently blank out the stored
+        # vector. Touching only valid_until (not also re-writing
+        # archived_at from a snapshot the caller read earlier) also
+        # closes a race: a concurrent ArchiveMemory call writing
+        # archived_at in between this method's read and write can no
+        # longer be clobbered back to a stale value, since this call
+        # never touches that key at all.
         await self._client.set_payload(
             collection_name=_COLLECTION_NAME,
             payload={
                 "valid_until": valid_until.isoformat() if valid_until else None,
                 "valid_until_epoch": _epoch(valid_until),
+            },
+            points=[str(fact_id)],
+        )
+
+    async def set_archived_at(
+        self, fact_id: uuid.UUID, tenant_id: uuid.UUID, archived_at: datetime | None
+    ) -> None:
+        # Same reasoning as set_valid_until above, mirrored for the other
+        # field.
+        await self._client.set_payload(
+            collection_name=_COLLECTION_NAME,
+            payload={
                 "archived_at": archived_at.isoformat() if archived_at else None,
                 "archived_at_epoch": _epoch(archived_at),
             },

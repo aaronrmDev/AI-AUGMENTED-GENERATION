@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from src.mag.application.commands.invalidate_memory import InvalidateMemory
@@ -5,6 +6,8 @@ from src.mag.application.commands.refine_memory import RefineMemory
 from src.mag.application.commands.update_memory import UpdateMemory
 from src.mag.application.queries.classify_fact_evolution import ClassifyFactEvolution
 from src.mag.domain.entities import FactEvolutionClassification, SemanticMemory
+
+logger = logging.getLogger(__name__)
 
 
 class EvolveMemory:
@@ -55,7 +58,19 @@ class EvolveMemory:
             )
         elif classification.operation == "invalidate":
             # No replacement value -- matches #63's own "without
-            # necessarily replacing it with anything."
+            # necessarily replacing it with anything." Unlike Update/
+            # Refine, Invalidate has no history table to snapshot into
+            # (it never changes fact_value), so the triggering
+            # new_information/reasoning has nowhere durable to land --
+            # logging it here is the only trace left of WHY the fact was
+            # invalidated, for anyone debugging this later.
+            logger.info(
+                "EvolveMemory invalidating fact_key=%r for user_id=%s: %r (reason: %s)",
+                fact_key,
+                user_id,
+                new_information,
+                classification.reasoning,
+            )
             result = await self._invalidate.execute(
                 tenant_id=tenant_id, user_id=user_id, fact_key=fact_key
             )

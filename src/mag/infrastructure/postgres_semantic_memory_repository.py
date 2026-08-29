@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
@@ -103,13 +104,30 @@ class PostgresSemanticMemoryRepository(SemanticMemoryRepository):
         ]
 
     async def invalidate(
-        self, user_id: uuid.UUID, fact_key: str, tenant_id: uuid.UUID, invalidated_at: datetime
-    ) -> None:
-        await self._session.execute(
+        self,
+        user_id: uuid.UUID,
+        fact_key: str,
+        tenant_id: uuid.UUID,
+        invalidated_at: datetime | None,
+    ) -> datetime:
+        # COALESCE(:invalidated_at, now()) rather than always taking a
+        # required, caller-supplied timestamp: when a caller wants "right
+        # now" (the common case -- InvalidateMemory's own invalidated_at
+        # defaults to None), letting Postgres compute its OWN now()
+        # avoids a clock-skew window where an application-clock timestamp
+        # sent over the wire could read as still-in-the-future from this
+        # same database's perspective when search_by_similarity later
+        # compares it against ITS now(). RETURNING hands back whichever
+        # value was actually used, so callers writing that same instant to
+        # Qdrant/Neo4j stay consistent with what Postgres -- the source of
+        # truth here -- actually recorded, rather than each store
+        # independently computing its own "now."
+        result = await self._session.execute(
             text(
                 """
-                UPDATE semantic_memory SET valid_until = :invalidated_at
+                UPDATE semantic_memory SET valid_until = COALESCE(:invalidated_at, now())
                 WHERE user_id = :user_id AND fact_key = :fact_key AND tenant_id = :tenant_id
+                RETURNING valid_until
                 """
             ),
             {
@@ -120,15 +138,22 @@ class PostgresSemanticMemoryRepository(SemanticMemoryRepository):
             },
         )
         await self._session.flush()
+        return cast(datetime, result.scalar_one())
 
     async def archive(
-        self, user_id: uuid.UUID, fact_key: str, tenant_id: uuid.UUID, archived_at: datetime
-    ) -> None:
-        await self._session.execute(
+        self,
+        user_id: uuid.UUID,
+        fact_key: str,
+        tenant_id: uuid.UUID,
+        archived_at: datetime | None,
+    ) -> datetime:
+        # Same COALESCE-and-RETURNING reasoning as invalidate() above.
+        result = await self._session.execute(
             text(
                 """
-                UPDATE semantic_memory SET archived_at = :archived_at
+                UPDATE semantic_memory SET archived_at = COALESCE(:archived_at, now())
                 WHERE user_id = :user_id AND fact_key = :fact_key AND tenant_id = :tenant_id
+                RETURNING archived_at
                 """
             ),
             {
@@ -139,6 +164,7 @@ class PostgresSemanticMemoryRepository(SemanticMemoryRepository):
             },
         )
         await self._session.flush()
+        return cast(datetime, result.scalar_one())
 
     async def save_history_entry(
         self, entry: SemanticMemoryHistoryEntry, tenant_id: uuid.UUID
