@@ -1,14 +1,25 @@
 import json
 import uuid
+from datetime import datetime
 
 from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.mag.domain.entities import EpisodicMemory
+from src.mag.domain.entities import EpisodicMemory, ScoredEpisode
 from src.mag.domain.ports import EpisodicMemoryRepository
 
 _SELECT_COLUMNS = "id, session_id, content, timestamp, salience_score, consolidated_at"
+
+
+def _escape_like(value: str) -> str:
+    # Postgres LIKE/ILIKE's default escape character is backslash -- without
+    # this, an entity string containing % or _ is interpreted as a wildcard
+    # instead of a literal character (entity="v1.2_beta" would ILIKE-match
+    # "v1.2Xbeta" for any X, since _ matches any single character). Escape
+    # the escape character itself first so a literal backslash in `value`
+    # doesn't get reinterpreted as the start of a new escape sequence.
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 class PostgresEpisodicMemoryRepository(EpisodicMemoryRepository):
@@ -84,11 +95,12 @@ class PostgresEpisodicMemoryRepository(EpisodicMemoryRepository):
 
     async def search_by_similarity(
         self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
-    ) -> list[EpisodicMemory]:
+    ) -> list[ScoredEpisode]:
         result = await self._session.execute(
             text(
                 f"""
-                SELECT {_SELECT_COLUMNS}
+                SELECT {_SELECT_COLUMNS},
+                    1 - (embedding <=> CAST(:query_embedding AS vector)) AS score
                 FROM episodic_memory
                 WHERE tenant_id = :tenant_id
                 ORDER BY embedding <=> CAST(:query_embedding AS vector)
@@ -98,6 +110,91 @@ class PostgresEpisodicMemoryRepository(EpisodicMemoryRepository):
             {
                 "tenant_id": tenant_id,
                 "query_embedding": str(query_embedding),
+                "top_k": top_k,
+            },
+        )
+        return [
+            ScoredEpisode(episode=self._row_to_episode(row), score=float(row["score"]))
+            for row in result.mappings()
+        ]
+
+    async def get_by_session_in_window(
+        self,
+        session_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        start: datetime,
+        end: datetime,
+        top_k: int,
+    ) -> list[EpisodicMemory]:
+        result = await self._session.execute(
+            text(
+                f"SELECT {_SELECT_COLUMNS} "
+                "FROM episodic_memory "
+                "WHERE session_id = :session_id AND tenant_id = :tenant_id "
+                "AND timestamp BETWEEN :start AND :end "
+                "ORDER BY timestamp DESC "
+                "LIMIT :top_k"
+            ),
+            {
+                "session_id": session_id,
+                "tenant_id": tenant_id,
+                "start": start,
+                "end": end,
+                "top_k": top_k,
+            },
+        )
+        return [self._row_to_episode(row) for row in result.mappings()]
+
+    async def get_recent_by_session(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, limit: int
+    ) -> list[EpisodicMemory]:
+        result = await self._session.execute(
+            text(
+                f"SELECT {_SELECT_COLUMNS} "
+                "FROM episodic_memory "
+                "WHERE session_id = :session_id AND tenant_id = :tenant_id "
+                "ORDER BY timestamp DESC "
+                "LIMIT :limit"
+            ),
+            {"session_id": session_id, "tenant_id": tenant_id, "limit": limit},
+        )
+        return [self._row_to_episode(row) for row in result.mappings()]
+
+    async def get_by_session_ranked_by_salience(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, top_k: int
+    ) -> list[EpisodicMemory]:
+        result = await self._session.execute(
+            text(
+                f"SELECT {_SELECT_COLUMNS} "
+                "FROM episodic_memory "
+                "WHERE session_id = :session_id AND tenant_id = :tenant_id "
+                "ORDER BY salience_score DESC "
+                "LIMIT :top_k"
+            ),
+            {"session_id": session_id, "tenant_id": tenant_id, "top_k": top_k},
+        )
+        return [self._row_to_episode(row) for row in result.mappings()]
+
+    async def get_by_session_matching_entity(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, entity: str, top_k: int
+    ) -> list[EpisodicMemory]:
+        result = await self._session.execute(
+            text(
+                f"SELECT {_SELECT_COLUMNS} "
+                "FROM episodic_memory "
+                "WHERE session_id = :session_id AND tenant_id = :tenant_id "
+                "AND ("
+                "  content->'entities' @> to_jsonb(ARRAY[:entity]::text[])"
+                "  OR content::text ILIKE :pattern ESCAPE '\\'"
+                ") "
+                "ORDER BY timestamp DESC "
+                "LIMIT :top_k"
+            ),
+            {
+                "session_id": session_id,
+                "tenant_id": tenant_id,
+                "entity": entity,
+                "pattern": f"%{_escape_like(entity)}%",
                 "top_k": top_k,
             },
         )

@@ -2,10 +2,10 @@ import json
 import uuid
 
 from src.mag.application.commands.capture_episode import CaptureEpisode
-from src.mag.domain.entities import EpisodicMemory
+from src.mag.domain.entities import EpisodicMemory, ScoredEpisode
 from src.mag.domain.ports import EpisodicMemoryIndex
 from tests.unit.mag_fakes import FakeEpisodicMemoryRepository
-from tests.unit.rag_fakes import FakeEmbeddingModel
+from tests.unit.rag_fakes import FakeChatModel, FakeEmbeddingModel
 
 
 class FakeQdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
@@ -23,8 +23,12 @@ class FakeQdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
         self.upserted.append((episode, tenant_id))
 
     async def search(
-        self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
-    ) -> list[EpisodicMemory]:
+        self,
+        query_embedding: list[float],
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        top_k: int,
+    ) -> list[ScoredEpisode]:
         return []
 
 
@@ -50,11 +54,17 @@ def _use_case(
     repo: FakeEpisodicMemoryRepository,
     index: FakeQdrantEpisodicMemoryIndex,
     embedder: FakeEmbeddingModel | None = None,
+    chat_model: FakeChatModel | None = None,
 ) -> CaptureEpisode:
     return CaptureEpisode(
         episodic_memory_repository=repo,
         episodic_memory_index=index,
         embedding_model=embedder or FakeEmbeddingModel(),
+        # Defaults to a fixed low score so tests that don't care about
+        # salience get a stable, predictable value rather than 0.0 reading
+        # as "the feature doesn't exist" -- see the dedicated salience tests
+        # below for the retry/validation/fallback behavior itself.
+        chat_model=chat_model or FakeChatModel(response='{"salience_score": 0.2}'),
     )
 
 
@@ -134,4 +144,83 @@ async def test_execute_returns_an_episodic_memory_carrying_the_given_session_and
     assert isinstance(episode, EpisodicMemory)
     assert episode.session_id == session_id
     assert episode.content == content
+    assert episode.salience_score == 0.2
+
+
+async def test_execute_sets_salience_score_from_the_chat_models_json_response():
+    repo = FakeEpisodicMemoryRepository()
+    index = FakeQdrantEpisodicMemoryIndex()
+    chat_model = FakeChatModel(response='{"salience_score": 0.85}')
+
+    episode = await _use_case(repo, index, chat_model=chat_model).execute(
+        tenant_id=uuid.uuid4(), session_id=uuid.uuid4(), content={"outcome": "failure"}
+    )
+
+    assert episode.salience_score == 0.85
+
+
+async def test_execute_strips_a_markdown_fence_around_the_salience_response():
+    repo = FakeEpisodicMemoryRepository()
+    index = FakeQdrantEpisodicMemoryIndex()
+    chat_model = FakeChatModel(response='```json\n{"salience_score": 0.6}\n```')
+
+    episode = await _use_case(repo, index, chat_model=chat_model).execute(
+        tenant_id=uuid.uuid4(), session_id=uuid.uuid4(), content={"input": "hi"}
+    )
+
+    assert episode.salience_score == 0.6
+
+
+async def test_execute_defaults_salience_score_to_zero_after_exhausting_retries_on_bad_json():
+    repo = FakeEpisodicMemoryRepository()
+    index = FakeQdrantEpisodicMemoryIndex()
+    chat_model = FakeChatModel(response="not json at all")
+
+    episode = await _use_case(repo, index, chat_model=chat_model).execute(
+        tenant_id=uuid.uuid4(), session_id=uuid.uuid4(), content={"input": "hi"}
+    )
+
     assert episode.salience_score == 0.0
+
+
+async def test_execute_defaults_salience_score_to_zero_when_out_of_range():
+    repo = FakeEpisodicMemoryRepository()
+    index = FakeQdrantEpisodicMemoryIndex()
+    chat_model = FakeChatModel(response='{"salience_score": 1.5}')
+
+    episode = await _use_case(repo, index, chat_model=chat_model).execute(
+        tenant_id=uuid.uuid4(), session_id=uuid.uuid4(), content={"input": "hi"}
+    )
+
+    assert episode.salience_score == 0.0
+
+
+async def test_execute_defaults_salience_score_to_zero_when_the_model_returns_a_boolean():
+    # Regression test: bool is a subclass of int in Python, so
+    # float(True) == 1.0 -- without an explicit isinstance(x, bool) guard, a
+    # model returning {"salience_score": true} would silently pass the
+    # 0.0-1.0 range check as a maximal score on the first attempt, with no
+    # retry. A review caught this gap (present in retrieve_by_causal_
+    # relevance.py's validator but missing here) before it shipped.
+    repo = FakeEpisodicMemoryRepository()
+    index = FakeQdrantEpisodicMemoryIndex()
+    chat_model = FakeChatModel(response='{"salience_score": true}')
+
+    episode = await _use_case(repo, index, chat_model=chat_model).execute(
+        tenant_id=uuid.uuid4(), session_id=uuid.uuid4(), content={"input": "hi"}
+    )
+
+    assert episode.salience_score == 0.0
+
+
+async def test_execute_saves_the_episode_with_its_computed_salience_score():
+    repo = FakeEpisodicMemoryRepository()
+    index = FakeQdrantEpisodicMemoryIndex()
+    chat_model = FakeChatModel(response='{"salience_score": 0.7}')
+
+    episode = await _use_case(repo, index, chat_model=chat_model).execute(
+        tenant_id=uuid.uuid4(), session_id=uuid.uuid4(), content={"input": "hi"}
+    )
+
+    assert repo.saved == [(episode, repo.saved[0][1])]
+    assert repo.saved[0][0].salience_score == 0.7

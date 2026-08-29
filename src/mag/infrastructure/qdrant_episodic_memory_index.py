@@ -5,7 +5,7 @@ from typing import cast
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qmodels
 
-from src.mag.domain.entities import EpisodicMemory
+from src.mag.domain.entities import EpisodicMemory, ScoredEpisode
 from src.mag.domain.ports import EpisodicMemoryIndex
 
 _COLLECTION_NAME = "episodic_memory"
@@ -46,8 +46,8 @@ class QdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
         )
 
     async def search(
-        self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
-    ) -> list[EpisodicMemory]:
+        self, query_embedding: list[float], tenant_id: uuid.UUID, session_id: uuid.UUID, top_k: int
+    ) -> list[ScoredEpisode]:
         # Design choice the next batch's retrieval strategies build on: this
         # index returns full EpisodicMemory objects reconstructed from payload
         # + vector (mirroring QdrantVectorStore, which inlines chunk content
@@ -55,6 +55,14 @@ class QdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
         # that needs the whole episode never has to round-trip back to
         # Postgres just to get it. A caller that only needs a fast existence
         # or ranking check can ignore the extra fields.
+        #
+        # session_id is filtered here, not just tenant_id: a Batch C review
+        # caught SemanticSimilarityRetrieval (the sole caller of this method)
+        # returning another session's episodes within the same tenant, which
+        # directly contradicted this batch's own design spec ("All five
+        # non-fusion strategies scope their candidate set to a single
+        # session_id"). Fixed at the source rather than filtering results
+        # after the fact, so a caller can't accidentally skip the scoping.
         response = await self._client.query_points(
             collection_name=_COLLECTION_NAME,
             query=query_embedding,
@@ -62,13 +70,16 @@ class QdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
                 must=[
                     qmodels.FieldCondition(
                         key="tenant_id", match=qmodels.MatchValue(value=str(tenant_id))
-                    )
+                    ),
+                    qmodels.FieldCondition(
+                        key="session_id", match=qmodels.MatchValue(value=str(session_id))
+                    ),
                 ]
             ),
             limit=top_k,
             with_vectors=True,
         )
-        results: list[EpisodicMemory] = []
+        results: list[ScoredEpisode] = []
         for point in response.points:
             payload = point.payload
             if payload is None:
@@ -79,17 +90,20 @@ class QdrantEpisodicMemoryIndex(EpisodicMemoryIndex):
             # branches here -- narrowing by hand is what that general return
             # type can't do for us.
             embedding = cast(list[float], point.vector) if point.vector is not None else []
-            results.append(
-                EpisodicMemory(
-                    id=uuid.UUID(str(point.id)),
-                    session_id=uuid.UUID(str(payload["session_id"])),
-                    content=payload["content"],
-                    embedding=embedding,
-                    timestamp=datetime.fromisoformat(str(payload["timestamp"])),
-                    salience_score=float(payload["salience_score"]),
-                    # consolidated_at defaults to None -- upsert() above
-                    # never writes it to the payload. See
-                    # EpisodicMemoryIndex.search's docstring for why.
-                )
+            episode = EpisodicMemory(
+                id=uuid.UUID(str(point.id)),
+                session_id=uuid.UUID(str(payload["session_id"])),
+                content=payload["content"],
+                embedding=embedding,
+                timestamp=datetime.fromisoformat(str(payload["timestamp"])),
+                salience_score=float(payload["salience_score"]),
+                # consolidated_at defaults to None -- upsert() above
+                # never writes it to the payload. See
+                # EpisodicMemoryIndex.search's docstring for why.
             )
+            # point.score is cosine similarity for this COSINE-distance
+            # collection -- the same quantity search_by_similarity's port
+            # docstring above documents Postgres computing, on purpose, so
+            # fusion across backends isn't mixing two conventions.
+            results.append(ScoredEpisode(episode=episode, score=point.score))
         return results

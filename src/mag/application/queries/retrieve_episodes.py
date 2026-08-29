@@ -1,6 +1,6 @@
 import uuid
 
-from src.mag.domain.entities import EpisodicMemory
+from src.mag.domain.entities import EpisodicMemory, ScoredEpisode
 from src.mag.domain.ports import EpisodicMemoryRepository
 
 
@@ -15,5 +15,5 @@ class RetrieveEpisodes:
 
     async def by_similarity(
         self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
-    ) -> list[EpisodicMemory]:
+    ) -> list[ScoredEpisode]:
         return await self._episodes.search_by_similarity(query_embedding, tenant_id, top_k)
