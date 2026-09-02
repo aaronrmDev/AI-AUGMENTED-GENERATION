@@ -1,3 +1,5 @@
+import pytest
+
 from src.cag.application.speculative_decode import SpeculativeDecode
 from src.cag.domain.entities import VerificationResult
 from tests.unit.cag_fakes import FakeCandidateGenerator, FakeTargetModel
@@ -106,6 +108,15 @@ def test_stops_exactly_at_max_new_tokens_even_mid_candidate_batch():
 
     assert run.generated_tokens == [10, 11]
     assert run.forward_passes == 1
+    # Review-caught: an earlier version counted all 4 verified-accepted
+    # candidates here, even though 2 of them were discarded by
+    # truncation -- tokens_accepted_from_candidates must only count
+    # tokens that actually survived into generated_tokens, or the
+    # acceptance rate this field exists to compute (see
+    # SpeculativeDecodingRun's own docstring) silently overstates itself
+    # whenever a batch's accepted tokens overshoot the remaining budget.
+    assert run.tokens_accepted_from_candidates == 2
+    assert run.tokens_proposed == 4
 
 
 def test_target_model_receives_the_full_context_so_far():
@@ -131,3 +142,35 @@ def test_target_model_receives_the_full_context_so_far():
 
     assert target_model.calls[0][0] == [1, 2, 3]
     assert target_model.calls[1][0] == [1, 2, 3, 50, 51]
+    # Review-caught: FakeTargetModel's scripted responses don't depend on
+    # what candidates it's actually given, so nothing previously proved
+    # propose()'s real return value reaches verify_candidates() intact --
+    # a regression dropping, reordering, or stale-caching the candidates
+    # passed between them would have shipped undetected.
+    assert target_model.calls[0][1] == [50]
+    assert target_model.calls[1][1] == [60]
+
+
+def test_raises_if_verification_makes_no_progress_under_budget():
+    # Review-caught: a TargetModel/CandidateGenerator pairing that
+    # violates VerificationResult's own documented contract ("bonus_token
+    # is None only when max_new_tokens was already reached") -- returning
+    # no accepted tokens AND no bonus token while still under budget --
+    # would otherwise make the loop spin forever, silently incrementing
+    # forward_passes with nothing to show for it. Every shipped
+    # TargetModel (HFTargetModel) always returns a real bonus_token
+    # unless the budget is already exhausted, so this never fires in
+    # practice today -- this is a defensive guard against a future
+    # contract violation, not a currently-reachable bug.
+    candidate_generator = FakeCandidateGenerator([[]])
+    target_model = FakeTargetModel([VerificationResult(accepted_tokens=[], bonus_token=None)])
+    use_case = SpeculativeDecode()
+
+    with pytest.raises(RuntimeError, match="no progress"):
+        use_case.execute(
+            target_model=target_model,
+            candidate_generator=candidate_generator,
+            prompt_tokens=[1],
+            max_new_tokens=3,
+            num_candidates=2,
+        )

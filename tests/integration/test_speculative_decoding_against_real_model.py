@@ -69,6 +69,16 @@ def test_prompt_lookup_reduces_forward_passes_on_a_prompt_with_a_repeated_phrase
     # well its own candidate source performs: never MORE forward passes
     # than naive one-token-per-pass generation would need.
     assert run.forward_passes <= _MAX_NEW_TOKENS
+    # Review-caught (HIGH): the floor above is trivially satisfied even
+    # by a completely broken candidate generator whose propose() always
+    # returns [] -- confirmed empirically by substituting exactly that
+    # into this test and watching both assertions still pass (12 forward
+    # passes for 12 tokens, the naive fallback, indistinguishable from a
+    # real speedup by these bounds alone). This is the real, stronger
+    # claim the test's own name makes: Prompt Lookup's candidate source
+    # must have actually found and used real matches on this
+    # favorable-by-design prompt, not merely never made things worse.
+    assert run.tokens_accepted_from_candidates > 0
 
 
 def test_lookahead_decoding_reduces_forward_passes_on_naturally_repetitive_text():
@@ -88,6 +98,15 @@ def test_lookahead_decoding_reduces_forward_passes_on_naturally_repetitive_text(
     _report("Lookahead Decoding", tokenizer, prompt_tokens, run)
     assert len(run.generated_tokens) == _MAX_NEW_TOKENS
     assert run.forward_passes <= _MAX_NEW_TOKENS
+    # Same review-caught strengthening as Prompt Lookup's test above: the
+    # floor alone can't distinguish a working n-gram cache from a
+    # completely broken one. Greedy decoding against a fixed model and
+    # prompt is fully deterministic (argmax throughout this batch, no
+    # sampling), so this measured acceptance is a fixed fact about this
+    # exact input, not a run-to-run gamble -- real, if modest (~12.5% in
+    # this batch's own measured run, honestly below CAG.md's stated
+    # typical range, disclosed in this batch's evaluation report).
+    assert run.tokens_accepted_from_candidates > 0
 
 
 def test_medusa_never_does_worse_than_naive_generation_even_with_untrained_heads():

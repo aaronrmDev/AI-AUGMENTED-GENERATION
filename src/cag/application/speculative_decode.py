@@ -25,6 +25,7 @@ class SpeculativeDecode:
         tokens_proposed = 0
 
         while len(generated_tokens) < max_new_tokens:
+            length_before_this_round = len(generated_tokens)
             candidates = candidate_generator.propose(
                 prompt_tokens, generated_tokens, num_candidates
             )
@@ -32,13 +33,35 @@ class SpeculativeDecode:
 
             result = target_model.verify_candidates(prompt_tokens + generated_tokens, candidates)
             forward_passes += 1
-            tokens_accepted_from_candidates += len(result.accepted_tokens)
 
-            generated_tokens.extend(result.accepted_tokens)
+            # Cap what gets counted (and appended) at the remaining
+            # budget BEFORE counting -- review-caught: incrementing
+            # tokens_accepted_from_candidates by the full verified count
+            # and only truncating generated_tokens afterward meant the
+            # counter could claim more "accepted" tokens than actually
+            # survived into the output, silently inflating the acceptance
+            # rate this run's own stats exist to report accurately.
+            remaining_budget = max_new_tokens - len(generated_tokens)
+            accepted_within_budget = result.accepted_tokens[:remaining_budget]
+            tokens_accepted_from_candidates += len(accepted_within_budget)
+            generated_tokens.extend(accepted_within_budget)
             if result.bonus_token is not None and len(generated_tokens) < max_new_tokens:
                 generated_tokens.append(result.bonus_token)
-            if len(generated_tokens) > max_new_tokens:
-                generated_tokens = generated_tokens[:max_new_tokens]
+
+            # Forward-progress guard (review-caught, defensive): every
+            # shipped TargetModel returns a real bonus_token unless
+            # max_new_tokens was already reached, so this never fires
+            # today -- but nothing else in this loop stops a future
+            # TargetModel/CandidateGenerator pairing that violated that
+            # contract (accepted_tokens=[] and bonus_token=None while
+            # under budget) from spinning forever, silently incrementing
+            # forward_passes with no error. Fail loudly instead.
+            if len(generated_tokens) == length_before_this_round:
+                raise RuntimeError(
+                    "speculative decoding made no progress this round -- "
+                    "TargetModel.verify_candidates returned no accepted tokens and no "
+                    "bonus_token while still under max_new_tokens, violating its own contract"
+                )
 
         return SpeculativeDecodingRun(
             generated_tokens=generated_tokens,
