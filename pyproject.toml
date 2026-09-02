@@ -32,6 +32,12 @@ dependencies = [
     # floor for the graph-DB driver. Native async API (neo4j.AsyncGraphDatabase),
     # matching this project's async-first convention everywhere else.
     "neo4j>=5.20.0",
+    # Previously only a transitive pull-in via sentence-transformers;
+    # CAG's compression module (PALUCompressor's SVD) now imports it
+    # directly, so it needs its own declared floor rather than riding on
+    # another package's transitive dependency, which could change
+    # independently of what this code actually needs.
+    "numpy>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +53,24 @@ dev = [
     "mypy>=1.10",
     "ruff>=0.5",
     "types-PyYAML>=6.0",
+    # Test-only (tests/integration/test_kv_cache_compression_against_real_model.py
+    # imports both directly, including a DynamicCache internal API surface).
+    # Previously available only transitively via sentence-transformers, the same
+    # situation the numpy dependency comment above (production-side) already
+    # flags as fragile -- a future sentence-transformers pin change could shift
+    # either version out from under this test with nothing here recording what
+    # it was actually built and verified against.
+    "torch>=2.0",
+    # >=4.54, not >=4.40: the integration test reads cache.layers[i].keys/.values,
+    # DynamicCache's own newer per-layer API (a DynamicLayer object per entry).
+    # Confirmed by diffing cache_utils.py across tagged releases: v4.53.3 and
+    # everything before it only has the older self.key_cache/self.value_cache
+    # list attributes, no .layers at all -- a resolver picking anything in
+    # [4.40, 4.54) (e.g. --resolution=lowest, or a downstream constraint file
+    # near the old floor) would hit AttributeError at collection time. review-
+    # caught: an earlier version of this floor stated an intent ("what it was
+    # actually built and verified against") the number itself didn't satisfy.
+    "transformers>=4.54",
 ]
 
 [tool.pytest.ini_options]
