@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from src.cag.domain.compression_metrics import compression_ratio, reconstruction_error
@@ -10,10 +12,35 @@ def _tokens(n: int, channels: int) -> list[list[float]]:
     # Same generator KIVI's own test file uses: deterministic, varied,
     # roughly-uniformly-spread values per channel (mod 23, no channel value
     # ever drifts far enough from its own channel mean to be flagged an
-    # outlier at the default threshold) so a bug that quantizes per-row
-    # instead of per-channel shows up as elevated error rather than passing
-    # by accident on uniform data.
+    # outlier at the default threshold). Does NOT distinguish per-channel
+    # from per-token quantile-bucketing axis -- see
+    # _channel_scaled_tokens_for_axis_check below and
+    # test_per_channel_and_per_token_quantile_axes_are_not_interchangeable
+    # for that (review-caught: an earlier version of this comment claimed
+    # this fixture already covered axis correctness; empirically verified
+    # false -- a per-token-axis-swapped implementation measured 0.0 error
+    # against this fixture's own 0.319, because with bits=4 (16 quantile
+    # levels) and only 6 values per row, per-row bucketing trivially gives
+    # each value its own bucket -- worse than merely undetected, the buggy
+    # version passed MORE comfortably than the correct one).
     return [[float((t * 7 + c * 3) % 23) - 11.0 for c in range(channels)] for t in range(n)]
+
+
+def _channel_scaled_tokens_for_axis_check(n: int, channels: int) -> list[list[float]]:
+    # channels=32 is deliberately larger than bits=4's 16 quantile levels
+    # -- per-row (token-axis) bucketing over only 6-8 values is exactly
+    # the degenerate case above that makes an axis bug undetectable (each
+    # value gets its own bucket, zero error, regardless of axis); with 32
+    # values to distribute across 16 buckets, at least some buckets must
+    # hold more than one value, so genuine quantization loss -- and a
+    # real gap between the correct and axis-swapped versions -- becomes
+    # possible again. Each channel also gets a distinctly different
+    # amplitude ((c+1)*4, same reasoning as KIVI's own analogous fixture)
+    # so a per-token axis bug's bucket boundaries get stretched across
+    # wildly different channel scales within one row.
+    return [
+        [math.sin(t * 0.5 + c * 0.9) * (c + 1) * 4.0 for c in range(channels)] for t in range(n)
+    ]
 
 
 def _clustered_tokens_with_one_outlier(
@@ -154,6 +181,26 @@ def test_kvquant_reconstruction_error_beats_kivis_at_equal_bit_width_when_outlie
     kvquant_error = reconstruction_error(base, kvquant_reconstructed)
 
     assert kvquant_error < kivi_error * 0.5
+
+
+def test_per_channel_and_per_token_quantile_axes_are_not_interchangeable():
+    # Review-caught (HIGH): the original reconstruction-error tolerance
+    # test above couldn't detect a per-channel/per-token axis bug at
+    # bits=4 (16 levels) over only 6 channels -- a per-row axis-swapped
+    # bug measured 0.0 error there, passing MORE comfortably than the
+    # correct implementation, because 6 values into 16 buckets is
+    # trivially lossless regardless of which axis the buckets are
+    # computed over. _channel_scaled_tokens_for_axis_check uses 32
+    # channels (> the 16 quantile levels, so the degenerate case above
+    # cannot recur) with per-channel amplitude scaling -- correct-axis
+    # error measures ~1.80 here; a per-token axis-swapped implementation
+    # measures ~3.68, roughly double. 2.7 sits with real margin on both
+    # sides of that measured gap.
+    compressor = KVQuantCompressor(bits=4)
+    original = _channel_scaled_tokens_for_axis_check(24, 32)
+    compressed = compressor.compress(original)
+    reconstructed = compressor.decompress(compressed)
+    assert reconstruction_error(original, reconstructed) < 2.7
 
 
 def test_decompress_rejects_a_payload_from_a_different_method():
