@@ -1,9 +1,26 @@
-from typing import Any
+from typing import TypedDict, cast
 
 from src.cag.domain.entities import CompressedKV
 from src.cag.domain.ports import KVCacheCompressor
 
 _METHOD = "kivi"
+
+
+class _KIVIPayload(TypedDict):
+    # CompressedKV.payload stays dict[str, Any] at the domain boundary
+    # (five compressors, five genuinely different shapes -- see its own
+    # comment), but within this file a TypedDict gives mypy something
+    # real to check: compress()'s dict literal is verified against this
+    # exact key set at construction, and decompress() reads through the
+    # same type, so a future rename on one side without the other is a
+    # real mypy error here instead of a runtime KeyError the first time
+    # that path actually executes (review-caught, low severity but a
+    # cheap, safe fix).
+    quantized_groups: list[list[list[int]]]
+    scales: list[list[float]]
+    zero_points: list[list[float]]
+    residual_rows: list[list[float]]
+    group_size: int
 
 
 class KIVICompressor(KVCacheCompressor):
@@ -58,19 +75,21 @@ class KIVICompressor(KVCacheCompressor):
             scales.append(group_scales)
             zero_points.append(group_zero_points)
 
-        payload: dict[str, Any] = {
+        payload: _KIVIPayload = {
             "quantized_groups": quantized_groups,
             "scales": scales,
             "zero_points": zero_points,
             "residual_rows": residual_rows,
             "group_size": self._group_size,
         }
-        return CompressedKV(method=_METHOD, payload=payload, original_shape=(len(kv), num_channels))
+        return CompressedKV(
+            method=_METHOD, payload=dict(payload), original_shape=(len(kv), num_channels)
+        )
 
     def decompress(self, compressed: CompressedKV) -> list[list[float]]:
         if compressed.method != _METHOD:
             raise ValueError(f"expected a '{_METHOD}' payload, got '{compressed.method}'")
-        payload = compressed.payload
+        payload = cast(_KIVIPayload, compressed.payload)
         rows: list[list[float]] = []
         for quantized_group, group_scales, group_zero_points in zip(
             payload["quantized_groups"], payload["scales"], payload["zero_points"], strict=True

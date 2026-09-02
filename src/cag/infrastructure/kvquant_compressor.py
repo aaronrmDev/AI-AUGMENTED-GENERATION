@@ -1,11 +1,24 @@
 import bisect
 import statistics
-from typing import Any
+from typing import TypedDict, cast
 
 from src.cag.domain.entities import CompressedKV
 from src.cag.domain.ports import KVCacheCompressor
 
 _METHOD = "kvquant"
+
+
+class _KVQuantPayload(TypedDict):
+    # Same reasoning as KIVI's sibling _KIVIPayload: CompressedKV.payload
+    # stays dict[str, Any] at the domain boundary, but within this file a
+    # TypedDict gives mypy something real to check a future key rename
+    # against, on either side of the compress()/decompress() pair.
+    bits: int
+    num_levels: int
+    codes: list[list[int]]
+    codebooks: list[list[float]]
+    outliers: dict[tuple[int, int], float]
+    outlier_std_threshold: float
 
 
 class KVQuantCompressor(KVCacheCompressor):
@@ -88,7 +101,7 @@ class KVQuantCompressor(KVCacheCompressor):
                 bucket = bisect.bisect_right(boundaries, channel_values[row_index])
                 codes[row_index][channel] = min(bucket, self._num_levels - 1)
 
-        payload: dict[str, Any] = {
+        payload: _KVQuantPayload = {
             "bits": self._bits,
             "num_levels": self._num_levels,
             "codes": codes,
@@ -97,7 +110,7 @@ class KVQuantCompressor(KVCacheCompressor):
             "outlier_std_threshold": self._outlier_std_threshold,
         }
         return CompressedKV(
-            method=_METHOD, payload=payload, original_shape=(num_tokens, num_channels)
+            method=_METHOD, payload=dict(payload), original_shape=(num_tokens, num_channels)
         )
 
     def _build_quantile_buckets(
@@ -134,10 +147,10 @@ class KVQuantCompressor(KVCacheCompressor):
     def decompress(self, compressed: CompressedKV) -> list[list[float]]:
         if compressed.method != _METHOD:
             raise ValueError(f"expected a '{_METHOD}' payload, got '{compressed.method}'")
-        payload = compressed.payload
-        codes: list[list[int]] = payload["codes"]
-        codebooks: list[list[float]] = payload["codebooks"]
-        outliers: dict[tuple[int, int], float] = payload["outliers"]
+        payload = cast(_KVQuantPayload, compressed.payload)
+        codes = payload["codes"]
+        codebooks = payload["codebooks"]
+        outliers = payload["outliers"]
 
         rows: list[list[float]] = []
         for row_index, code_row in enumerate(codes):

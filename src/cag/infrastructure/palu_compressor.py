@@ -1,4 +1,4 @@
-from typing import Any
+from typing import TypedDict, cast
 
 import numpy as np
 
@@ -6,6 +6,18 @@ from src.cag.domain.entities import CompressedKV
 from src.cag.domain.ports import KVCacheCompressor
 
 _METHOD = "palu"
+
+
+class PALUPayload(TypedDict):
+    # Public (not a leading-underscore private type), because
+    # ShadowKVCompressor composes PALUCompressor directly and reads this
+    # exact shape out of its CompressedKV.payload -- same reasoning as
+    # KIVI's sibling _KIVIPayload (CompressedKV.payload itself stays
+    # dict[str, Any] at the domain boundary; this gives mypy something
+    # real to check within and across the files that actually share it).
+    H: list[list[float]]
+    B: list[list[float]]
+    rank: int
 
 
 class PALUCompressor(KVCacheCompressor):
@@ -44,19 +56,20 @@ class PALUCompressor(KVCacheCompressor):
         h = u_k * s_k
         b = v_k_t
 
-        payload: dict[str, Any] = {
+        payload: PALUPayload = {
             "H": h.tolist(),
             "B": b.tolist(),
             "rank": effective_rank,
         }
         return CompressedKV(
-            method=_METHOD, payload=payload, original_shape=(num_tokens, num_channels)
+            method=_METHOD, payload=dict(payload), original_shape=(num_tokens, num_channels)
         )
 
     def decompress(self, compressed: CompressedKV) -> list[list[float]]:
         if compressed.method != _METHOD:
             raise ValueError(f"expected a '{_METHOD}' payload, got '{compressed.method}'")
-        h = np.array(compressed.payload["H"], dtype=np.float64)
-        b = np.array(compressed.payload["B"], dtype=np.float64)
+        payload = cast(PALUPayload, compressed.payload)
+        h = np.array(payload["H"], dtype=np.float64)
+        b = np.array(payload["B"], dtype=np.float64)
         reconstructed: list[list[float]] = (h @ b).tolist()
         return reconstructed

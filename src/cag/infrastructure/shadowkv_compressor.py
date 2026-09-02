@@ -1,11 +1,24 @@
 from collections.abc import Iterable
-from typing import Any
+from typing import TypedDict, cast
 
 from src.cag.domain.entities import CompressedKV
 from src.cag.domain.ports import KVCacheCompressor
-from src.cag.infrastructure.palu_compressor import PALUCompressor
+from src.cag.infrastructure.palu_compressor import PALUCompressor, PALUPayload
 
 _METHOD = "shadowkv"
+
+
+class _ShadowKVPayload(TypedDict):
+    # Same reasoning as KIVI's sibling _KIVIPayload -- mypy checks this
+    # file's own compress()/decompress() key usage against one shared
+    # type. palu_B is read straight from PALUPayload's own "B" field
+    # (typed via that TypedDict at the read site below, not re-declared
+    # here), the actual cross-file link this file's composition relies on.
+    palu_B: list[list[float]]
+    sparse_h_entries: list[tuple[int, int, int]]
+    h_shape: tuple[int, int]
+    scale: float
+    zero_point: float
 
 
 class ShadowKVCompressor(KVCacheCompressor):
@@ -32,13 +45,14 @@ class ShadowKVCompressor(KVCacheCompressor):
             raise ValueError("bits must be between 1 and 16")
         self._palu = PALUCompressor(rank=rank)
         self._sparsity_ratio = sparsity_ratio
-        self.bits = bits
+        self._bits = bits
         self._levels = (2**bits) - 1
 
     def compress(self, kv: list[list[float]]) -> CompressedKV:
         palu_compressed = self._palu.compress(kv)
-        h: list[list[float]] = palu_compressed.payload["H"]
-        b: list[list[float]] = palu_compressed.payload["B"]
+        palu_payload = cast(PALUPayload, palu_compressed.payload)
+        h = palu_payload["H"]
+        b = palu_payload["B"]
         num_rows = len(h)
         num_cols = len(h[0]) if h else 0
 
@@ -59,7 +73,7 @@ class ShadowKVCompressor(KVCacheCompressor):
             for row, col, value in surviving
         ]
 
-        payload: dict[str, Any] = {
+        payload: _ShadowKVPayload = {
             "palu_B": b,
             "sparse_h_entries": sparse_h_entries,
             "h_shape": (num_rows, num_cols),
@@ -67,13 +81,13 @@ class ShadowKVCompressor(KVCacheCompressor):
             "zero_point": zero_point,
         }
         return CompressedKV(
-            method=_METHOD, payload=payload, original_shape=palu_compressed.original_shape
+            method=_METHOD, payload=dict(payload), original_shape=palu_compressed.original_shape
         )
 
     def decompress(self, compressed: CompressedKV) -> list[list[float]]:
         if compressed.method != _METHOD:
             raise ValueError(f"expected a '{_METHOD}' payload, got '{compressed.method}'")
-        payload = compressed.payload
+        payload = cast(_ShadowKVPayload, compressed.payload)
         num_rows, num_cols = payload["h_shape"]
         scale = payload["scale"]
         zero_point = payload["zero_point"]

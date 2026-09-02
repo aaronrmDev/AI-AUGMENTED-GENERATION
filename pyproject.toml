@@ -53,6 +53,15 @@ dev = [
     "mypy>=1.10",
     "ruff>=0.5",
     "types-PyYAML>=6.0",
+    # Test-only (tests/integration/test_kv_cache_compression_against_real_model.py
+    # imports both directly, including a DynamicCache internal API surface).
+    # Previously available only transitively via sentence-transformers, the same
+    # situation the numpy dependency comment above (production-side) already
+    # flags as fragile -- a future sentence-transformers pin change could shift
+    # either version out from under this test with nothing here recording what
+    # it was actually built and verified against.
+    "torch>=2.0",
+    "transformers>=4.40",
 ]
 
 [tool.pytest.ini_options]

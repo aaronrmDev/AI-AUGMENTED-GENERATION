@@ -86,7 +86,8 @@ def test_measured_compression_ratio_is_in_the_neighborhood_of_cag_mds_six_x():
     # mechanisms is CAG.md's own stated reason ShadowKV reaches further
     # than any single technique alone ("~6x... by stacking mechanisms
     # rather than relying on any one of them alone").
-    compressor = ShadowKVCompressor(rank=4, sparsity_ratio=0.5, bits=4)
+    bits = 4
+    compressor = ShadowKVCompressor(rank=4, sparsity_ratio=0.5, bits=bits)
     original = _tokens(32, 32)
     compressed = compressor.compress(original)
     b = compressed.payload["palu_B"]
@@ -95,8 +96,13 @@ def test_measured_compression_ratio_is_in_the_neighborhood_of_cag_mds_six_x():
     # Each sparse entry costs its quantized value (bits) plus its (row,
     # col) position -- 32 bits total is a generous, real estimate for an
     # int32 pair of coordinates at this tensor's small scale, not a
-    # number picked to flatter the ratio.
-    compressed_bits = b_elements * 32 + sparse_entries * (compressor.bits + 32)
+    # number picked to flatter the ratio. Reuses the local `bits` this
+    # test already passed into the constructor, matching every sibling
+    # compressor test's own convention, rather than reading it back off
+    # the compressor instance (review-caught: ShadowKV was the only
+    # compressor exposing this as a public attribute, solely to serve
+    # this one line -- now private like every sibling's equivalent state).
+    compressed_bits = b_elements * 32 + sparse_entries * (bits + 32)
     ratio = compression_ratio(
         original_bit_width=32, original_element_count=32 * 32,
         compressed_bit_width=1, compressed_element_count=compressed_bits,

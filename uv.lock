@@ -3185,6 +3185,8 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
     { name = "testcontainers" },
+    { name = "torch" },
+    { name = "transformers" },
     { name = "types-pyyaml" },
 ]
 
@@ -3219,6 +3221,8 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "testcontainers", marker = "extra == 'dev'", specifier = ">=4.5" },
     { name = "tiktoken", specifier = ">=0.7" },
+    { name = "torch", marker = "extra == 'dev'", specifier = ">=2.0" },
+    { name = "transformers", marker = "extra == 'dev'", specifier = ">=4.40" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]

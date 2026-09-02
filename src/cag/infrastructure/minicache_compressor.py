@@ -1,10 +1,20 @@
 import math
-from typing import Any
+from typing import TypedDict, cast
 
 from src.cag.domain.entities import CompressedKV
 from src.cag.domain.ports import CrossLayerKVCompressor
 
 _METHOD = "minicache"
+
+
+class _MiniCachePayload(TypedDict):
+    # Same reasoning as KIVI's sibling _KIVIPayload: CompressedKV.payload
+    # stays dict[str, Any] at the domain boundary, but within this file a
+    # TypedDict gives mypy something real to check a future key rename
+    # against, on either side of the compress()/decompress() pair.
+    shared_directions: list[list[float]]
+    magnitudes_a: list[float]
+    magnitudes_b: list[float]
 
 # Below this, sin(theta) is close enough to zero that plain SLERP's division
 # would be dividing by a value indistinguishable from zero in floating
@@ -46,22 +56,22 @@ class MiniCacheCompressor(CrossLayerKVCompressor):
             magnitudes_a.append(magnitude_a)
             magnitudes_b.append(magnitude_b)
 
-        payload: dict[str, Any] = {
+        payload: _MiniCachePayload = {
             "shared_directions": shared_directions,
             "magnitudes_a": magnitudes_a,
             "magnitudes_b": magnitudes_b,
         }
         return CompressedKV(
-            method=_METHOD, payload=payload, original_shape=(len(layer_a), num_channels)
+            method=_METHOD, payload=dict(payload), original_shape=(len(layer_a), num_channels)
         )
 
     def decompress(self, compressed: CompressedKV) -> tuple[list[list[float]], list[list[float]]]:
         if compressed.method != _METHOD:
             raise ValueError(f"expected a '{_METHOD}' payload, got '{compressed.method}'")
-        payload = compressed.payload
-        shared_directions: list[list[float]] = payload["shared_directions"]
-        magnitudes_a: list[float] = payload["magnitudes_a"]
-        magnitudes_b: list[float] = payload["magnitudes_b"]
+        payload = cast(_MiniCachePayload, compressed.payload)
+        shared_directions = payload["shared_directions"]
+        magnitudes_a = payload["magnitudes_a"]
+        magnitudes_b = payload["magnitudes_b"]
         layer_a = [
             [magnitude * component for component in direction]
             for magnitude, direction in zip(magnitudes_a, shared_directions, strict=True)
