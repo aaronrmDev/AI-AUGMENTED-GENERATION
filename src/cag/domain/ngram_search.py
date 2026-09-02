@@ -15,14 +15,19 @@ def find_ngram_continuation(
     # shorter one.
     #
     # max_start caps which match START positions are considered, without
-    # shrinking haystack itself -- callers whose tail was drawn from
-    # haystack's OWN trailing end (Lookahead always; Prompt Lookup only
-    # when nothing has been generated yet, so the tail comes purely from
-    # the prompt's own tail) pass len(haystack) - <tail length used>, so
-    # the position that would trivially "match" the tail against itself
-    # is excluded from matching, while every token of haystack --
-    # including its very last one -- stays available as CONTINUATION
-    # content for a genuine, non-trivial earlier match.
+    # shrinking haystack itself -- callers whose tail could coincide with
+    # haystack's OWN trailing end pass len(haystack) - 1, so the position
+    # that would trivially "match" the tail against itself is excluded
+    # from matching, while every token of haystack -- including its very
+    # last one -- stays available as CONTINUATION content for a genuine,
+    # non-trivial earlier match. Both Lookahead and Prompt Lookup apply
+    # this UNCONDITIONALLY (not just when generated_tokens is empty): a
+    # review finding caught that find_ngram_continuation's own fallback
+    # to shorter ngrams can produce a search key that coincidentally
+    # equals haystack's own trailing token(s) even when the tail's
+    # LONGEST form includes non-haystack content, so a conditional
+    # exclusion isn't enough -- see PromptLookupCandidateGenerator's own
+    # comment for the concrete failure case this caused.
     if not tail or not haystack:
         return []
     largest = min(max_ngram_size, len(tail))
