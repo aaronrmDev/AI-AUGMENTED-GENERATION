@@ -117,6 +117,36 @@ def test_measured_compression_ratio_is_in_the_neighborhood_of_cag_mds_four_x():
     assert 3.5 <= ratio <= 4.0
 
 
+def test_zero_points_are_computed_per_channel_not_group_wide():
+    # Review-caught (MEDIUM), and mathematically distinct from the axis
+    # test above: a "hybrid" bug where SCALE stays correctly per-channel
+    # but ZERO_POINT is accidentally bound to one group-wide min (e.g. a
+    # copy-paste between the two adjacent per-channel-min-reading lines
+    # in compress()) passes every reconstruction-error-based test in
+    # this file, including the one above, no matter how the fixture is
+    # tuned -- proven analytically and empirically: decompress()
+    # reconstructs as `zero_point + quantized_index * scale` with
+    # quantized_index stored as an UNCLIPPED int, so for any origin
+    # choice the reconstruction error is bounded by scale/2 alone --
+    # zero_point is mathematically invariant to reconstruction-error
+    # magnitude here. No error-tolerance test could ever catch this
+    # specific bug class; only a direct structural check on the
+    # zero_points payload can. _channel_scaled_tokens gives each channel
+    # a distinctly different amplitude, so a correct per-channel
+    # zero_point must differ meaningfully across a group's channels; a
+    # group-wide bug would report the identical value for every channel
+    # in that group (confirmed empirically: 6 genuinely different values
+    # per group for the correct implementation, 1 value repeated 6 times
+    # for the buggy one).
+    compressor = KIVICompressor(group_size=4, bits=4)
+    original = _channel_scaled_tokens(16, 6)
+    compressed = compressor.compress(original)
+    for group_zero_points in compressed.payload["zero_points"]:
+        assert len(set(group_zero_points)) > 1, (
+            "all channels in this group share one zero_point -- looks group-wide, not per-channel"
+        )
+
+
 def test_per_channel_and_per_token_quantization_axes_are_not_interchangeable():
     # Review-caught (HIGH): the original reconstruction-error tolerance
     # test above used a fixture where every channel shared the same

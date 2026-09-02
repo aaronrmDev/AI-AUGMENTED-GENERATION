@@ -61,7 +61,16 @@ dev = [
     # either version out from under this test with nothing here recording what
     # it was actually built and verified against.
     "torch>=2.0",
-    "transformers>=4.40",
+    # >=4.54, not >=4.40: the integration test reads cache.layers[i].keys/.values,
+    # DynamicCache's own newer per-layer API (a DynamicLayer object per entry).
+    # Confirmed by diffing cache_utils.py across tagged releases: v4.53.3 and
+    # everything before it only has the older self.key_cache/self.value_cache
+    # list attributes, no .layers at all -- a resolver picking anything in
+    # [4.40, 4.54) (e.g. --resolution=lowest, or a downstream constraint file
+    # near the old floor) would hit AttributeError at collection time. review-
+    # caught: an earlier version of this floor stated an intent ("what it was
+    # actually built and verified against") the number itself didn't satisfy.
+    "transformers>=4.54",
 ]
 
 [tool.pytest.ini_options]

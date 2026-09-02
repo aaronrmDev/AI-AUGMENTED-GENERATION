@@ -95,16 +95,28 @@ def _splice_full_layer(cache, layer: int, kind: str, reconstructed: list[list[fl
 
 
 def _compressors_at_full_layer_fidelity():
-    # rank/bits raised from the compressors' own unit-test defaults to
-    # match the much larger 768-channel full-layer tensor (vs. the
-    # single head's 64 channels the original version of this file used)
-    # -- fidelity settings a real deployment would tune per tensor size,
-    # not a number picked to force a pass.
+    # bits raised from the compressors' own unit-test defaults to match
+    # the much larger 768-channel full-layer tensor (vs. the single
+    # head's 64 channels the original version of this file used).
+    # rank stays at 8, NOT raised the same way -- review-caught
+    # (MEDIUM): PALUCompressor.compress() clamps
+    # effective_rank = min(rank, num_tokens, num_channels), and this
+    # file's real prompt tokenizes to exactly 15 tokens, so a rank of 32
+    # (an earlier version of this file's attempt to "match the larger
+    # tensor" the same way bits was raised) silently clamped to 15 --
+    # full rank for a 15-token sequence, i.e. a mathematically LOSSLESS
+    # SVD round-trip, not genuine low-rank compression (confirmed
+    # empirically: measured diff was exactly 0.0000, and ShadowKV's own
+    # low-rank half, which composes PALUCompressor directly, hit the
+    # identical clamp). The binding SVD-rank ceiling here is the
+    # sequence length, not the channel count, so raising rank to "match"
+    # a wider tensor only makes sense while it stays below num_tokens --
+    # rank=8 is comfortably under this prompt's 15 tokens.
     return {
         "kivi": KIVICompressor(group_size=4, bits=6),
         "kvquant": KVQuantCompressor(bits=6),
-        "palu": PALUCompressor(rank=32),
-        "shadowkv": ShadowKVCompressor(rank=32, sparsity_ratio=0.2, bits=6),
+        "palu": PALUCompressor(rank=8),
+        "shadowkv": ShadowKVCompressor(rank=8, sparsity_ratio=0.2, bits=6),
     }
 
 
@@ -163,12 +175,23 @@ def test_minicache_preserves_the_top_predicted_token_for_both_full_layers():
     )
     # MiniCache is the most aggressive of the five (two real layers
     # collapsed into one shared direction at once, not one layer
-    # losslessly-adjacent-in-precision like the other four) -- honestly
-    # measure and report the drift rather than assert exact top-token
-    # preservation, which the design spec's own disclosed finding (the
-    # ratio itself falls short of CAG.md's stated figure) already
-    # flagged as this method's real, disclosed limitation.
-    assert max_abs_diff < 40.0, "MiniCache's cross-layer merge corrupted generation implausibly"
+    # losslessly-adjacent-in-precision like the other four), but the
+    # real, correct implementation still preserves the top token here
+    # (measured ~8.57 max diff) -- review-caught (HIGH): an earlier
+    # version of this test only asserted max_abs_diff < 40.0 with no
+    # top-token check, which a real, empirically-injected bug (a
+    # sign-flipped SLERP branch -- exactly the near-parallel-fallback
+    # code path this compressor's own file guards against) sailed past:
+    # it measured 17.2 and DID flip the actual predicted token, yet
+    # 17.2 < 40.0 passed comfortably -- looser than even this file's own
+    # negative control needed (~24.5) to prove gross corruption
+    # detectable. Both checks now match the other compressors' own
+    # convention: assert the interpretable claim (top token unchanged)
+    # directly, with a magnitude bound tightened to sit with real margin
+    # above MiniCache's own legitimate diff and below both the
+    # sign-flip bug's 17.2 and the negative control's 24.5.
+    assert top_token == baseline_top_token, "MiniCache's cross-layer merge changed the top token"
+    assert max_abs_diff < 15.0, "MiniCache's cross-layer merge corrupted generation implausibly"
 
 
 def test_a_fully_corrupted_layer_actually_changes_the_top_token():
