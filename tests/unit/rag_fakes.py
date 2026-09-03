@@ -1,7 +1,26 @@
 import uuid
 
 from src.rag.domain.entities import Chunk, Document, SearchResult
-from src.rag.domain.ports import ChatModel, DocumentRepository, EmbeddingModel, VectorStore
+from src.rag.domain.ports import (
+    ChatModel,
+    DocumentRepository,
+    EmbeddingModel,
+    Retriever,
+    VectorStore,
+)
+
+
+class FakeRetriever(Retriever):
+    def __init__(self, results: list[SearchResult] | None = None) -> None:
+        self._results = results or []
+        self.calls: list[tuple[uuid.UUID, str, int]] = []
+
+    def set_results(self, results: list[SearchResult]) -> None:
+        self._results = results
+
+    async def execute(self, tenant_id: uuid.UUID, query: str, top_k: int) -> list[SearchResult]:
+        self.calls.append((tenant_id, query, top_k))
+        return self._results[:top_k]
 
 
 class FakeEmbeddingModel(EmbeddingModel):

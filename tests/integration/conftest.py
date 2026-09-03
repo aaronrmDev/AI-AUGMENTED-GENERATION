@@ -9,10 +9,13 @@ from testcontainers.neo4j import Neo4jContainer
 from testcontainers.postgres import PostgresContainer
 from testcontainers.qdrant import QdrantContainer
 from testcontainers.redis import RedisContainer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from alembic import command
 from src.identity.infrastructure.db import get_engine, get_sessionmaker
 from src.rag.infrastructure.sentence_transformers_embedder import SentenceTransformersEmbedder
+
+_DISTILGPT2_MODEL_ID = "distilgpt2"
 
 # Never used outside a throwaway TestContainers instance.
 _APP_DB_PASSWORD = "test-only-app-user-password"
@@ -132,6 +135,18 @@ async def db_session(app_database_url: str):
 @pytest.fixture(scope="session")
 def embedding_model() -> SentenceTransformersEmbedder:
     return SentenceTransformersEmbedder()
+
+
+@pytest.fixture(scope="session")
+def distilgpt2_tokenizer():
+    return AutoTokenizer.from_pretrained(_DISTILGPT2_MODEL_ID)
+
+
+@pytest.fixture(scope="session")
+def distilgpt2_model():
+    model = AutoModelForCausalLM.from_pretrained(_DISTILGPT2_MODEL_ID)
+    model.eval()
+    return model
 
 
 @pytest.fixture(scope="session")
