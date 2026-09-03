@@ -11,9 +11,18 @@ def content_hash(content: str) -> str:
 def reconcile(
     cached_content_hash: str | None, authoritative_content: str, document_id: uuid.UUID
 ) -> SyncConflict | None:
-    """The sync mixer's RAG-wins tiebreak, shared by both the RAG-vs-CAG
-    case (SyncCycle) and the RAG-vs-MAG case (MagSyncCycle): RAG, as the
-    external source, always wins.
+    """The sync mixer's tiebreak: whichever content the caller passes as
+    `authoritative_content` wins. Shared, unmodified, by all three
+    cross-paradigm Sync Mixer mechanisms -- SyncCycle (RAG-vs-CAG: RAG
+    wins), MagSyncCycle (RAG-vs-MAG: RAG wins), and CagMagSyncCycle
+    (CAG-vs-MAG: MAG wins, since CAG's hot-tier entry is a cached copy of
+    a specific MAG record in that pairing, not an independent paradigm
+    holding a competing fact -- see CagMagSyncCycle's own docstring for
+    the full reasoning). This function itself is deliberately paradigm-
+    agnostic and doesn't know or enforce which paradigm "wins" in any
+    particular case; the comparison only needs a hash to compare against,
+    and each caller decides for itself what "authoritative" means for its
+    own pairing before calling this.
 
     Takes a plain content hash rather than a paradigm-specific cache-hit
     entity (this function originally took CacheHit | None; generalized

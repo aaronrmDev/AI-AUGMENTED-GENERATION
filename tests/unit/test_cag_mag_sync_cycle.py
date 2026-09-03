@@ -1,0 +1,154 @@
+import uuid
+
+from src.orchestration.application.cag_mag_sync_cycle import CagMagSyncCycle
+from src.orchestration.domain import cag_mag_keys
+from tests.unit.orchestration_fakes import FakeFrozenCache
+
+_TENANT = uuid.uuid4()
+_USER = uuid.uuid4()
+_CONTENT_KEY = "preferred_visualization_library"
+
+
+def _promote(cache: FakeFrozenCache, tenant_id, user_id, mag_content_key, content):
+    cache.preload(tenant_id, cag_mag_keys.cache_key(user_id, mag_content_key), content)
+
+
+def test_no_conflict_when_mags_current_content_matches():
+    cache = FakeFrozenCache()
+    _promote(cache, _TENANT, _USER, _CONTENT_KEY, "prefers matplotlib")
+
+    conflicts = CagMagSyncCycle(cache).run(
+        _TENANT, _USER, [_CONTENT_KEY], lambda key: "prefers matplotlib"
+    )
+
+    assert conflicts == []
+    cache_id = cag_mag_keys.cache_key(_USER, _CONTENT_KEY)
+    assert cache.contains(_TENANT, cache_id)
+
+
+def test_evicts_and_reports_a_conflict_when_mags_live_content_changed():
+    cache = FakeFrozenCache()
+    _promote(cache, _TENANT, _USER, _CONTENT_KEY, "prefers matplotlib")
+
+    conflicts = CagMagSyncCycle(cache).run(
+        _TENANT, _USER, [_CONTENT_KEY], lambda key: "prefers seaborn"  # MAG's value changed
+    )
+
+    assert len(conflicts) == 1
+    reported_key, conflict = conflicts[0]
+    assert reported_key == _CONTENT_KEY
+    cache_id = cag_mag_keys.cache_key(_USER, _CONTENT_KEY)
+    assert conflict.document_id == cache_id
+    assert not cache.contains(_TENANT, cache_id)
+
+
+def test_the_reported_key_lets_a_caller_identify_which_content_conflicted_in_a_batch():
+    # The exact traceability gap a review finding caught: SyncConflict.
+    # document_id alone is an opaque derived UUID a caller can't map back
+    # to the mag_content_key they passed in without recomputing
+    # cag_mag_keys.cache_key themselves. run()'s own return value must
+    # carry that mapping.
+    cache = FakeFrozenCache()
+    changed_key, unchanged_key = "changed_fact", "unchanged_fact"
+    _promote(cache, _TENANT, _USER, changed_key, "old value")
+    _promote(cache, _TENANT, _USER, unchanged_key, "same value")
+    authoritative = {changed_key: "new value", unchanged_key: "same value"}
+
+    conflicts = CagMagSyncCycle(cache).run(
+        _TENANT, _USER, [changed_key, unchanged_key], lambda key: authoritative[key]
+    )
+
+    assert [key for key, _conflict in conflicts] == [changed_key]
+
+
+def test_two_simultaneous_conflicts_are_reported_in_input_order():
+    # The tuple-pairing fix's whole point is batch traceability; this
+    # locks in the ordering guarantee for the case that actually needs
+    # it -- more than one key conflicting in the same call -- which no
+    # other test (unit or integration) exercises, since every other
+    # multi-key test has at most one real conflict per call.
+    cache = FakeFrozenCache()
+    key_b, key_a = "b_fact", "a_fact"
+    _promote(cache, _TENANT, _USER, key_b, "old b")
+    _promote(cache, _TENANT, _USER, key_a, "old a")
+    authoritative = {key_b: "new b", key_a: "new a"}
+
+    conflicts = CagMagSyncCycle(cache).run(
+        _TENANT, _USER, [key_b, key_a], lambda key: authoritative[key]
+    )
+
+    assert [key for key, _conflict in conflicts] == [key_b, key_a]
+
+
+def test_a_duplicate_key_within_one_call_is_reported_once_not_twice():
+    # cache_key is deterministic, so a repeated mag_content_key maps to
+    # the same cache entry on every occurrence. The first occurrence
+    # detects the conflict and evicts it; the second occurrence's
+    # lookup then genuinely misses, so reconcile correctly reports no
+    # conflict for it -- one tuple per distinct stale entry, not one
+    # per input occurrence. This locks in that (reasonable, non-
+    # crashing) behavior rather than leaving it unspecified.
+    cache = FakeFrozenCache()
+    _promote(cache, _TENANT, _USER, _CONTENT_KEY, "old value")
+
+    conflicts = CagMagSyncCycle(cache).run(
+        _TENANT, _USER, [_CONTENT_KEY, _CONTENT_KEY], lambda key: "new value"
+    )
+
+    assert len(conflicts) == 1
+    assert conflicts[0][0] == _CONTENT_KEY
+
+
+def test_nothing_hot_means_nothing_to_reconcile():
+    cache = FakeFrozenCache()
+
+    conflicts = CagMagSyncCycle(cache).run(_TENANT, _USER, [_CONTENT_KEY], lambda key: "anything")
+
+    assert conflicts == []
+
+
+def test_only_the_changed_content_among_several_is_evicted():
+    cache = FakeFrozenCache()
+    stale_key, fresh_key = "stale_fact", "fresh_fact"
+    _promote(cache, _TENANT, _USER, stale_key, "old value")
+    _promote(cache, _TENANT, _USER, fresh_key, "current value")
+    authoritative = {stale_key: "new value", fresh_key: "current value"}
+
+    conflicts = CagMagSyncCycle(cache).run(
+        _TENANT, _USER, [stale_key, fresh_key], lambda key: authoritative[key]
+    )
+
+    assert len(conflicts) == 1
+    assert not cache.contains(_TENANT, cag_mag_keys.cache_key(_USER, stale_key))
+    assert cache.contains(_TENANT, cag_mag_keys.cache_key(_USER, fresh_key))
+
+
+def test_a_conflict_for_one_user_does_not_touch_anothers_hot_entry():
+    cache = FakeFrozenCache()
+    user_a, user_b = uuid.uuid4(), uuid.uuid4()
+    _promote(cache, _TENANT, user_a, _CONTENT_KEY, "prefers matplotlib")
+    _promote(cache, _TENANT, user_b, _CONTENT_KEY, "prefers matplotlib")
+
+    conflicts = CagMagSyncCycle(cache).run(
+        _TENANT, user_a, [_CONTENT_KEY], lambda key: "prefers seaborn"
+    )
+
+    assert len(conflicts) == 1
+    assert not cache.contains(_TENANT, cag_mag_keys.cache_key(user_a, _CONTENT_KEY))
+    assert cache.contains(_TENANT, cag_mag_keys.cache_key(user_b, _CONTENT_KEY))
+
+
+def test_a_conflict_for_one_tenant_does_not_touch_anothers_hot_entry():
+    cache = FakeFrozenCache()
+    tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+    _promote(cache, tenant_a, _USER, _CONTENT_KEY, "prefers matplotlib")
+    _promote(cache, tenant_b, _USER, _CONTENT_KEY, "prefers matplotlib")
+
+    conflicts = CagMagSyncCycle(cache).run(
+        tenant_a, _USER, [_CONTENT_KEY], lambda key: "prefers seaborn"
+    )
+
+    assert len(conflicts) == 1
+    cache_id = cag_mag_keys.cache_key(_USER, _CONTENT_KEY)
+    assert not cache.contains(tenant_a, cache_id)
+    assert cache.contains(tenant_b, cache_id)
