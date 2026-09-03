@@ -1,0 +1,117 @@
+[project]
+name = "unified-rag-cag-mag"
+version = "0.1.0"
+description = "Unified RAG x CAG x MAG AI System"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "argon2-cffi>=23.1",
+    "pyjwt>=2.8",
+    "redis>=5.0",
+    "email-validator>=2.1",
+    "sentence-transformers>=3.0",
+    "qdrant-client>=1.9",
+    "pgvector>=0.3",
+    "pypdf>=4.2",
+    "rank-bm25>=0.2",
+    "tiktoken>=0.7",
+    # >=1.0, not >=0.40: anthropic 1.0.0 is what this sub-project was built and
+    # verified against, and the 0.x -> 1.x major carried breaking API changes,
+    # so a 0.x resolution is not a version this code has ever run on.
+    "anthropic>=1.0",
+    "python-multipart>=0.0.9",
+    "ollama>=0.6.2",
+    "pyyaml>=6.0",
+    # >=5.20.0 matches docs/architecture/OVERVIEW.md's MAG-ecosystem version
+    # floor for the graph-DB driver. Native async API (neo4j.AsyncGraphDatabase),
+    # matching this project's async-first convention everywhere else.
+    "neo4j>=5.20.0",
+    # Previously only a transitive pull-in via sentence-transformers;
+    # CAG's compression module (PALUCompressor's SVD) now imports it
+    # directly, so it needs its own declared floor rather than riding on
+    # another package's transitive dependency, which could change
+    # independently of what this code actually needs.
+    "numpy>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    # >=0.24, not >=0.23: tests/integration/test_auth_endpoints.py uses
+    # `pytest.mark.asyncio(loop_scope="module")`, and `loop_scope` was only
+    # introduced in 0.24 — a 0.23.x resolution would fail at collection time.
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "httpx>=0.27",
+    "testcontainers>=4.5",
+    "mypy>=1.10",
+    "ruff>=0.5",
+    "types-PyYAML>=6.0",
+    # Test-only (tests/integration/test_kv_cache_compression_against_real_model.py
+    # imports both directly, including a DynamicCache internal API surface).
+    # Previously available only transitively via sentence-transformers, the same
+    # situation the numpy dependency comment above (production-side) already
+    # flags as fragile -- a future sentence-transformers pin change could shift
+    # either version out from under this test with nothing here recording what
+    # it was actually built and verified against.
+    "torch>=2.0",
+    # >=4.54, not >=4.40: the integration test reads cache.layers[i].keys/.values,
+    # DynamicCache's own newer per-layer API (a DynamicLayer object per entry).
+    # Confirmed by diffing cache_utils.py across tagged releases: v4.53.3 and
+    # everything before it only has the older self.key_cache/self.value_cache
+    # list attributes, no .layers at all -- a resolver picking anything in
+    # [4.40, 4.54) (e.g. --resolution=lowest, or a downstream constraint file
+    # near the old floor) would hit AttributeError at collection time. review-
+    # caught: an earlier version of this floor stated an intent ("what it was
+    # actually built and verified against") the number itself didn't satisfy.
+    "transformers>=4.54",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom is a function call in a default argument
+# (`session: AsyncSession = Depends(get_raw_db_session)`), which B008 flags by
+# design. The rule exists to catch a mutable default evaluated once at import
+# time; FastAPI's markers are inert value objects the framework resolves per
+# request, so the hazard the rule guards against does not apply. Suppress it for
+# these specific callables rather than refactoring working DI to appease a lint.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query"]
+
+[tool.mypy]
+# 3.12, not 3.11 (the requires-python floor): numpy — pulled in transitively by
+# sentence-transformers — ships stubs written in 3.12+ syntax, and mypy parses
+# them under whatever python_version is configured. Pinned at "3.11" it fails
+# with a bare syntax error inside numpy before checking a single line of this
+# project's own code, which makes the whole check unrunnable rather than strict.
+python_version = "3.12"
+strict = true
+exclude = ["tests/"]
+
+[[tool.mypy.overrides]]
+# rank_bm25 ships no inline types and no `types-rank-bm25` stub package exists
+# on PyPI (checked at the time this was added), so mypy --strict can't resolve
+# its types no matter how the import is written. Scoped to this one module
+# rather than a blanket ignore_missing_imports, so a real missing-stub problem
+# introduced by some other dependency still fails the check as intended.
+module = "rank_bm25"
+ignore_missing_imports = true
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

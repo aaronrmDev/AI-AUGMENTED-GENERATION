@@ -30,5 +30,15 @@ Thumbs.db
 .coverage
 htmlcov/
 
-# Local worktrees (superpowers:using-git-worktrees)
+# Subagent-driven-development scratch workspace (ledgers, briefs, reports)
+.superpowers/
+
+# Local isolated worktrees for feature work
 .worktrees/
+
+# Local per-tenant document storage (RAG Pipeline sub-project)
+storage/
+
+# graphify's own scratch output and AST cache (regenerated on demand;
+# docs/architecture/CONTEXT_GRAPH.md is the curated deliverable this feeds)
+graphify-out/

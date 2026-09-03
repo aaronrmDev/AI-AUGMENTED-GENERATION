@@ -1,0 +1,73 @@
+name: rag-query-enhancement
+questions:
+  - question: >-
+      According to RAG.md, what is Multi-Query Retrieval's own distinguishing
+      mechanic compared to Query Expansion, and what is its own recall gain
+      figure?
+    success_criterion: >-
+      Answer states that Multi-Query Retrieval has an LLM generate several
+      genuinely different framings/viewpoints of the question (not just
+      reworded synonyms, unlike Query Expansion) and searches each one
+      independently before merging the results, and states its own recall
+      gain figure of +25-35% (RAG.md: "Multi-Query Retrieval instead has an
+      LLM generate several genuinely different framings of the underlying
+      information need — not just reworded, but viewed from different
+      angles — and searches each one independently before merging and
+      reranking the combined results." ... "its recall gain (+25-35%, per
+      the source's Category 1 figures) sits noticeably above Query
+      Expansion's more modest 'good.'").
+  - question: >-
+      According to RAG.md, what does HyDE actually embed to search the
+      vector database — the original question, or something else — and what
+      is its own expected recall-gain figure?
+    success_criterion: >-
+      Answer states that HyDE embeds the LLM-generated hypothetical answer,
+      not the original question's embedding, to search the vector database,
+      and gives its expected impact figure of a +20-30% recall gain for
+      vague queries (RAG.md: "HyDE has the LLM generate a hypothetical
+      answer to the question first, and it is *that generated answer's
+      embedding* — not the original question's embedding — that gets used
+      to search the vector database" ... "Its expected impact is a +20-30%
+      recall gain specifically for vague queries.").
+  - question: >-
+      According to RAG.md, what does Self-RAG's gate actually decide before
+      retrieval runs, and what is its own expected impact figure?
+    success_criterion: >-
+      Answer states that Self-RAG's gate has the LLM check its own knowledge
+      first and decide YES or NO on whether retrieval is needed, skipping
+      retrieval entirely on a NO, and gives its expected impact figure of a
+      30-50% reduction in retrieval costs (RAG.md: "**Self-RAG** is the
+      gate: instead of retrieving for every query unconditionally, the LLM
+      first checks its own knowledge and decides YES or NO." ... "the source's
+      expected impact is a 30-50% reduction in retrieval costs, purely from
+      not paying for lookups the model didn't need.").
+  - question: >-
+      What does RAG.md say the Multi-Query + HyDE combination is specifically
+      scored for, among its "Top 5 Most Impactful Pairs"?
+    success_criterion: >-
+      Answer states this pairing is scored for "maximum recall for vague
+      queries" (RAG.md: "**Multi-Query + HyDE** — scored for 'maximum recall
+      for vague queries.'").
+  - question: >-
+      According to RAG.md, which six concepts does the "Fort Knox" pattern
+      chain together, and what does the source say that combination buys?
+    success_criterion: >-
+      Answer names Hybrid Search, Multi-Query, HyDE, Reranking, CRAG, and
+      Parent Document, and states the source describes the result as
+      "unbeatable accuracy" (at the cost of high latency and high cost)
+      (RAG.md: "its 'Fort Knox' pattern chains six concepts together —
+      Hybrid Search, Multi-Query, HyDE, Reranking, CRAG, and Parent
+      Document — for what it describes as 'unbeatable accuracy' at the cost
+      of high latency and high cost.").
+  - question: "What is 6 multiplied by 7?"
+    success_criterion: >-
+      Answer states the correct product, 42. General knowledge / basic
+      arithmetic — no RAG.md lookup needed; this question exists to give the
+      self-rag strategy's gate a real chance to answer NO and skip
+      retrieval.
+  - question: "What does the acronym \"API\" stand for in software engineering?"
+    success_criterion: >-
+      Answer states "Application Programming Interface." General knowledge,
+      well-known software terminology not specific to RAG.md — no document
+      lookup needed; this question exists to give the self-rag strategy's
+      gate a real chance to answer NO and skip retrieval.

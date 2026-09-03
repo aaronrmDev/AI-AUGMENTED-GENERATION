@@ -1,0 +1,85 @@
+name: rag-crag
+questions:
+  - question: >-
+      According to RAG.md, what is Chunking's own expected payoff, measured
+      in isolation?
+    success_criterion: >-
+      Answer states a +10-20% gain in relevance (RAG.md: "Chunking's own
+      expected payoff, measured in isolation, is a +10-20% gain in
+      relevance... a smaller figure than most of the other eight concepts
+      report, which tracks with its role as the foundation everything else
+      builds on rather than a technique that adds new capability on its
+      own.").
+  - question: >-
+      According to RAG.md, which of the three reranker types trades some
+      speed for higher accuracy at a moderate cost increase, and what is
+      Reranking's own expected impact figure in isolation?
+    success_criterion: >-
+      Answer names the Cross-Encoder reranker and states Reranking's own
+      expected impact of a +15-25% gain in answer accuracy (RAG.md: "the
+      Cross-Encoder trades some speed for higher accuracy at a moderate cost
+      increase" ... "Reranking's own expected impact, in isolation, is a
+      +15-25% gain in answer accuracy.").
+  - question: >-
+      According to RAG.md, Context Compression has two different reduction
+      figures that shouldn't be conflated -- what are they, and what's the
+      difference between them?
+    success_criterion: >-
+      Answer distinguishes the specific worked-example figure (-75% in token
+      usage, from the 40-chunks-to-8 example) from the more general,
+      cross-deployment expected-impact figure (-50% in tokens with about a
+      +10% gain in focus) (RAG.md: "the source's specific worked example of
+      shrinking 40 retrieved chunks down to 8 puts the reduction at roughly
+      -75% in token usage for that particular case... its more general,
+      cross-deployment expected-impact figure is a more conservative -50% in
+      tokens with about a +10% gain in focus.").
+  - question: >-
+      According to RAG.md, what is CRAG's own expected impact figure, and
+      how does it compare in size to the other eight concepts RAG.md
+      documents?
+    success_criterion: >-
+      Answer states a 40-60% reduction in hallucinations, and that this is
+      the largest single-technique figure RAG.md documents (RAG.md: "Its
+      expected impact in isolation is the largest single-technique number
+      the source documents: a 40-60% reduction in hallucinations, which
+      tracks with its role as a dedicated safety net.").
+  - question: >-
+      According to RAG.md, which four techniques does the "Production
+      Grade" pipeline archetype chain together, and what does the source
+      call the result?
+    success_criterion: >-
+      Answer names Hybrid Search, Reranking, CRAG, and Context Compression
+      (in that order), and states the source calls it "the gold standard
+      for production RAG systems" (RAG.md: "the source's own named
+      'Production Grade' pipeline archetype chains three of them directly:
+      Hybrid Search casts the wide net, Reranking narrows it to true
+      relevance, CRAG validates the result and triggers correction when
+      needed, and Context Compression optimizes what's left before it
+      reaches the LLM, which the source calls 'the gold standard for
+      production RAG systems.'").
+  - question: >-
+      How do you make sure the documents you search for don't confuse the
+      AI with information that doesn't actually help answer the question?
+    success_criterion: >-
+      Exploratory/diagnostic question, deliberately phrased in everyday
+      language avoiding RAG.md's own terms ("CRAG", "reranking",
+      "compression", "chunking") for the concepts it's actually asking
+      about (filtering noisy/irrelevant retrieved material). Loose check:
+      answer should reference removing, filtering, validating, or
+      correcting irrelevant/noisy/low-quality retrieved material before it
+      reaches the model -- this question exists to stress a plain vector
+      search's precision on vague, non-technical phrasing, which is where
+      CRAG's relevance filter is expected to show its value, if it shows
+      value at all on this small a corpus.
+  - question: >-
+      What happens if the first attempt at finding good information doesn't
+      work well -- is there a way to try again and do better?
+    success_criterion: >-
+      Exploratory/diagnostic question, deliberately phrased in everyday
+      language avoiding RAG.md's own terms ("CRAG", "corrective",
+      "re-search", "refine the query") for the concept it's actually asking
+      about (CRAG's correction loop). Loose check: answer should reference
+      re-querying, trying an alternative search, or otherwise retrying/
+      correcting a failed retrieval -- this question exists to stress
+      whether CRAG's own correction mechanic is actually reachable and
+      useful on this corpus, not assumed to be.

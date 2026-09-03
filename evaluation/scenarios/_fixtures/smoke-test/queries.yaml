@@ -1,0 +1,6 @@
+name: smoke-test
+questions:
+  - question: "What is this fixture for?"
+    success_criterion: "answer mentions 'fixture' or 'test'"
+  - question: "Is this a real technique scenario?"
+    success_criterion: "answer says no"
