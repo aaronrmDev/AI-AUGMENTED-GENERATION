@@ -88,22 +88,31 @@ class WarmStore(ABC):
     # already named. A separate port because the physical realization (a
     # Postgres+Qdrant semantic fact, not a GPU-resident KV cache) and the
     # required scoping (user_id) both genuinely differ.
+    #
+    # Async, unlike FrozenCache: HFFrozenCache's real implementation is
+    # pure local CPU tensor computation (matching EmbeddingModel's own
+    # sync convention), but SemanticMemoryWarmStore's real implementation
+    # makes real network calls to Postgres and Qdrant (matching RAG's
+    # VectorStore and every MAG repository/index port's own async
+    # convention) -- the sync-vs-async split in this codebase tracks
+    # whether a real implementation does I/O, not which paradigm a port
+    # belongs to.
     @abstractmethod
-    def promote(
+    async def promote(
         self, tenant_id: uuid.UUID, user_id: uuid.UUID, document_id: uuid.UUID, content: str
     ) -> None: ...
 
     @abstractmethod
-    def lookup(
+    async def lookup(
         self, tenant_id: uuid.UUID, user_id: uuid.UUID, document_id: uuid.UUID
     ) -> WarmEntry | None: ...
 
     @abstractmethod
-    def demote(
+    async def demote(
         self, tenant_id: uuid.UUID, user_id: uuid.UUID, document_id: uuid.UUID
     ) -> None: ...
 
     @abstractmethod
-    def contains(
+    async def contains(
         self, tenant_id: uuid.UUID, user_id: uuid.UUID, document_id: uuid.UUID
     ) -> bool: ...

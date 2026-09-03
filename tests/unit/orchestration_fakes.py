@@ -1,8 +1,8 @@
 import hashlib
 import uuid
 
-from src.orchestration.domain.entities import CacheHit
-from src.orchestration.domain.ports import FrozenCache
+from src.orchestration.domain.entities import CacheHit, WarmEntry
+from src.orchestration.domain.ports import FrozenCache, WarmStore
 from src.orchestration.domain.sync_mixer import content_hash
 from src.rag.domain.ports import EmbeddingModel
 
@@ -29,6 +29,38 @@ class FakeFrozenCache(FrozenCache):
 
     def contains(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> bool:
         return (tenant_id, document_id) in self._entries
+
+
+class FakeWarmStore(WarmStore):
+    def __init__(self) -> None:
+        self._entries: dict[tuple[uuid.UUID, uuid.UUID, uuid.UUID], str] = {}
+        self.promote_calls: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID, str]] = []
+        self.demote_calls: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = []
+
+    async def promote(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID, document_id: uuid.UUID, content: str
+    ) -> None:
+        self.promote_calls.append((tenant_id, user_id, document_id, content))
+        self._entries[(tenant_id, user_id, document_id)] = content
+
+    async def lookup(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID, document_id: uuid.UUID
+    ) -> WarmEntry | None:
+        content = self._entries.get((tenant_id, user_id, document_id))
+        if content is None:
+            return None
+        return WarmEntry(content_hash=content_hash(content), content=content)
+
+    async def demote(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID, document_id: uuid.UUID
+    ) -> None:
+        self.demote_calls.append((tenant_id, user_id, document_id))
+        self._entries.pop((tenant_id, user_id, document_id), None)
+
+    async def contains(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID, document_id: uuid.UUID
+    ) -> bool:
+        return (tenant_id, user_id, document_id) in self._entries
 
 
 class FakeBagOfWordsEmbeddingModel(EmbeddingModel):
