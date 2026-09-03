@@ -20,16 +20,17 @@ class SyncCycle:
 
     def run(
         self,
+        tenant_id: uuid.UUID,
         document_ids: list[uuid.UUID],
         authoritative_content: Callable[[uuid.UUID], str],
     ) -> list[SyncConflict]:
         conflicts: list[SyncConflict] = []
         for document_id in document_ids:
-            cached_hit = self._frozen_cache.lookup(document_id)
+            cached_hit = self._frozen_cache.lookup(tenant_id, document_id)
             conflict = sync_mixer.reconcile(
                 cached_hit, authoritative_content(document_id), document_id
             )
             if conflict is not None:
-                self._frozen_cache.evict(document_id)
+                self._frozen_cache.evict(tenant_id, document_id)
                 conflicts.append(conflict)
         return conflicts

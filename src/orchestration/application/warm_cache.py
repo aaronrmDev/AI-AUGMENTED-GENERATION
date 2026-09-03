@@ -18,13 +18,14 @@ class WarmCache:
 
     def execute(
         self,
+        tenant_id: uuid.UUID,
         n: int,
         window: timedelta,
         now: datetime,
         content_provider: Callable[[uuid.UUID], str],
     ) -> list[uuid.UUID]:
-        top_n = self._tracker.most_accessed(n, window, now)
+        top_n = self._tracker.most_accessed(tenant_id, n, window, now)
         for document_id in top_n:
-            if not self._frozen_cache.contains(document_id):
-                self._frozen_cache.preload(document_id, content_provider(document_id))
+            if not self._frozen_cache.contains(tenant_id, document_id):
+                self._frozen_cache.preload(tenant_id, document_id, content_provider(document_id))
         return top_n

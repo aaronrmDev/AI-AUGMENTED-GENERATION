@@ -26,6 +26,7 @@ class TieringPolicy:
 
     def evaluate(
         self,
+        tenant_id: uuid.UUID,
         document_id: uuid.UUID,
         content_provider: Callable[[uuid.UUID], str],
         promote_threshold: int,
@@ -39,15 +40,15 @@ class TieringPolicy:
                 "not a single crossing point that could flap a document in and out of cache"
             )
 
-        count = self._tracker.access_count(document_id, window, now)
-        is_cached = self._frozen_cache.contains(document_id)
+        count = self._tracker.access_count(tenant_id, document_id, window, now)
+        is_cached = self._frozen_cache.contains(tenant_id, document_id)
 
         if count >= promote_threshold and not is_cached:
-            self._frozen_cache.preload(document_id, content_provider(document_id))
+            self._frozen_cache.preload(tenant_id, document_id, content_provider(document_id))
             return TierDecision.PROMOTED
 
         if count < demote_threshold and is_cached:
-            self._frozen_cache.evict(document_id)
+            self._frozen_cache.evict(tenant_id, document_id)
             return TierDecision.DEMOTED
 
         return TierDecision.UNCHANGED

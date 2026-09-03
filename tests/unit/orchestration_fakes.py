@@ -9,26 +9,26 @@ from src.rag.domain.ports import EmbeddingModel
 
 class FakeFrozenCache(FrozenCache):
     def __init__(self) -> None:
-        self._entries: dict[uuid.UUID, str] = {}
-        self.preload_calls: list[tuple[uuid.UUID, str]] = []
-        self.evict_calls: list[uuid.UUID] = []
+        self._entries: dict[tuple[uuid.UUID, uuid.UUID], str] = {}
+        self.preload_calls: list[tuple[uuid.UUID, uuid.UUID, str]] = []
+        self.evict_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
 
-    def preload(self, document_id: uuid.UUID, content: str) -> None:
-        self.preload_calls.append((document_id, content))
-        self._entries[document_id] = content
+    def preload(self, tenant_id: uuid.UUID, document_id: uuid.UUID, content: str) -> None:
+        self.preload_calls.append((tenant_id, document_id, content))
+        self._entries[(tenant_id, document_id)] = content
 
-    def lookup(self, document_id: uuid.UUID) -> CacheHit | None:
-        content = self._entries.get(document_id)
+    def lookup(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> CacheHit | None:
+        content = self._entries.get((tenant_id, document_id))
         if content is None:
             return None
         return CacheHit(content_hash=content_hash(content), kv_cache=None)
 
-    def evict(self, document_id: uuid.UUID) -> None:
-        self.evict_calls.append(document_id)
-        self._entries.pop(document_id, None)
+    def evict(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> None:
+        self.evict_calls.append((tenant_id, document_id))
+        self._entries.pop((tenant_id, document_id), None)
 
-    def contains(self, document_id: uuid.UUID) -> bool:
-        return document_id in self._entries
+    def contains(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> bool:
+        return (tenant_id, document_id) in self._entries
 
 
 class FakeBagOfWordsEmbeddingModel(EmbeddingModel):
