@@ -35,9 +35,30 @@ def test_evicts_and_reports_a_conflict_when_mags_live_content_changed():
     )
 
     assert len(conflicts) == 1
+    reported_key, conflict = conflicts[0]
+    assert reported_key == _CONTENT_KEY
     cache_id = cag_mag_keys.cache_key(_USER, _CONTENT_KEY)
-    assert conflicts[0].document_id == cache_id
+    assert conflict.document_id == cache_id
     assert not cache.contains(_TENANT, cache_id)
+
+
+def test_the_reported_key_lets_a_caller_identify_which_content_conflicted_in_a_batch():
+    # The exact traceability gap a review finding caught: SyncConflict.
+    # document_id alone is an opaque derived UUID a caller can't map back
+    # to the mag_content_key they passed in without recomputing
+    # cag_mag_keys.cache_key themselves. run()'s own return value must
+    # carry that mapping.
+    cache = FakeFrozenCache()
+    changed_key, unchanged_key = "changed_fact", "unchanged_fact"
+    _promote(cache, _TENANT, _USER, changed_key, "old value")
+    _promote(cache, _TENANT, _USER, unchanged_key, "same value")
+    authoritative = {changed_key: "new value", unchanged_key: "same value"}
+
+    conflicts = CagMagSyncCycle(cache).run(
+        _TENANT, _USER, [changed_key, unchanged_key], lambda key: authoritative[key]
+    )
+
+    assert [key for key, _conflict in conflicts] == [changed_key]
 
 
 def test_nothing_hot_means_nothing_to_reconcile():

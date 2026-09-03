@@ -29,6 +29,18 @@ class CagMagSyncCycle:
     toward WarmStore. Sync, not async, matching CagMagTieringPolicy and
     FrozenCache -- unlike MagSyncCycle, which is async because WarmStore
     does real I/O.
+
+    `run` returns `(mag_content_key, SyncConflict)` pairs, not a bare
+    `list[SyncConflict]` the way SyncCycle/MagSyncCycle do -- a review
+    finding caught that SyncConflict.document_id here is the derived,
+    one-way cag_mag_keys.cache_key(user_id, mag_content_key) UUID, not
+    anything a caller could trace back to the mag_content_key they
+    originally passed in (unlike SyncCycle/MagSyncCycle, where
+    document_id IS literally the caller's own input id, since RAG/CAG
+    document ids are already UUIDs). Pairing each conflict with its
+    original str key here, at this class's own boundary, fixes that
+    without touching sync_mixer.reconcile or SyncConflict itself, which
+    stay exactly as shared and unmodified as the design spec commits to.
     """
 
     def __init__(self, frozen_cache: FrozenCache) -> None:
@@ -40,8 +52,8 @@ class CagMagSyncCycle:
         user_id: uuid.UUID,
         mag_content_keys: list[str],
         authoritative_content: Callable[[str], str],
-    ) -> list[SyncConflict]:
-        conflicts: list[SyncConflict] = []
+    ) -> list[tuple[str, SyncConflict]]:
+        conflicts: list[tuple[str, SyncConflict]] = []
         for mag_content_key in mag_content_keys:
             cache_id = cag_mag_keys.cache_key(user_id, mag_content_key)
             cached_hit = self._frozen_cache.lookup(tenant_id, cache_id)
@@ -51,5 +63,5 @@ class CagMagSyncCycle:
             )
             if conflict is not None:
                 self._frozen_cache.evict(tenant_id, cache_id)
-                conflicts.append(conflict)
+                conflicts.append((mag_content_key, conflict))
         return conflicts

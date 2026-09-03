@@ -211,3 +211,71 @@ async def test_sync_cycle_detects_a_real_mag_update_and_evicts_the_stale_cag_cop
         f"cadence, the same disclosure Batch D and Batch E's own reports already established)"
     )
     assert cache.lookup(tenant_id, cache_id) is None
+
+
+async def test_combined_capability_the_tiering_policys_own_promotion_feeds_sync_cycle_detection(
+    db_session, qdrant_url, embedding_model, neo4j_url, distilgpt2_model, distilgpt2_tokenizer
+):
+    # The Combined Capability Validation the other tests in this file
+    # don't quite prove: a review finding caught that the tiering and
+    # sync mechanisms were each demonstrated against real infrastructure
+    # independently, but never chained on the SAME entry -- a real
+    # promotion produced by CagMagTieringPolicy.evaluate feeding directly
+    # into CagMagSyncCycle.run's detection, rather than the sync test
+    # hand-seeding the cache itself. This test closes that gap.
+    tenant_id = uuid.uuid4()
+    user_id = await _create_user(db_session, tenant_id)
+
+    semantic_repo = PostgresSemanticMemoryRepository(db_session)
+    semantic_index = QdrantSemanticMemoryIndex(qdrant_url)
+    await semantic_index.ensure_collection()
+    graph = await _memory_graph_repository(neo4j_url)
+    record_fact = RecordSemanticFact(semantic_repo, semantic_index, embedding_model, graph)
+    update_memory = UpdateMemory(semantic_repo, record_fact)
+
+    await set_tenant_context(db_session, tenant_id)
+    await record_fact.execute(tenant_id, user_id, _FACT_KEY, _ORIGINAL_VALUE)
+    await db_session.commit()
+
+    cache = HFFrozenCache(tokenizer=distilgpt2_tokenizer, model=distilgpt2_model)
+    tracker = InMemoryUserScopedAccessFrequencyTracker()
+    policy = CagMagTieringPolicy(tracker, cache)
+    sync_cycle = CagMagSyncCycle(cache)
+
+    def content_provider(fact_key: str) -> str:
+        return _ORIGINAL_VALUE
+
+    for _ in range(10):
+        tracker.record_access(tenant_id, user_id, cag_mag_keys.tracker_key(_FACT_KEY), _NOW)
+    promote_decision = policy.evaluate(
+        tenant_id, user_id, _FACT_KEY, content_provider,
+        promote_threshold=5, demote_threshold=2, window=_WINDOW, now=_NOW,
+    )
+    assert promote_decision == TierDecision.PROMOTED
+    cache_id = cag_mag_keys.cache_key(user_id, _FACT_KEY)
+    assert cache.lookup(tenant_id, cache_id) is not None  # really promoted, not just claimed
+
+    new_value = "strongly prefers plotly for all data visualization tasks"
+    await set_tenant_context(db_session, tenant_id)
+    await update_memory.execute(tenant_id, user_id, _FACT_KEY, new_value)
+    await db_session.commit()
+
+    async def authoritative_content(fact_key: str) -> str:
+        await set_tenant_context(db_session, tenant_id)
+        fact = await semantic_repo.find_by_key(user_id, fact_key, tenant_id)
+        assert fact is not None
+        return fact.fact_value
+
+    conflicts = []
+    for _ in range(20):
+        current_value = await authoritative_content(_FACT_KEY)
+        conflicts = sync_cycle.run(
+            tenant_id, user_id, [_FACT_KEY], lambda key, v=current_value: v
+        )
+        if conflicts:
+            break
+        time.sleep(0.05)
+
+    print(f"real combined-capability result: promoted={promote_decision}, conflicts={conflicts}")
+    assert [key for key, _conflict in conflicts] == [_FACT_KEY]
+    assert cache.lookup(tenant_id, cache_id) is None  # the real promotion's own entry got evicted
