@@ -38,3 +38,7 @@ htmlcov/
 
 # Local per-tenant document storage (RAG Pipeline sub-project)
 storage/
+
+# graphify's own scratch output and AST cache (regenerated on demand;
+# docs/architecture/CONTEXT_GRAPH.md is the curated deliverable this feeds)
+graphify-out/

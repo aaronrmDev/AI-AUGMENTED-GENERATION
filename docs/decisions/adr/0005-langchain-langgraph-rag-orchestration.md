@@ -1,6 +1,8 @@
 # ADR-0005: LangChain and LangGraph for RAG Orchestration
 
-Status: Accepted
+Status: Superseded by [ADR-0006](0006-hand-rolled-rag-orchestration.md)
+
+**Why this is marked superseded rather than quietly left as "Accepted":** the RAG pipeline that actually got built across six implementation batches (`src/rag/domain/`, `application/`, `infrastructure/`) never adopted LangChain or LangGraph — not `pyproject.toml`, not a single `import` anywhere under `src/`, not one commit message across 228 commits. Every technique this ADR names, including CRAG and Self-RAG, was built as a plain Python class under the same hexagonal domain/application/infrastructure layering the rest of this project uses. This document's own reasoning below is left exactly as it was written, and it is worth being direct about what searching this repository's design specs, commit history, and architecture docs for a reason turned up: nothing. No design spec, no commit message, no later doc revision states that this decision was reconsidered or why the implementation went a different way — it simply wasn't followed, and nothing in the record explains that gap. ADR-0006 records what was actually built and says so plainly, rather than retroactively inventing a rationale this repository's own history doesn't contain.
 
 ## Context
 
