@@ -35,12 +35,19 @@ def _turns_text(turns: list[WorkingMemoryTurn]) -> str:
     return "\n".join(f"{t.role}: {t.content}" for t in turns)
 
 
+def _words(text: str) -> set[str]:
+    # Strips leading/trailing punctuation per token so "visualization,"
+    # (a fact ending a clause) and "visualization." (a document ending a
+    # sentence) count as the same word -- confirmed live that leaving
+    # punctuation attached silently dropped real, intended overlap matches.
+    return {word.strip(".,;:!?()\"'") for word in text.lower().split()} - {""}
+
+
 def _keyword_overlap_ratio(content: str, facts: list[ScoredFact]) -> float:
-    fact_words = {word for f in facts for word in f.fact.fact_value.lower().split()}
+    fact_words = {word for f in facts for word in _words(f.fact.fact_value)}
     if not fact_words:
         return 0.0
-    content_words = set(content.lower().split())
-    return len(content_words & fact_words) / len(fact_words)
+    return len(_words(content) & fact_words) / len(fact_words)
 
 
 class StateAwareRetrieve:
@@ -68,6 +75,7 @@ class StateAwareRetrieve:
         capture_episode: CaptureEpisode,
         facts_top_k: int = 5,
         recent_turns_limit: int = 5,
+        candidate_k: int = 20,
     ) -> None:
         self._embedder = embedding_model
         self._find_semantic_facts = find_semantic_facts
@@ -77,6 +85,15 @@ class StateAwareRetrieve:
         self._capture_episode = capture_episode
         self._facts_top_k = facts_top_k
         self._recent_turns_limit = recent_turns_limit
+        # Same over-fetch-then-rerank shape as RerankingRetriever's own
+        # candidate_k (src/rag/infrastructure/reranking_retriever.py) --
+        # asking the fallback for only `top_k` results BEFORE boosting
+        # would let embedding-only ranking permanently exclude a document
+        # the boost step could otherwise have promoted into the caller's
+        # actual top_k. Confirmed live: without this, a real top_k=1 call
+        # returned whichever document the raw embedding favored, with the
+        # boost step never getting a chance to act on anything else.
+        self._candidate_k = candidate_k
 
     async def execute(
         self,
@@ -96,8 +113,10 @@ class StateAwareRetrieve:
 
         enriched_query = await self._rewrite_query(query, facts, recent_turns)
 
-        raw_results = await self._fallback.execute(tenant_id, enriched_query, top_k)
-        boosted_results = self._apply_ranking_boost(raw_results, facts)
+        raw_results = await self._fallback.execute(
+            tenant_id, enriched_query, max(top_k, self._candidate_k)
+        )
+        boosted_results = self._apply_ranking_boost(raw_results, facts)[:top_k]
 
         await self._capture_episode.execute(
             tenant_id,
