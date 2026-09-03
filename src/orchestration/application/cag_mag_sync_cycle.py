@@ -41,6 +41,13 @@ class CagMagSyncCycle:
     original str key here, at this class's own boundary, fixes that
     without touching sync_mixer.reconcile or SyncConflict itself, which
     stay exactly as shared and unmodified as the design spec commits to.
+
+    A duplicate mag_content_key within one `run` call is reported at
+    most once: cache_key is deterministic, so the first occurrence's
+    eviction (on a real conflict) makes every later occurrence's lookup
+    genuinely miss, and reconcile correctly reports no conflict for an
+    already-evicted entry. One tuple per distinct stale entry, not one
+    per input occurrence.
     """
 
     def __init__(self, frozen_cache: FrozenCache) -> None:

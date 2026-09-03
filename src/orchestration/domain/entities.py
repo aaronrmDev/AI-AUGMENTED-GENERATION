@@ -17,10 +17,13 @@ class CacheHit:
 
 @dataclass(frozen=True)
 class SyncConflict:
-    # A real, detected disagreement between what CAG's cache holds for
-    # document_id and what RAG's index currently says -- always produced
-    # already-resolved (by eviction; see domain/sync_mixer.py), never a
-    # pending conflict a caller still has to act on.
+    # A real, detected disagreement between what the hot tier's cached
+    # entry for document_id holds and what the paradigm-specific
+    # authoritative source currently says -- RAG for SyncCycle and
+    # MagSyncCycle, MAG for CagMagSyncCycle (see domain/sync_mixer.py,
+    # which doesn't itself know or care which side is authoritative).
+    # Always produced already-resolved (by eviction), never a pending
+    # conflict a caller still has to act on.
     document_id: uuid.UUID
     cached_content_hash: str
     authoritative_content_hash: str

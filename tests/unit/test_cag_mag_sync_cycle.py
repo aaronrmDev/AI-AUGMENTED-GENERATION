@@ -61,6 +61,44 @@ def test_the_reported_key_lets_a_caller_identify_which_content_conflicted_in_a_b
     assert [key for key, _conflict in conflicts] == [changed_key]
 
 
+def test_two_simultaneous_conflicts_are_reported_in_input_order():
+    # The tuple-pairing fix's whole point is batch traceability; this
+    # locks in the ordering guarantee for the case that actually needs
+    # it -- more than one key conflicting in the same call -- which no
+    # other test (unit or integration) exercises, since every other
+    # multi-key test has at most one real conflict per call.
+    cache = FakeFrozenCache()
+    key_b, key_a = "b_fact", "a_fact"
+    _promote(cache, _TENANT, _USER, key_b, "old b")
+    _promote(cache, _TENANT, _USER, key_a, "old a")
+    authoritative = {key_b: "new b", key_a: "new a"}
+
+    conflicts = CagMagSyncCycle(cache).run(
+        _TENANT, _USER, [key_b, key_a], lambda key: authoritative[key]
+    )
+
+    assert [key for key, _conflict in conflicts] == [key_b, key_a]
+
+
+def test_a_duplicate_key_within_one_call_is_reported_once_not_twice():
+    # cache_key is deterministic, so a repeated mag_content_key maps to
+    # the same cache entry on every occurrence. The first occurrence
+    # detects the conflict and evicts it; the second occurrence's
+    # lookup then genuinely misses, so reconcile correctly reports no
+    # conflict for it -- one tuple per distinct stale entry, not one
+    # per input occurrence. This locks in that (reasonable, non-
+    # crashing) behavior rather than leaving it unspecified.
+    cache = FakeFrozenCache()
+    _promote(cache, _TENANT, _USER, _CONTENT_KEY, "old value")
+
+    conflicts = CagMagSyncCycle(cache).run(
+        _TENANT, _USER, [_CONTENT_KEY, _CONTENT_KEY], lambda key: "new value"
+    )
+
+    assert len(conflicts) == 1
+    assert conflicts[0][0] == _CONTENT_KEY
+
+
 def test_nothing_hot_means_nothing_to_reconcile():
     cache = FakeFrozenCache()
 
