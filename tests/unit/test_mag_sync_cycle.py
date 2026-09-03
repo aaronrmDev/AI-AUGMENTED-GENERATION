@@ -78,3 +78,21 @@ async def test_a_conflict_for_one_user_does_not_touch_anothers_warm_entry():
     assert len(conflicts) == 1
     assert not await warm_store.contains(_TENANT, user_a, doc)
     assert await warm_store.contains(_TENANT, user_b, doc)  # untouched -- different user
+
+
+async def test_a_conflict_for_one_tenant_does_not_touch_anothers_warm_entry():
+    # Parallels test_sync_cycle.py's (Batch D, RAG-vs-CAG) own tenant-
+    # isolation test -- this file previously only exercised the user axis.
+    warm_store = FakeWarmStore()
+    tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+    doc = uuid.uuid4()
+    await warm_store.promote(tenant_a, _USER, doc, "price: $100")
+    await warm_store.promote(tenant_b, _USER, doc, "price: $100")
+
+    conflicts = await MagSyncCycle(warm_store).run(
+        tenant_a, _USER, [doc], lambda document_id: "price: $80"
+    )
+
+    assert len(conflicts) == 1
+    assert not await warm_store.contains(tenant_a, _USER, doc)
+    assert await warm_store.contains(tenant_b, _USER, doc)  # untouched -- different tenant

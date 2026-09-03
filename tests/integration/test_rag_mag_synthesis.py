@@ -111,7 +111,9 @@ async def _memory_graph_repository(neo4j_url) -> Neo4jMemoryGraphRepository:
     return repository
 
 
-async def _seed_viz_corpus(tenant_id: uuid.UUID, embedding_model, vector_store) -> dict[str, uuid.UUID]:
+async def _seed_viz_corpus(
+    tenant_id: uuid.UUID, embedding_model, vector_store
+) -> dict[str, uuid.UUID]:
     document_ids: dict[str, uuid.UUID] = {}
     for key, content in _VIZ_DOCS.items():
         document_id = uuid.uuid4()
@@ -277,6 +279,44 @@ async def test_a_second_users_traffic_never_promotes_into_the_first_users_memory
     await set_tenant_context(db_session, tenant_id)
     assert await warm_store.lookup(tenant_id, user_a, document_id) is not None
     assert await warm_store.lookup(tenant_id, user_b, document_id) is None
+
+
+async def test_demote_on_a_never_promoted_document_is_a_safe_no_op_against_real_postgres(
+    db_session, qdrant_url, embedding_model
+):
+    # SemanticMemoryRepository.invalidate's real implementation issues an
+    # UPDATE ... RETURNING and reads exactly one row back via scalar_one(),
+    # which raises on zero matched rows -- SemanticMemoryWarmStore.demote
+    # guards against this, but that guard has no coverage anywhere else: a
+    # fake-backed unit test can't catch a regression here, because
+    # FakeSemanticMemoryRepository.invalidate silently no-ops on a missing
+    # key instead of raising like the real one does. Only a real Postgres
+    # call can prove the guard is actually doing its job.
+    tenant_id = uuid.uuid4()
+    user_id, _session_id = await _create_user_and_session(db_session, tenant_id)
+    never_promoted_id = uuid.uuid4()
+
+    semantic_repo = PostgresSemanticMemoryRepository(db_session)
+    semantic_index = QdrantSemanticMemoryIndex(qdrant_url)
+    await semantic_index.ensure_collection()
+    warm_store = SemanticMemoryWarmStore(semantic_repo, semantic_index, embedding_model)
+
+    await set_tenant_context(db_session, tenant_id)
+    # Does not raise -- this is the assertion. A regression that removed
+    # the guard would surface here as a real, uncaught exception from
+    # invalidate()'s own scalar_one() call.
+    await warm_store.demote(tenant_id, user_id, never_promoted_id)
+    await db_session.commit()
+
+    # Also covers demoting an already-demoted document twice in a row --
+    # the same guarded path, real Postgres both times.
+    await set_tenant_context(db_session, tenant_id)
+    await warm_store.promote(tenant_id, user_id, never_promoted_id, "content")
+    await db_session.commit()
+    await set_tenant_context(db_session, tenant_id)
+    await warm_store.demote(tenant_id, user_id, never_promoted_id)
+    await warm_store.demote(tenant_id, user_id, never_promoted_id)  # second demote, still no-op
+    await db_session.commit()
 
 
 async def test_sync_cycle_detects_and_demotes_a_real_content_change_with_real_latency(

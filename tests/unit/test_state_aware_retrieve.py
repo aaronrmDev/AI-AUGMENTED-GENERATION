@@ -21,6 +21,23 @@ _USER = uuid.uuid4()
 _SESSION = uuid.uuid4()
 
 
+class _SpySemanticMemoryRepository(FakeSemanticMemoryRepository):
+    # A review finding caught that no test here asserts the actual
+    # user_id/tenant_id values StateAwareRetrieve passes into
+    # find_semantic_facts.by_similarity -- FakeSemanticMemoryRepository
+    # ignores both for filtering, so a positional argument swap at the
+    # call site would pass every existing test unnoticed. This spy
+    # records the real call args so a test can pin them directly.
+    def __init__(self) -> None:
+        super().__init__()
+        # Each entry is (user_id, tenant_id, top_k).
+        self.search_calls: list[tuple[uuid.UUID, uuid.UUID, int]] = []
+
+    async def search_by_similarity(self, query_embedding, user_id, tenant_id, top_k):
+        self.search_calls.append((user_id, tenant_id, top_k))
+        return await super().search_by_similarity(query_embedding, user_id, tenant_id, top_k)
+
+
 class _FakeEpisodicMemoryIndex(EpisodicMemoryIndex):
     # Deliberately local, matching test_capture_episode.py's own established
     # precedent for why this fake doesn't live in tests/unit/mag_fakes.py.
@@ -40,12 +57,13 @@ def _build(
     fallback_results: list[SearchResult],
     rewrite_response: str = "rewritten query",
     known_fact: SemanticMemory | None = None,
+    semantic_repo: FakeSemanticMemoryRepository | None = None,
 ) -> tuple[
     StateAwareRetrieve, FakeRetriever, FakeEpisodicMemoryRepository, _FakeEpisodicMemoryIndex
 ]:
     embedder = FakeBagOfWordsEmbeddingModel()
 
-    semantic_repo = FakeSemanticMemoryRepository()
+    semantic_repo = semantic_repo if semantic_repo is not None else FakeSemanticMemoryRepository()
     if known_fact is not None:
         semantic_repo.set_search_results([known_fact])
     find_semantic_facts = FindSemanticFacts(semantic_repo)
@@ -75,6 +93,18 @@ def _build(
         capture_episode=capture_episode,
     )
     return retriever, fallback, episodic_repo, episodic_index
+
+
+async def test_facts_are_looked_up_with_the_real_user_id_and_tenant_id_not_swapped():
+    spy_repo = _SpySemanticMemoryRepository()
+    retriever, _, _, _ = _build(fallback_results=[], semantic_repo=spy_repo)
+
+    await retriever.execute(_TENANT, _USER, _SESSION, "how do I visualize this", top_k=5)
+
+    assert len(spy_repo.search_calls) == 1
+    user_id, tenant_id, top_k = spy_repo.search_calls[0]
+    assert user_id == _USER
+    assert tenant_id == _TENANT
 
 
 async def test_retrieves_using_the_rewritten_query_not_the_raw_one():
