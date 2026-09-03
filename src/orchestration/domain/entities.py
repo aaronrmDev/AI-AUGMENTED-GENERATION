@@ -30,3 +30,15 @@ class TierDecision(Enum):
     PROMOTED = "promoted"
     DEMOTED = "demoted"
     UNCHANGED = "unchanged"
+
+
+@dataclass(frozen=True)
+class WarmEntry:
+    # MAG's warm-tier analogue of CacheHit. Unlike CacheHit.kv_cache (an
+    # opaque tensor handle only infrastructure understands), `content` is a
+    # real string here: MAG's warm tier is a semantic fact, not a KV
+    # cache, so there's no opaque payload to hide -- the domain layer can
+    # see and use the real text (State-Aware RAG's ranking boost and
+    # query enrichment both need to read it).
+    content_hash: str
+    content: str

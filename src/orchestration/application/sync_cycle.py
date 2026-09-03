@@ -27,8 +27,9 @@ class SyncCycle:
         conflicts: list[SyncConflict] = []
         for document_id in document_ids:
             cached_hit = self._frozen_cache.lookup(tenant_id, document_id)
+            cached_content_hash = cached_hit.content_hash if cached_hit is not None else None
             conflict = sync_mixer.reconcile(
-                cached_hit, authoritative_content(document_id), document_id
+                cached_content_hash, authoritative_content(document_id), document_id
             )
             if conflict is not None:
                 self._frozen_cache.evict(tenant_id, document_id)
