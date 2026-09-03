@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 
 from src.mag.domain.entities import SemanticMemory
 from src.mag.domain.ports import SemanticMemoryIndex, SemanticMemoryRepository
@@ -56,8 +57,14 @@ class SemanticMemoryWarmStore(WarmStore):
         # search_by_similarity applies (SemanticMemoryRepository's own
         # documented contract, for callers that need to read a fact
         # regardless of status) -- this port's own "is it still warm"
-        # semantics has to apply that filter itself.
-        if fact is None or fact.valid_until is not None or fact.archived_at is not None:
+        # semantics has to apply that filter itself, matching the REAL
+        # filter's exact comparison (`valid_until IS NULL OR valid_until >
+        # now()` in postgres_semantic_memory_repository.py's own SQL) --
+        # not "valid_until is set at all," which would incorrectly treat a
+        # future-dated expiry as already-invalid.
+        if fact is None or fact.archived_at is not None:
+            return None
+        if fact.valid_until is not None and fact.valid_until <= datetime.now(UTC):
             return None
         return WarmEntry(content_hash=content_hash(fact.fact_value), content=fact.fact_value)
 
