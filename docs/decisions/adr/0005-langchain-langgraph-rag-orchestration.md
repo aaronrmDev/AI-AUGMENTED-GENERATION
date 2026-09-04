@@ -10,7 +10,7 @@ The RAG layer requires an orchestration approach for two distinct kinds of work.
 
 ## Decision
 
-LangChain is used for RAG pipeline orchestration — chunking, embedding, hybrid search, and reranking stages are composed using its abstractions. LangGraph is used specifically for agent workflows that require graph-based control flow, namely CRAG and Self-RAG.
+LangChain is used for RAG pipeline orchestration, composing the chunking, embedding, hybrid search, and reranking stages through its abstractions, while LangGraph is reserved for the agent workflows that need graph-based control flow — specifically CRAG and Self-RAG.
 
 ## Consequences
 
