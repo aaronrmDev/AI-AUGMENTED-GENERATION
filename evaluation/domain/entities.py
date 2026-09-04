@@ -25,6 +25,15 @@ class RunResult:
     total_output_tokens: int
     task_success_rate: float
     answers: list[Answer]
+    # One entry per question, each the fraction of that question's own
+    # repeats that passed success_check (#147) -- task_success_rate above
+    # stays the single aggregate figure the quantitative table already
+    # renders, this is the per-question breakdown a reader needs to tell
+    # "every question mostly passed" apart from "one question always failed,
+    # the rest always passed" behind the same aggregate number. Defaulted to
+    # an empty list so existing RunResult call sites and test fixtures that
+    # predate this field keep constructing validly.
+    per_question_success_rate: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

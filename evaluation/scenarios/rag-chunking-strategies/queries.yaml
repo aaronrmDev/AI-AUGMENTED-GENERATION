@@ -7,6 +7,9 @@ questions:
     success_criterion: >-
       Answer states 512 tokens with 10% overlap (RAG.md: "Fixed Size at 512
       tokens with 10% overlap is the source's own suggested starting point").
+    gold_passage: >-
+      Fixed Size at 512 tokens with 10% overlap is the source's own suggested
+      starting point.
   - question: >-
       What does Semantic Chunking require in order to group content, and why
       does RAG.md call it the most complex of the six chunking strategies?
@@ -16,6 +19,9 @@ questions:
       to implement (RAG.md: "at the cost of needing an embedding model to do
       the grouping, which makes it the most complex of the six to
       implement").
+    gold_passage: >-
+      at the cost of needing an embedding model to do the grouping, which
+      makes it the most complex of the six to implement.
   - question: >-
       Which techniques make up RAG.md's "Production Grade" pipeline
       archetype, and what phrase does RAG.md use to describe that archetype?
@@ -27,12 +33,20 @@ questions:
       needed, and Context Compression optimizes what's left before it
       reaches the LLM, which the source calls 'the gold standard for
       production RAG systems'").
+    gold_passage: >-
+      Hybrid Search casts the wide net, Reranking narrows it to true
+      relevance, CRAG validates the result and triggers correction when
+      needed, and Context Compression optimizes what's left before it
+      reaches the LLM, which the source calls "the gold standard for
+      production RAG systems".
   - question: >-
       What is Parent Document Retrieval's expected impact figure, measured
       in isolation, per RAG.md?
     success_criterion: >-
       Answer states a +15-20% gain in completeness (RAG.md: "Its expected
       impact in isolation is a +15-20% gain in completeness").
+    gold_passage: >-
+      Its expected impact in isolation is a +15-20% gain in completeness.
   - question: >-
       What tradeoff does Sliding Window chunking make, per RAG.md?
     success_criterion: >-
@@ -41,3 +55,7 @@ questions:
       stored because the windows overlap (RAG.md: "gives good coverage and
       keeps the narrative flow intact across chunk boundaries, but
       multiplies how much has to be stored since the windows overlap").
+    gold_passage: >-
+      gives good coverage and keeps the narrative flow intact across chunk
+      boundaries, but multiplies how much has to be stored since the windows
+      overlap.

@@ -90,6 +90,79 @@ def test_render_github_comment_omits_the_title_and_success_criterion_line():
     assert "Success criterion" not in comment
 
 
+def test_render_includes_retained_answer_text_per_question():
+    # #147: the answer text a report's own success/judge scores are actually
+    # about was computed but never rendered -- a reader had no way to check
+    # a contradiction between the scores and what was actually said.
+    output = render(_make_result())
+
+    assert "baseline answer" in output
+    assert "treatment answer" in output
+
+
+def test_render_omits_answer_text_gracefully_when_answers_list_is_shorter_than_questions():
+    # Defensive: _qualitative_section() indexes into result.baseline.answers
+    # by question position -- a mismatched (shorter) answers list must not
+    # raise IndexError, just skip the answer-text lines for that question.
+    baseline = RunResult(
+        label="Baseline", latency_p50_ms=1.0, latency_p95_ms=1.0,
+        total_input_tokens=0, total_output_tokens=0, task_success_rate=1.0,
+        answers=[],  # no retained answer at all
+    )
+    treatment = RunResult(
+        label="Treatment", latency_p50_ms=1.0, latency_p95_ms=1.0,
+        total_input_tokens=0, total_output_tokens=0, task_success_rate=1.0,
+        answers=[],
+    )
+    scores = JudgeScores(coherence=3, relevance=3, completeness=3, groundedness=3)
+    result = ComparisonResult(
+        scenario_name="s", model_config="m", success_criterion="c",
+        rag=True, cag=False, mag=False, notes="",
+        baseline=baseline, treatment=treatment, judge_scores=[(scores, scores)],
+    )
+
+    output = render(result)  # must not raise
+
+    assert "Baseline answer:" not in output
+    assert "Treatment answer:" not in output
+
+
+def test_render_includes_per_question_success_rate_when_present():
+    baseline = RunResult(
+        label="Baseline", latency_p50_ms=200.0, latency_p95_ms=250.0,
+        total_input_tokens=100, total_output_tokens=50, task_success_rate=0.6,
+        answers=[Answer(text="baseline answer", input_tokens=100, output_tokens=50)],
+        per_question_success_rate=[0.6],
+    )
+    treatment = RunResult(
+        label="Treatment", latency_p50_ms=150.0, latency_p95_ms=180.0,
+        total_input_tokens=100, total_output_tokens=30, task_success_rate=0.8,
+        answers=[Answer(text="treatment answer", input_tokens=100, output_tokens=30)],
+        per_question_success_rate=[0.8],
+    )
+    scores_a = JudgeScores(coherence=4, relevance=4, completeness=3, groundedness=5)
+    scores_b = JudgeScores(coherence=5, relevance=5, completeness=5, groundedness=5)
+    result = ComparisonResult(
+        scenario_name="Fixed Size Chunking", model_config="qwen3.5, Ollama",
+        success_criterion="c", rag=True, cag=False, mag=False, notes="",
+        baseline=baseline, treatment=treatment, judge_scores=[(scores_a, scores_b)],
+    )
+
+    output = render(result)
+
+    assert "baseline 60%" in output
+    assert "treatment 80%" in output
+
+
+def test_render_omits_per_question_success_rate_when_absent():
+    # A ComparisonResult built before #147 (or by any scenario that never
+    # populates per_question_success_rate) must render exactly as before --
+    # no "Task success this question" line, no IndexError.
+    output = render(_make_result())  # _make_result()'s RunResults default to []
+
+    assert "Task success this question" not in output
+
+
 def test_render_shows_a_dash_row_instead_of_zeros_for_a_parse_failure():
     # Regression test for #149: a JudgeScores with parse_failed=True carries
     # placeholder 0s that must never be rendered as if they were real judged

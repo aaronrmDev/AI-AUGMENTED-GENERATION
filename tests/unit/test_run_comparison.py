@@ -133,6 +133,92 @@ async def test_run_comparison_keeps_only_the_last_repeat_runs_answer():
     assert result.treatment.answers[0].text == "call number 6"
 
 
+async def test_run_comparison_scores_every_repeat_not_just_the_last():
+    # #147: task success must be an n=repeat_count statistic per question,
+    # not n=1 taken from whichever repeat happened to run last. This
+    # strategy alternates pass/fail so a last-repeat-only bug (which would
+    # see either 0% or 100%, never anything in between) fails obviously.
+    call_count = {"n": 0}
+
+    async def alternating_strategy(question: str) -> Answer:
+        call_count["n"] += 1
+        # Odd calls "pass" (contain "PASS"), even calls "fail".
+        text = "PASS" if call_count["n"] % 2 == 1 else "FAIL"
+        return Answer(text=text, input_tokens=1, output_tokens=1)
+
+    use_case = RunComparison(judge=FakeJudge(), repeat_count=4)
+    result = await use_case.execute(
+        scenario_name="s", model_config="m", success_criterion="c",
+        rag=True, cag=False, mag=False,
+        questions=["only question"],
+        baseline=alternating_strategy, treatment=alternating_strategy,
+        success_check=lambda q, a: "PASS" in a.text,
+    )
+
+    # 4 repeats, alternating PASS/FAIL/PASS/FAIL -> exactly 2 of 4 pass.
+    assert result.baseline.task_success_rate == 0.5
+    assert result.baseline.per_question_success_rate == [0.5]
+
+
+async def test_run_comparison_tracks_success_rate_per_question_independently():
+    # Question 1 always passes, question 2 always fails -- the aggregate
+    # would average to 50% either way, but the per-question breakdown must
+    # show which question is actually the problem.
+    def success_check(question: str, answer: Answer) -> bool:
+        return question == "good question"
+
+    async def strategy(question: str) -> Answer:
+        return Answer(text="irrelevant", input_tokens=1, output_tokens=1)
+
+    use_case = RunComparison(judge=FakeJudge(), repeat_count=3)
+    result = await use_case.execute(
+        scenario_name="s", model_config="m", success_criterion="c",
+        rag=True, cag=False, mag=False,
+        questions=["good question", "bad question"],
+        baseline=strategy, treatment=strategy,
+        success_check=success_check,
+    )
+
+    assert result.baseline.per_question_success_rate == [1.0, 0.0]
+    assert result.baseline.task_success_rate == 0.5
+
+
+async def test_run_comparison_passes_reference_context_to_the_judge():
+    async def strategy(question: str) -> Answer:
+        return Answer(text="a", input_tokens=1, output_tokens=1)
+
+    judge = FakeJudge()
+    use_case = RunComparison(judge=judge, repeat_count=1)
+    await use_case.execute(
+        scenario_name="s", model_config="m", success_criterion="c",
+        rag=True, cag=False, mag=False,
+        questions=["q1", "q2"], baseline=strategy, treatment=strategy,
+        success_check=lambda q, a: True,
+        reference_contexts=["gold passage for q1", "gold passage for q2"],
+    )
+
+    assert judge.reference_context_calls == ["gold passage for q1", "gold passage for q2"]
+
+
+async def test_run_comparison_defaults_reference_context_to_empty_string_when_omitted():
+    # Every scenario except rag-chunking-strategies never passes
+    # reference_contexts (#147 is opt-in) -- the judge must still receive a
+    # defined value per question, not a missing argument or None.
+    async def strategy(question: str) -> Answer:
+        return Answer(text="a", input_tokens=1, output_tokens=1)
+
+    judge = FakeJudge()
+    use_case = RunComparison(judge=judge, repeat_count=1)
+    await use_case.execute(
+        scenario_name="s", model_config="m", success_criterion="c",
+        rag=True, cag=False, mag=False,
+        questions=["q1", "q2"], baseline=strategy, treatment=strategy,
+        success_check=lambda q, a: True,
+    )
+
+    assert judge.reference_context_calls == ["", ""]
+
+
 async def test_run_comparison_pools_latency_across_every_question_and_repeat():
     # 6 calls total: 2 questions x 3 repeats. The one slow call happens during
     # the FIRST question's repeats, not the last -- deliberately, so that a

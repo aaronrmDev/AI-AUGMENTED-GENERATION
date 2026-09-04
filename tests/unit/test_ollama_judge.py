@@ -171,6 +171,37 @@ async def test_score_returns_a_flagged_parse_failure_after_exhausting_retries():
     assert scores_b.unverifiable_claims[0].startswith("JUDGE PARSE FAILURE:")
 
 
+async def test_score_includes_the_reference_passage_when_given():
+    fake_client = _FakeOllamaClient(_VALID_PAYLOAD)
+    judge = OllamaJudge(client=fake_client, model_id="qwen3.5")
+
+    await judge.score(
+        query="q",
+        response_a="a",
+        response_b="b",
+        context_a="a's own retrieved chunk",
+        context_b="b's own retrieved chunk",
+        reference_context="THE-ACTUAL-CORRECT-ANSWER-PASSAGE",
+    )
+
+    user_message = fake_client.last_call_kwargs["messages"][1]["content"]
+    assert "THE-ACTUAL-CORRECT-ANSWER-PASSAGE" in user_message
+    assert "Reference passage" in user_message
+
+
+async def test_score_omits_the_reference_passage_block_when_not_given():
+    # #147's reference_context is opt-in -- every scenario except
+    # rag-chunking-strategies never supplies one, and their prompts must stay
+    # byte-for-byte what they were before this parameter existed.
+    fake_client = _FakeOllamaClient(_VALID_PAYLOAD)
+    judge = OllamaJudge(client=fake_client, model_id="qwen3.5")
+
+    await judge.score(query="q", response_a="a", response_b="b", context_a="ca", context_b="cb")
+
+    user_message = fake_client.last_call_kwargs["messages"][1]["content"]
+    assert "Reference passage" not in user_message
+
+
 async def test_score_retries_on_a_syntactically_valid_but_wrong_shaped_payload():
     # Valid JSON, but missing the expected "response_a"/"response_b" keys --
     # a KeyError, not a JSONDecodeError, and must be retried the same way.
