@@ -1,6 +1,6 @@
 # Quantitative Comparison Template
 
-Copy this table into a GitHub issue comment (or export the same columns to CSV) once per Story that reaches its "real measured result documented" DoD item. One filled-in copy per model tested, since the whole point of the ablation design in `docs/evaluation/COMPARISON_METHODOLOGY.md` is that the model stays fixed within a single comparison and only the RAG/CAG/MAG usage varies — don't average across models into one row, since that's exactly the model-versus-model comparison this project deliberately isn't running.
+Copy this table into a GitHub issue comment (or export the same columns to CSV) once per Story that reaches its "real measured result documented" Definition of Done (DoD) item. One filled-in copy per model tested, since the whole point of the ablation design in `docs/evaluation/COMPARISON_METHODOLOGY.md` is that the model stays fixed within a single comparison and only the RAG/CAG/MAG usage varies — don't average across models into one row, since that's exactly the model-versus-model comparison this project deliberately isn't running.
 
 ## How to fill this in
 
@@ -15,12 +15,12 @@ Run the baseline row first — same model, same input set, RAG/CAG/MAG all switc
 
 - **RAG / CAG / MAG columns** — mark which paradigms were active for this run. For an Individual-Techniques Story, only one of the three is ever ✓. For a Combinations Story, mark every constituent paradigm the combination actually spans (a same-paradigm archetype like CAG's "Long Context Champion" still only marks CAG; a cross-paradigm Story like State-Aware RAG marks both RAG and MAG).
 - **Model** — the exact model and quantization/serving config (e.g. "Qwen3.8-27B, vLLM 0.X on ROCm, FP8"). Two runs of "the same model" at different quantization levels are not the same comparison — write down the config every time, not just the model name.
-- **Input / Output tokens** — read directly from the serving engine's own usage reporting, not estimated.
+- **Input / Output tokens** — pull these straight from the serving engine's own usage reporting; a hand-estimated count isn't a measurement, so don't substitute one.
 - **Latency** — report both p50 and p95 across at minimum 5 repeated runs of the same input set; a single-run latency number is noise, not a measurement.
-- **Task success** — a percentage or a pass/fail count against the Story's stated success criterion, not a subjective read.
+- **Task success** — a percentage or a pass/fail count measured against the Story's stated success criterion, not a subjective read — "felt like it worked" isn't something someone else can check later.
 - **Δ vs. baseline** — the actual delta (e.g. "−38% output tokens, −12% p50 latency, task success unchanged at 94%"), which is the number that actually answers "did this technique earn its complexity."
 - **Notes** — corpus/input-set used, success-criterion definition, anything about the run that a reader would need to reproduce it or to doubt it appropriately.
 
-## What this template does not replace
+## Pairs with the qualitative rubric
 
 This sheet only carries numbers a token counter or a stopwatch produces without judgment. Whether the *quality* of the output held up under a technique that, say, compressed context by 50% is a separate question this sheet cannot answer on its own — see `docs/evaluation/qualitative-rubric.md` for that half, and read both together before checking a Story's DoD box, per the closing section of `docs/evaluation/COMPARISON_METHODOLOGY.md`.
