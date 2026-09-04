@@ -1,6 +1,6 @@
 # Qualitative Judge Rubric
 
-Quantitative numbers can't tell you whether a technique that cut token usage in half did it by being efficient or by quietly giving worse answers — that's what this rubric exists to catch, and per `docs/evaluation/COMPARISON_METHODOLOGY.md` it's meant to be run alongside the quantitative template, never as a substitute for it. The design goal here is reproducibility, not sophistication: the same judge model, the same rubric wording, and the same input pair (baseline output vs. treatment output) should produce close to the same verdict whenever someone re-runs it, which is what makes a claimed quality improvement checkable rather than a one-time impression nobody else can verify.
+This rubric exists to catch something a token count alone can't: a technique that cut token usage in half might have done it by being genuinely efficient, or by quietly giving worse answers, and only a quality check tells those two apart. Per `docs/evaluation/COMPARISON_METHODOLOGY.md`, it's meant to be run alongside the quantitative template, as that sheet's companion rather than its replacement. The design goal here is reproducibility, not sophistication: the same judge model, the same rubric wording, and the same input pair (baseline output vs. treatment output) should produce close to the same verdict whenever someone re-runs it, which is what makes a claimed quality improvement checkable rather than a one-time impression nobody else can verify.
 
 ## Judge model
 
