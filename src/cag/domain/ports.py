@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from src.cag.domain.entities import CompressedKV, VerificationResult
+from src.cag.domain.entities import CompressedKV, EvictionDecision, VerificationResult
 
 
 class KVCacheCompressor(ABC):
@@ -29,6 +29,52 @@ class CrossLayerKVCompressor(ABC):
     def decompress(
         self, compressed: CompressedKV
     ) -> tuple[list[list[float]], list[list[float]]]: ...
+
+
+class KVCacheEvictor(ABC):
+    # H2O, SnapKV, and NACL all answer the same question from the same
+    # shape of input: given a per-token importance score (accumulated
+    # attention for H2O, windowed-and-pooled for SnapKV, an end-of-input
+    # proxy for NACL) and a token budget, which indices survive. What
+    # differs is how attention_scores itself got computed upstream and
+    # what each does with it below -- not this port's signature.
+    @abstractmethod
+    def select_keep_indices(
+        self, attention_scores: list[float], budget: int
+    ) -> EvictionDecision: ...
+
+
+class RecentPatternEvictor(ABC):
+    # MorphKV's own shape: it scores tokens from several recent decoding
+    # steps' attention distributions via Sum/Max Fusion, not a single
+    # already-accumulated vector -- a genuinely different input shape
+    # from KVCacheEvictor above, the same reasoning that keeps MiniCache
+    # off the single-tensor KVCacheCompressor port.
+    @abstractmethod
+    def select_keep_indices(
+        self, recent_attention_windows: list[list[float]], budget: int
+    ) -> EvictionDecision: ...
+
+
+class HashBasedEvictor(ABC):
+    # HASHEVICT's own shape: it estimates token similarity via
+    # locality-sensitive hashing over the raw KV vectors themselves,
+    # before any attention computation runs at all -- there is no
+    # per-token score to consume here, only vectors.
+    @abstractmethod
+    def select_keep_indices(
+        self, kv_vectors: list[list[float]], budget: int
+    ) -> EvictionDecision: ...
+
+
+class CacheDistiller(ABC):
+    # InfiniPot's own shape: rather than a binary per-token keep/evict
+    # call, it distills the whole cache down to `budget` representative
+    # rows once it overflows -- closer to selective compression of the
+    # cache than to per-token selection, so it returns a reduced KV
+    # tensor directly instead of an EvictionDecision's index list.
+    @abstractmethod
+    def distill(self, kv: list[list[float]], budget: int) -> list[list[float]]: ...
 
 
 class CandidateGenerator(ABC):
