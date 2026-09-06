@@ -30,6 +30,19 @@ class VerificationResult:
 
 
 @dataclass(frozen=True)
+class EvictionDecision:
+    # keep_indices is sorted ascending, a subset of range(original_token_count)
+    # -- every one of CAG.md's six eviction algorithms differs only in WHICH
+    # indices survive a given budget (attention-accumulated, windowed+pooled,
+    # proxy-scored, recent-pattern-fused, hash-bucketed), so the actual KV
+    # row selection this decision drives is a plain index operation none of
+    # them needs to own individually.
+    method: str
+    keep_indices: list[int] = field(default_factory=list)
+    evicted_count: int = 0
+
+
+@dataclass(frozen=True)
 class SpeculativeDecodingRun:
     # A real, measured record of one full generation run -- everything
     # needed to compute acceptance rate (tokens_accepted_from_candidates
