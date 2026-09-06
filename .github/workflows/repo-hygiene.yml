@@ -1,16 +1,17 @@
 name: Repo hygiene
 
-# This project is pre-code (no src/, no dependencies, no Dockerfile, no
-# deployed service yet) — see docs/architecture/OVERVIEW.md's Phase 1
-# blueprint. This workflow checks the things that are actually real right
-# now: doc-map link integrity, placeholder text, and staged secrets.
-# Dependency scanning (Dependabot) is enabled at the repo-settings level,
-# not here. Container scanning (Trivy) and DAST (OWASP ZAP), per
-# docs/security/SECURITY.md points 14 and 20, are deliberately not stubbed
-# in here — there is no Dockerfile and no running service to scan yet, and
-# an empty workflow for either would be exactly the "scaffolding for what
-# doesn't exist" this project has avoided everywhere else. Add both once
-# Phase 1 produces a container and a deployed environment to point them at.
+# This project has real code (src/, a full dependency tree, docker/docker-
+# compose.yml) but no deployed environment yet — see
+# docs/architecture/OVERVIEW.md's Phase 1 blueprint. This workflow checks
+# the things that are cheap to verify without one: doc-map link integrity,
+# placeholder text, and staged secrets. Dependency scanning (Dependabot) is
+# enabled at the repo-settings level, not here. Container scanning (Trivy)
+# and DAST (OWASP ZAP), per docs/security/SECURITY.md points 14 and 20, are
+# deliberately not stubbed in here — DAST specifically needs a running
+# deployed instance to attack, which doesn't exist yet, and an empty
+# workflow for either would be exactly the "scaffolding for what doesn't
+# exist" this project has avoided everywhere else. Add both once a real
+# deployed environment exists to point them at.
 
 on:
   pull_request:
