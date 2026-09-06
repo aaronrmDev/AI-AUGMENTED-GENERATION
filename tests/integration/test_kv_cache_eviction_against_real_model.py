@@ -112,7 +112,8 @@ def test_evicted_cache_still_produces_a_coherent_continuation():
 
     baseline_logits = _continue_with_cache(model, cache, next_token)
     baseline_top_token = int(torch.argmax(baseline_logits, dim=-1).item())
-    print(f"\nbaseline top token: {baseline_top_token} ({tokenizer.decode([baseline_top_token])!r})")
+    decoded_baseline = tokenizer.decode([baseline_top_token])
+    print(f"\nbaseline top token: {baseline_top_token} ({decoded_baseline!r})")
 
     evictors = {
         "h2o": H2OEvictor(recent_window=2),
