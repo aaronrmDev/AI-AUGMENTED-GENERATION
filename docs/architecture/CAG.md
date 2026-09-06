@@ -24,7 +24,7 @@ The last row reproduces the source's own summary framing for Alternative Attenti
 
 Three of the nine techniques above now have real code behind them, a change from when this document described all nine as pure concepts. KV Cache Compression and Speculative Decoding have each been built and live-measured against real tensors and a real small model (`distilgpt2`), with their sections below now carrying the actual numbers alongside the figures this document originally stated, cited to `evaluation/reports/cag-kv-cache-compression.md` and `evaluation/reports/cag-speculative-decoding.md`. Alternative Attention's compatibility split — the corrected four-and-four claim in the section further down — has its own kind of build: not a live measurement, since it's an architectural decision rather than a serving technique, but a real, tested code artifact (`src/cag/domain/attention_compatibility.py`, exercised by `tests/unit/test_attention_compatibility.py`) that makes ADR-0003's split queryable instead of only stated in prose.
 
-This project's GPU hardware is real and already in the room — an AMD 7900 XTX — though the ROCm/vLLM stack it would serve on hasn't been stood up yet, since that's driver-level setup that needs the hardware owner physically present rather than something a session can complete unsupervised. The other six techniques — KV Cache Eviction, Prefix Caching, PagedAttention, Hybrid Offloading, Multi-Turn Caching, and Cache-Aware Batching — all need that serving engine underneath them to measure honestly rather than just describe, so for now they remain exactly the conceptual reference the sections below already give them.
+This project's GPU hardware and its serving stack are both real and confirmed working: an AMD 7900 XTX runs a ROCm 7.2.0 + vLLM 0.28.0 stack under WSL2, verified end-to-end with a real generation and zero GEMM errors (re-confirmed 2026-09-05). The other six techniques — KV Cache Eviction, Prefix Caching, PagedAttention, Hybrid Offloading, Multi-Turn Caching, and Cache-Aware Batching — no longer wait on that setup step; what stands between them and a live measurement now is the implementation work itself, so for now they remain exactly the conceptual reference the sections below already give them.
 
 ```mermaid
 flowchart TD
@@ -33,7 +33,7 @@ flowchart TD
         SPEC["Speculative Decoding<br/>Prompt Lookup · Medusa · Lookahead"]
         ATTN["Alternative Attention compatibility<br/>coded as tested domain logic, not measured"]
     end
-    subgraph blocked["Blocked on GPU / vLLM / ROCm serving"]
+    subgraph blocked["Implementation pending (serving stack ready)"]
         EVICT["KV Cache Eviction"]
         PREFIX["Prefix Caching"]
         PAGED["PagedAttention / vAttention"]
@@ -41,7 +41,7 @@ flowchart TD
         MULTI["Multi-Turn Caching"]
         BATCH["Cache-Aware Batching"]
     end
-    HW["AMD 7900 XTX present,<br/>ROCm/vLLM stack not yet configured"] -.blocks.-> blocked
+    HW["AMD 7900 XTX + ROCm/vLLM<br/>confirmed working"] -.awaits implementation.-> blocked
 ```
 
 ## How the five pipeline stages fit together
