@@ -3,9 +3,11 @@ from abc import ABC, abstractmethod
 from src.cag.domain.entities import (
     BatchRequest,
     CompressedKV,
+    ConversationTurn,
     EvictionDecision,
     OffloadRun,
     OffloadWorkload,
+    SessionRun,
     VerificationResult,
 )
 
@@ -112,6 +114,16 @@ class KVCacheAllocator(ABC):
 
     @abstractmethod
     def free_runs(self) -> list[int]: ...
+
+
+class MultiTurnCacheStrategy(ABC):
+    # The session-stage decision CAG.md's five named methods answer
+    # differently: across a multi-turn session, what is kept, what is
+    # recomputed, and where it lives. They agree that recomputing the
+    # whole history every turn is the thing to avoid, and disagree about
+    # what to trade for avoiding it.
+    @abstractmethod
+    def run_session(self, turns: list[ConversationTurn]) -> SessionRun: ...
 
 
 class OffloadingStrategy(ABC):

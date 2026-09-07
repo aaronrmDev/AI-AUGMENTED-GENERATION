@@ -43,6 +43,32 @@ class EvictionDecision:
 
 
 @dataclass(frozen=True)
+class ConversationTurn:
+    # One turn of a session. parent_turn_id is what lets a workload be a
+    # BRANCHING agent program rather than only a flat conversation --
+    # SGLang's whole distinguishing claim is about reuse across a
+    # program's control flow, which a linear-only model would be unable
+    # to show, and would therefore silently understate.
+    turn_id: str
+    new_tokens: int
+    parent_turn_id: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionRun:
+    # per_turn_recompute is kept alongside the total deliberately: the
+    # claim under test is that per-turn cost STOPS GROWING, and a total
+    # alone cannot distinguish "halved the quadratic" from "made it
+    # linear". transfer_tokens is non-zero only for strategies whose
+    # cache lives somewhere the compute does not.
+    strategy: str
+    per_turn_recompute: list[int] = field(default_factory=list)
+    tokens_recomputed: int = 0
+    peak_tokens_held: int = 0
+    transfer_tokens: int = 0
+
+
+@dataclass(frozen=True)
 class OffloadWorkload:
     # One layer-by-layer forward pass over a tiered KV store. Times are
     # in milliseconds and are PARAMETERS of the simulation, not measured
