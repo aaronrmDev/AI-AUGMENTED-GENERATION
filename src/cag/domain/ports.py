@@ -77,6 +77,19 @@ class CacheDistiller(ABC):
     def distill(self, kv: list[list[float]], budget: int) -> list[list[float]]: ...
 
 
+class CompletionServer(ABC):
+    # A thin boundary around a CAG-tier serving engine's completion
+    # endpoint -- what a future orchestration layer's CAG tier would
+    # call. Unlike every port above, the interesting behavior here
+    # (prefix-cache hits, invalidation on prefix change, eviction under
+    # memory pressure) lives entirely inside the serving engine itself,
+    # not in code this project writes -- this port exists so that
+    # behavior is reachable and testable from this project's own code
+    # rather than only from a raw HTTP call inline in a test.
+    @abstractmethod
+    def complete(self, prompt: str, max_tokens: int) -> str: ...
+
+
 class CandidateGenerator(ABC):
     # Medusa, Lookahead Decoding, and Prompt Lookup Decoding all differ
     # only in WHERE candidate tokens come from -- the propose-verify-
