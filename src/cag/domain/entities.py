@@ -43,6 +43,18 @@ class EvictionDecision:
 
 
 @dataclass(frozen=True)
+class BatchRequest:
+    # A pending request as the scheduling stage sees it: an identity and
+    # the token sequence whose leading blocks may or may not be shareable
+    # with its neighbours. Deliberately not the prompt string -- prefix
+    # sharing happens over tokens at block granularity, and comparing
+    # strings would silently disagree with the engine about where a
+    # shared prefix actually ends.
+    request_id: str
+    tokens: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class SpeculativeDecodingRun:
     # A real, measured record of one full generation run -- everything
     # needed to compute acceptance rate (tokens_accepted_from_candidates
