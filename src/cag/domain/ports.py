@@ -77,6 +77,36 @@ class CacheDistiller(ABC):
     def distill(self, kv: list[list[float]], budget: int) -> list[list[float]]: ...
 
 
+class KVCacheAllocator(ABC):
+    # The allocation-stage contract PagedAttention and vAttention answer
+    # differently. Both decide where a sequence's KV tensors physically
+    # live in a fixed-size pool; they disagree on whether that space has
+    # to be contiguous, which is the whole substance of the trade CAG.md
+    # describes. Modelled in token slots rather than bytes because the
+    # comparison is about layout, not about any particular model's
+    # per-token footprint.
+    @abstractmethod
+    def allocate(self, sequence_id: str, num_tokens: int) -> bool: ...
+
+    @abstractmethod
+    def extend(self, sequence_id: str, additional_tokens: int) -> bool: ...
+
+    @abstractmethod
+    def fork(self, parent_id: str, child_id: str) -> bool: ...
+
+    @abstractmethod
+    def free(self, sequence_id: str) -> None: ...
+
+    @abstractmethod
+    def physical_slots_used(self) -> int: ...
+
+    @abstractmethod
+    def logical_tokens_held(self) -> int: ...
+
+    @abstractmethod
+    def free_runs(self) -> list[int]: ...
+
+
 class CompletionServer(ABC):
     # A thin boundary around a CAG-tier serving engine's completion
     # endpoint -- what a future orchestration layer's CAG tier would
