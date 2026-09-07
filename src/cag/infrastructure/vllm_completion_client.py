@@ -1,4 +1,5 @@
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
@@ -40,6 +41,21 @@ class VLLMCompletionClient(CompletionServer):
         )
         response.raise_for_status()
         return str(response.json()["choices"][0]["text"])
+
+    def complete_concurrent_timed(
+        self, prompts: list[str], max_tokens: int
+    ) -> tuple[list[str], float]:
+        # Fires every prompt at once and returns total wall-clock for
+        # the whole burst. This is what makes continuous batching
+        # observable from outside: an engine that serialised these would
+        # take roughly the sum of their individual latencies, while one
+        # that admits them into a running batch takes far less.
+        # httpx.Client is documented as thread-safe, so one client is
+        # shared across the pool rather than one per request.
+        start = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=len(prompts)) as pool:
+            texts = list(pool.map(lambda p: self.complete(p, max_tokens), prompts))
+        return texts, time.perf_counter() - start
 
     def complete_many_timed(
         self, prompt: str, max_tokens: int, n: int

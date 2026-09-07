@@ -1,6 +1,11 @@
 from abc import ABC, abstractmethod
 
-from src.cag.domain.entities import CompressedKV, EvictionDecision, VerificationResult
+from src.cag.domain.entities import (
+    BatchRequest,
+    CompressedKV,
+    EvictionDecision,
+    VerificationResult,
+)
 
 
 class KVCacheCompressor(ABC):
@@ -105,6 +110,19 @@ class KVCacheAllocator(ABC):
 
     @abstractmethod
     def free_runs(self) -> list[int]: ...
+
+
+class BatchScheduler(ABC):
+    # The scheduling-stage decision CAG.md describes: given the requests
+    # waiting to run, which ones go together. Grouping is the whole
+    # substance -- a scheduler that ignores shared prefixes forces the
+    # same leading tokens to be prefilled once per batch they end up
+    # scattered across, while one that groups by prefix pays for them
+    # once per group.
+    @abstractmethod
+    def form_batches(
+        self, pending: list[BatchRequest], max_batch_size: int
+    ) -> list[list[BatchRequest]]: ...
 
 
 class CompletionServer(ABC):
