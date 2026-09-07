@@ -4,6 +4,8 @@ from src.cag.domain.entities import (
     BatchRequest,
     CompressedKV,
     EvictionDecision,
+    OffloadRun,
+    OffloadWorkload,
     VerificationResult,
 )
 
@@ -110,6 +112,16 @@ class KVCacheAllocator(ABC):
 
     @abstractmethod
     def free_runs(self) -> list[int]: ...
+
+
+class OffloadingStrategy(ABC):
+    # The storage-stage decision CAG.md's five named strategies answer
+    # differently: given more layers than the GPU can hold, what lives
+    # where, what moves when, and how much of that movement can be made
+    # to happen underneath compute that was going to run anyway. Each
+    # implementation differs in the mechanism, not in the question.
+    @abstractmethod
+    def run(self, workload: OffloadWorkload) -> OffloadRun: ...
 
 
 class BatchScheduler(ABC):

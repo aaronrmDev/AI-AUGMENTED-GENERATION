@@ -43,6 +43,34 @@ class EvictionDecision:
 
 
 @dataclass(frozen=True)
+class OffloadWorkload:
+    # One layer-by-layer forward pass over a tiered KV store. Times are
+    # in milliseconds and are PARAMETERS of the simulation, not measured
+    # hardware constants -- the comparison between strategies is what
+    # this model is for, and every report using it says so rather than
+    # presenting simulated milliseconds as if they came off a device.
+    num_layers: int
+    compute_ms_per_layer: float
+    warm_fetch_ms_per_layer: float
+    cold_fetch_ms_per_layer: float
+    gpu_layer_capacity: int
+
+
+@dataclass(frozen=True)
+class OffloadRun:
+    # transfer_ms_issued is all the transfer work a strategy asked for;
+    # transfer_ms_hidden is however much of it finished underneath
+    # compute and so never reached the critical path. Keeping both,
+    # rather than only the total, is what makes overlap efficiency
+    # measurable instead of inferred.
+    strategy: str
+    total_ms: float = 0.0
+    transfer_ms_issued: float = 0.0
+    transfer_ms_hidden: float = 0.0
+    gpu_layers_resident: int = 0
+
+
+@dataclass(frozen=True)
 class BatchRequest:
     # A pending request as the scheduling stage sees it: an identity and
     # the token sequence whose leading blocks may or may not be shareable
