@@ -18,7 +18,9 @@ def test_internal_fragmentation_is_the_wasted_fraction_of_allocated_slots():
 
 
 def test_internal_fragmentation_of_an_empty_pool_is_zero_not_a_division_error():
-    assert internal_fragmentation(physical_slots_used=0, logical_tokens_held=0) == pytest.approx(0.0)
+    assert internal_fragmentation(
+        physical_slots_used=0, logical_tokens_held=0
+    ) == pytest.approx(0.0)
 
 
 def test_internal_fragmentation_rejects_holding_more_tokens_than_slots():
