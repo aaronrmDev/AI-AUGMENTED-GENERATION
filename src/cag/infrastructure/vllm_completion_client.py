@@ -41,6 +41,30 @@ class VLLMCompletionClient(CompletionServer):
         response.raise_for_status()
         return str(response.json()["choices"][0]["text"])
 
+    def complete_many_timed(
+        self, prompt: str, max_tokens: int, n: int
+    ) -> tuple[list[str], float]:
+        # Parallel sampling: n completions branching from ONE prompt,
+        # which is precisely the workload PagedAttention's block sharing
+        # and copy-on-write exist to serve. Deliberately not on the
+        # CompletionServer port -- that port models the single-answer
+        # boundary an orchestration CAG tier would call, while this is a
+        # serving-engine capability being measured, not composed.
+        start = time.perf_counter()
+        response = self._client.post(
+            f"{self._base_url}/v1/completions",
+            json={
+                "model": self._model,
+                "prompt": prompt,
+                "max_tokens": max_tokens,
+                "temperature": 1.0,
+                "n": n,
+            },
+        )
+        response.raise_for_status()
+        elapsed = time.perf_counter() - start
+        return [str(choice["text"]) for choice in response.json()["choices"]], elapsed
+
     def complete_timed(self, prompt: str, max_tokens: int) -> tuple[str, float]:
         # Real wall-clock request latency, not a true streamed TTFT --
         # this client uses the non-streaming completions endpoint, so

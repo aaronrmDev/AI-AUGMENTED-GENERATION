@@ -44,6 +44,21 @@ class VLLMMetricsClient:
             raise ValueError(f"metric {metric_name!r} not found in /metrics output")
         return total
 
+    def prompt_tokens_total(self) -> float:
+        # Prompt tokens the engine actually PREFILLED. The number that
+        # makes PagedAttention's block sharing observable from outside:
+        # a parallel-sampling request that shares one physical copy of
+        # its prompt across N branches prefills that prompt once, so
+        # this counter moves by roughly one prompt length rather than N
+        # of them.
+        return self._sum_metric("vllm:prompt_tokens")
+
+    def kv_cache_usage(self) -> float:
+        # A gauge, not a counter -- sampled at whatever instant the
+        # scrape lands, so it is used here only as a secondary signal
+        # alongside the counter above, never as the load-bearing one.
+        return self._sum_metric("vllm:kv_cache_usage_perc")
+
     def prefix_cache_queries_total(self) -> float:
         return self._sum_metric("vllm:prefix_cache_queries")
 
