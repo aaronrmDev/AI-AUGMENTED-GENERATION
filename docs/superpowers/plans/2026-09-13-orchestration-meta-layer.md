@@ -4741,3 +4741,22 @@ Where executing this plan against the real stack changed what the plan says, the
 - **Held-out labels (Task 10).** Hand review kept 36 of qwen3.5's 40 generated labels and relabeled four MAG-only requests as MAG+RAG, because answering them also needs current catalog or stock data. Each correction carries a `review_note`.
 - **Scenario packages (Task 10).** No `__init__.py` was added under `evaluation/scenarios/orchestration-meta-layer/`, matching the other hyphenated scenario directories.
 - **Lint scope.** `ruff check tests` reports pre-existing line-length violations in files this batch never touched, so lint was run on every file this batch created or changed. `ruff check src` and `mypy src` are clean across the whole tree.
+
+### Changes from the pre-merge code review
+
+A review of `develop..HEAD` found no critical issues and seven important ones. Each was checked against the code before being changed, and each change went in test-first.
+
+- **The MAG tier owns its unit of work.** `MagTier` now depends on a `SemanticFactSearch` port. Its implementation, `SessionScopedSemanticFactSearch`, opens a session per search and invalidates it on failure or cancellation. The earlier "call `invalidate()` after a MAG timeout" obligation on callers is gone. The review confirmed the risk concretely: `BM25KeywordSearch`, and so hybrid RAG, reads Postgres, so a shared session broke the MAG → RAG fallback, and in PARALLEL mode two tiers would have used one `AsyncSession` concurrently.
+- **Classification failure degrades instead of failing the request.** `UnifiedAnswerQuestion` classifies under `classifier_timeout`. A timeout, an exception, or a `ClassificationFailed` routes with `fallback_decision()` (every paradigm, PARALLEL), and `routing_fallback` records which case occurred. `LlmQueryClassifier` raises `ClassificationFailed` instead of returning 0.5 everywhere, a value that only lands in the uncertainty band at the default threshold.
+- **No-signal scores run every paradigm in parallel.** `decide` used to pick the highest score when nothing cleared the threshold, which routed no-signal queries confidently to CAG alone. It now returns `fallback_decision()`.
+- **Background RAG completion is bounded.** `background_timeout` gives each completion a deadline, and `max_background` caps concurrent completions; a timed-out attempt beyond the cap is cancelled.
+- **Warmed-cache matching is thread-safe.** `CagTier` runs `best_warmed_match` on a worker thread. Warmed entries are now indexed by tenant and scanned from a `dict.copy()` snapshot, and the method returns a `SearchResult` whose `score` carries the similarity.
+- **Budget writes are user-scoped.** `SessionBudgetRecorder.record` takes `user_id`, and the UPDATE matches it. An integration test pins that another user in the same tenant is refused.
+- **Budget recorded before generation.** A missing session now fails before an answer is paid for.
+- **Minor fixes:**
+  - A failing access tracker or findings sink no longer fails a request.
+  - PARALLEL mode cancels sibling tiers when one raises `CancelledError`.
+  - The measured thresholds moved to `evaluation/scenarios/orchestration_meta_layer_thresholds.py`, so the runner no longer imports test code.
+  - `stale_rate` is NaN over zero runs.
+  - Budget-share tolerance is `abs_tol=1e-12` with `rel_tol=0.0`. `isclose`'s default relative tolerance had silently allowed a 5e-10 overshoot, and the new test caught it.
+- **The integration Postgres URL.** After the review fixes, one test still failed. A MAG search cancelled by the cascade was followed by a fresh search that hung until its 5s timeout. A probe ruled out the cascade and SQLAlchemy: raw asyncpg connections to the TestContainers Postgres via `localhost` timed out after 20s even before any cancellation, while `127.0.0.1` connected in about 40ms, including immediately after a cancel. Pooled connections had been hiding it; an invalidated connection forces the next request to open a new one. The `database_url` fixture now pins `127.0.0.1`, as `redis_url`, `qdrant_url`, and `neo4j_url` already did, and the cascade runner does the same. The three affected test files went from 535s to 23s.
