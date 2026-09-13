@@ -5,6 +5,8 @@ Usage (from the repository root):
     PYTHONPATH=. python evaluation/scenarios/orchestration-meta-layer/run_router_comparison.py
 """
 import asyncio
+import io
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -107,4 +109,8 @@ async def _run() -> None:
 
 
 if __name__ == "__main__":
+    # The report can contain characters the Windows console's cp1252 can't
+    # encode; the cascade runner crashed on exactly that after writing its reports.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
     asyncio.run(_run())

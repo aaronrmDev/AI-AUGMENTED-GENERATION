@@ -108,7 +108,14 @@ class MagTier(CascadeTier):
 
 
 class RagTier(CascadeTier):
-    """The cascade's last resort: any RAG Retriever. RAG has no partial hit."""
+    """The cascade's last resort: any RAG Retriever. RAG has no partial hit.
+
+    The retriever runs on the event loop, so any CPU work it does inline blocks
+    the other tiers in a PARALLEL route. SearchDocuments embeds the query
+    before searching; compose it with a CachingEmbeddingModel shared with
+    UnifiedAnswerQuestion, which has already embedded the same question, so
+    that embed is a lookup (see LatencyCascade for the measurement).
+    """
 
     def __init__(self, retriever: Retriever, *, top_k: int = 5) -> None:
         _check_top_k(top_k)

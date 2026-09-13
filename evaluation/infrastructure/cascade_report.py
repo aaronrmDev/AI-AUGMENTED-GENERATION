@@ -16,7 +16,7 @@ def _pct(value: float) -> str:
 def render_cascade_measurements(
     tiers: list[TierLatencySummary],
     tallies: list[StaleAnswerTally],
-    allocator: AllocatorTally,
+    allocators: list[AllocatorTally],
     notes: str,
 ) -> str:
     lines = [
@@ -53,7 +53,10 @@ def render_cascade_measurements(
         "| Window tokens | Turns | Dropped (dynamic) | Dropped (static) "
         "| Tokens used (dynamic) | Tokens used (static) |",
         "|---|---|---|---|---|---|",
-        f"| {allocator.window_tokens} | {allocator.turns} | {allocator.dynamic_dropped} "
-        f"| {allocator.static_dropped} | {allocator.dynamic_tokens} | {allocator.static_tokens} |",
+    ]
+    lines += [
+        f"| {a.window_tokens} | {a.turns} | {a.dynamic_dropped} | {a.static_dropped} "
+        f"| {a.dynamic_tokens} | {a.static_tokens} |"
+        for a in allocators
     ]
     return "\n".join(lines) + "\n"

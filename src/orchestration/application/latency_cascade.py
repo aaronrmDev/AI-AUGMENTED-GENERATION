@@ -94,6 +94,15 @@ class LatencyCascade:
     query terminates its connection, so tiers sharing one session would
     break each other (see SessionScopedSemanticFactSearch).
 
+    Tiers also share one event loop, so a tier must never do blocking CPU
+    work inline: in a PARALLEL route it stalls every sibling tier's completion,
+    and their timeouts fire on wall time they never got to use. Measured: a
+    RAG tier embedding its query on the loop pushed CAG attempts to p50 9.8ms,
+    with 15 of 60 timing out at 10ms; with the embedding off the loop, none
+    did. CagTier offloads its matching to a thread, and a RAG retriever that
+    embeds should share a CachingEmbeddingModel with UnifiedAnswerQuestion so
+    that its embed of the already-embedded question is a lookup.
+
     A timed-out tier is cancelled rather than awaited, so its cleanup never
     holds up the answer; drain() waits for that cleanup, as well as for any
     background RAG completion. A RAG attempt that times out keeps running in
