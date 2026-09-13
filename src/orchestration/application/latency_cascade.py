@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 
 RagFindingsSink = Callable[[TierRequest, list[ContextItem]], Awaitable[None]]
 
+# A background RAG completion gets this long after its tier timeout before it
+# is cancelled, and at most this many run at once.
+DEFAULT_BACKGROUND_TIMEOUT = 30.0
+DEFAULT_MAX_BACKGROUND = 16
+
 
 @dataclass(frozen=True)
 class TierTimeouts:
@@ -82,10 +87,16 @@ class LatencyCascade:
     - A PARALLEL decision (router unsure) runs every eligible tier at once.
 
     A timeout or exception degrades the answer instead of failing it; a
-    CancelledError always propagates. A RAG attempt that times out keeps
-    running in the background when on_rag_findings is set ("if RAG is slow
-    -> return best-effort + async update"). That task lives in this process
-    only -- src/workers/ doesn't exist yet -- so drain() before shutdown.
+    CancelledError always propagates. Each tier must own its unit of work:
+    a timed-out tier is cancelled mid-flight, and a cancelled SQLAlchemy
+    query terminates its connection, so tiers sharing one session would
+    break each other (see SessionScopedSemanticFactSearch).
+
+    A RAG attempt that times out keeps running in the background when
+    on_rag_findings is set ("if RAG is slow -> return best-effort + async
+    update"), bounded by background_timeout and max_background so a hung RAG
+    backend cannot accumulate tasks. That work lives in this process only --
+    src/workers/ doesn't exist yet -- so drain() before shutdown.
     """
 
     def __init__(
@@ -95,17 +106,25 @@ class LatencyCascade:
         access_tracker: AccessFrequencyTracker | None = None,
         on_rag_findings: RagFindingsSink | None = None,
         clock: Callable[[], datetime] = _utc_now,
+        background_timeout: float = DEFAULT_BACKGROUND_TIMEOUT,
+        max_background: int = DEFAULT_MAX_BACKGROUND,
     ) -> None:
         by_paradigm = {tier.paradigm: tier for tier in tiers}
         if len(by_paradigm) != len(tiers):
             raise ValueError("configure at most one tier per paradigm")
         if Paradigm.RAG not in by_paradigm:
             raise ValueError("a RAG tier is required: it is the cascade's last resort")
+        if background_timeout <= 0.0:
+            raise ValueError("background_timeout must be positive")
+        if max_background < 1:
+            raise ValueError("max_background must be at least 1")
         self._tiers = by_paradigm
         self._timeouts = timeouts if timeouts is not None else TierTimeouts()
         self._access_tracker = access_tracker
         self._on_rag_findings = on_rag_findings
         self._clock = clock
+        self._background_timeout = background_timeout
+        self._max_background = max_background
         # Strong references: the event loop only keeps weak ones, so an
         # unreferenced background task can be garbage-collected mid-flight.
         self._background: set[asyncio.Task[None]] = set()
@@ -154,7 +173,16 @@ class LatencyCascade:
         self, request: TierRequest, eligible: list[Paradigm]
     ) -> CascadeResult:
         collector = _Collector()
-        outcomes = await asyncio.gather(*(self._attempt(p, request) for p in eligible))
+        tasks = [asyncio.create_task(self._attempt(p, request)) for p in eligible]
+        try:
+            outcomes = await asyncio.gather(*tasks)
+        except BaseException:
+            # gather does not cancel the remaining children when one of them
+            # raises -- a tier-raised CancelledError included -- so without this
+            # their tier work would keep running with nobody waiting for it.
+            for task in tasks:
+                task.cancel()
+            raise
         for attempt, result in outcomes:
             collector.add(attempt, result)
         return collector.result()
@@ -171,7 +199,11 @@ class LatencyCascade:
                 asyncio.shield(task), self._timeouts.for_paradigm(paradigm)
             )
         except TimeoutError:
-            if paradigm is Paradigm.RAG and self._on_rag_findings is not None:
+            if (
+                paradigm is Paradigm.RAG
+                and self._on_rag_findings is not None
+                and len(self._background) < self._max_background
+            ):
                 self._finish_in_background(task, request, self._on_rag_findings)
             else:
                 task.cancel()
@@ -193,7 +225,14 @@ class LatencyCascade:
     ) -> None:
         async def finish() -> None:
             try:
-                result = await task
+                # wait_for cancels the task if it outlives the background deadline.
+                result = await asyncio.wait_for(task, self._background_timeout)
+            except TimeoutError:
+                logger.warning(
+                    "background RAG attempt exceeded %.1fs and was cancelled",
+                    self._background_timeout,
+                )
+                return
             except Exception:
                 logger.warning("background RAG attempt failed after timing out", exc_info=True)
                 return
@@ -212,13 +251,18 @@ class LatencyCascade:
     def _record_rag_access(self, request: TierRequest, items: list[ContextItem]) -> None:
         # Pattern 1's "if result was frequent -> flag for CAG pre-loading":
         # feeds the tracker WarmCache/TieringPolicy already read. One access
-        # per document, however many of its chunks came back.
+        # per document, however many of its chunks came back. Analytics only
+        # inform later pre-loading, so a failure here is logged and never costs
+        # the answer that produced it.
         if self._access_tracker is None:
             return
-        now = self._clock()
-        source_ids = [item.source_id for item in items]
-        document_ids: dict[uuid.UUID, None] = dict.fromkeys(
-            source_id for source_id in source_ids if source_id is not None
-        )
-        for document_id in document_ids:
-            self._access_tracker.record_access(request.tenant_id, document_id, now)
+        try:
+            now = self._clock()
+            source_ids = [item.source_id for item in items]
+            document_ids: dict[uuid.UUID, None] = dict.fromkeys(
+                source_id for source_id in source_ids if source_id is not None
+            )
+            for document_id in document_ids:
+                self._access_tracker.record_access(request.tenant_id, document_id, now)
+        except Exception:
+            logger.warning("recording RAG access for CAG pre-loading failed", exc_info=True)

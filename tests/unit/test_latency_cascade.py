@@ -247,3 +247,128 @@ def test_two_tiers_for_one_paradigm_are_rejected():
 def test_non_positive_timeouts_are_rejected(bad):
     with pytest.raises(ValueError):
         TierTimeouts(cag=bad)
+
+
+def test_non_positive_background_limits_are_rejected():
+    with pytest.raises(ValueError):
+        LatencyCascade([FakeCascadeTier(RAG)], background_timeout=0.0)
+    with pytest.raises(ValueError):
+        LatencyCascade([FakeCascadeTier(RAG)], max_background=0)
+
+
+async def test_parallel_mode_records_a_tier_timeout_and_still_merges_the_others():
+    cag = FakeCascadeTier(CAG, _result(TierOutcome.HIT, CAG, "c"), delay_seconds=_SLOW)
+    mag = FakeCascadeTier(MAG, _result(TierOutcome.HIT, MAG, "m"))
+    rag = FakeCascadeTier(RAG, _result(TierOutcome.HIT, RAG, "r"))
+    decision = _route(CAG, MAG, mode=RoutingMode.PARALLEL)
+    result = await LatencyCascade([cag, mag, rag], _TIGHT).run(_request(), decision)
+    assert (CAG, TierOutcome.TIMEOUT) in _outcomes(result)
+    assert sorted(item.content for item in result.items) == ["m", "r"]
+    assert result.degraded is True
+
+
+async def test_a_cancellation_raised_by_one_parallel_tier_cancels_its_siblings():
+    cag = FakeCascadeTier(CAG, error=asyncio.CancelledError())
+    rag = FakeCascadeTier(RAG, _result(TierOutcome.HIT, RAG), delay_seconds=5.0)
+    cascade = LatencyCascade([cag, rag], TierTimeouts(cag=1.0, mag=1.0, rag=10.0))
+    with pytest.raises(asyncio.CancelledError):
+        await cascade.run(_request(), _route(CAG, mode=RoutingMode.PARALLEL))
+    await asyncio.sleep(0.01)
+    assert rag.cancelled is True
+
+
+async def test_a_timed_out_cag_tier_is_cancelled_even_when_a_findings_sink_is_configured():
+    cag = FakeCascadeTier(CAG, _result(TierOutcome.HIT, CAG), delay_seconds=_SLOW)
+    rag = FakeCascadeTier(RAG, _result(TierOutcome.HIT, RAG))
+
+    async def sink(request: TierRequest, items: list[ContextItem]) -> None:
+        return None
+
+    await LatencyCascade([cag, rag], _TIGHT, on_rag_findings=sink).run(_request(), _route(CAG))
+    await asyncio.sleep(0.01)
+    assert cag.cancelled is True
+
+
+async def test_a_background_rag_attempt_past_its_background_timeout_is_cancelled_unreported():
+    rag = FakeCascadeTier(RAG, _result(TierOutcome.HIT, RAG, "late"), delay_seconds=_SLOW)
+    received: list[list[ContextItem]] = []
+
+    async def sink(request: TierRequest, items: list[ContextItem]) -> None:
+        received.append(items)
+
+    cascade = LatencyCascade([rag], _TIGHT, on_rag_findings=sink, background_timeout=0.05)
+    await cascade.run(_request(), _route(RAG))
+    await cascade.drain()
+    assert received == []
+    assert rag.cancelled is True
+
+
+async def test_timed_out_rag_attempts_beyond_the_background_cap_are_cancelled_not_kept():
+    rag = FakeCascadeTier(RAG, _result(TierOutcome.HIT, RAG, "late"), delay_seconds=0.3)
+    received: list[list[ContextItem]] = []
+
+    async def sink(request: TierRequest, items: list[ContextItem]) -> None:
+        received.append(items)
+
+    cascade = LatencyCascade([rag], _TIGHT, on_rag_findings=sink, max_background=1)
+    await cascade.run(_request(), _route(RAG))  # kept, finishing in the background
+    await cascade.run(_request(), _route(RAG))  # over the cap: cancelled instead
+    await asyncio.sleep(0.01)
+    assert rag.cancelled is True
+    await cascade.drain()
+    assert len(received) == 1
+
+
+async def test_a_background_rag_attempt_that_raises_never_reaches_the_sink():
+    rag = FakeCascadeTier(RAG, delay_seconds=0.1, error=RuntimeError("index offline"))
+    received: list[list[ContextItem]] = []
+
+    async def sink(request: TierRequest, items: list[ContextItem]) -> None:
+        received.append(items)
+
+    cascade = LatencyCascade([rag], _TIGHT, on_rag_findings=sink)
+    result = await cascade.run(_request(), _route(RAG))
+    assert _outcomes(result) == [(RAG, TierOutcome.TIMEOUT)]
+    await cascade.drain()
+    assert received == []
+
+
+async def test_a_findings_sink_that_raises_does_not_escape_drain():
+    rag = FakeCascadeTier(RAG, _result(TierOutcome.HIT, RAG, "late"), delay_seconds=0.1)
+
+    async def sink(request: TierRequest, items: list[ContextItem]) -> None:
+        raise RuntimeError("memory store offline")
+
+    cascade = LatencyCascade([rag], _TIGHT, on_rag_findings=sink)
+    await cascade.run(_request(), _route(RAG))
+    await cascade.drain()
+
+
+class _BrokenTracker(InMemoryAccessFrequencyTracker):
+    def record_access(self, tenant_id, document_id, at):
+        raise RuntimeError("tracker offline")
+
+
+async def test_an_access_tracker_that_raises_does_not_fail_a_rag_hit():
+    rag = FakeCascadeTier(RAG, _result(TierOutcome.HIT, RAG, "doc", uuid.uuid4()))
+    cascade = LatencyCascade([rag], _GENEROUS, access_tracker=_BrokenTracker())
+    result = await cascade.run(_request(), _route(RAG))
+    assert _outcomes(result) == [(RAG, TierOutcome.HIT)]
+    assert result.degraded is False
+
+
+async def test_an_access_tracker_that_raises_does_not_stop_background_findings():
+    rag = FakeCascadeTier(
+        RAG, _result(TierOutcome.HIT, RAG, "late", uuid.uuid4()), delay_seconds=0.1
+    )
+    received: list[list[ContextItem]] = []
+
+    async def sink(request: TierRequest, items: list[ContextItem]) -> None:
+        received.append(items)
+
+    cascade = LatencyCascade(
+        [rag], _TIGHT, access_tracker=_BrokenTracker(), on_rag_findings=sink
+    )
+    await cascade.run(_request(), _route(RAG))
+    await cascade.drain()
+    assert len(received) == 1
