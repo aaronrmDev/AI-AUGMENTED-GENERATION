@@ -40,6 +40,7 @@ from src.orchestration.infrastructure.session_scoped_semantic_fact_search import
 from src.rag.application.search_documents import SearchDocuments
 from src.rag.domain.entities import Chunk
 from src.rag.domain.ports import ChatModel, EmbeddingModel
+from src.rag.infrastructure.caching_embedding_model import CachingEmbeddingModel
 from src.rag.infrastructure.qdrant_vector_store import QdrantVectorStore
 
 VALID_HASH = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$aGFzaHZhbHVl"
@@ -100,6 +101,10 @@ class OrchestrationEnv:
     # The tiers' and the recorder's own units of work come from here, never
     # from the test's db_session.
     sessionmaker: async_sessionmaker[AsyncSession]
+    # The one embedder a UnifiedAnswerQuestion built on this env should take:
+    # the RAG retriever shares it, so re-embedding the question inside the
+    # RAG tier is a lookup instead of CPU work on the event loop.
+    embedder: CachingEmbeddingModel
 
     def tiers(self) -> list[CascadeTier]:
         return [
@@ -176,7 +181,8 @@ async def build_env(
             embedding=embedding_model.embed(content),
         )
         await vector_store.upsert(chunk, tenant_id)
-    search = SearchDocuments(embedding_model, vector_store)
+    embedder = CachingEmbeddingModel(embedding_model)
+    search = SearchDocuments(embedder, vector_store)
 
     cache = HFFrozenCache(tokenizer=distilgpt2_tokenizer, model=distilgpt2_model)
     cache.preload(tenant_id, policy_id, POLICY_V1)
@@ -205,4 +211,5 @@ async def build_env(
         search,
         warmed,
         get_sessionmaker(db_session.bind),
+        embedder,
     )

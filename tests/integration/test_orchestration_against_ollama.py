@@ -52,7 +52,7 @@ async def test_the_unified_pipeline_answers_a_freshness_question_from_the_curren
         db_session, qdrant_url, embedding_model, distilgpt2_tokenizer, distilgpt2_model
     )
     use_case = UnifiedAnswerQuestion(
-        embedding_model,
+        env.embedder,
         FixedScoresClassifier({Paradigm.CAG: 0.0, Paradigm.MAG: 0.0, Paradigm.RAG: 1.0}),
         env.cascade(),
         OllamaChatModel(ollama.AsyncClient(), _MODEL_ID),

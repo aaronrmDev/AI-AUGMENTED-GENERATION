@@ -135,6 +135,34 @@ async def test_parallel_routing_runs_every_real_tier_without_an_error(
     assert any(item.content == f"{FACT_KEY}: {FACT_VALUE}" for item in result.items)
 
 
+async def test_the_rag_tier_reuses_the_pipelines_embedding_of_the_question_in_a_parallel_route(
+    db_session, qdrant_url, embedding_model, distilgpt2_tokenizer, distilgpt2_model
+):
+    # Parallel tiers stay inside their budgets only while the use case and the
+    # retriever embed byte-identical text through one shared cache. Measured
+    # without it: 15 of 60 CAG attempts timed out behind the RAG tier's on-loop
+    # embedding. Normalizing the question on either side would bring that back
+    # silently, because a cache miss is still a correct embedding.
+    env = await build_env(
+        db_session, qdrant_url, embedding_model, distilgpt2_tokenizer, distilgpt2_model
+    )
+    use_case = UnifiedAnswerQuestion(
+        env.embedder,
+        FixedScoresClassifier({CAG: 0.5, MAG: 0.5, RAG: 0.5}),
+        env.cascade(),
+        ContextEchoChatModel(),
+    )
+    misses, hits = env.embedder.misses, env.embedder.hits
+
+    result = await use_case.execute(env.tenant_id, env.user_id, env.session_id, PREFERENCE_QUERY)
+
+    assert result.decision is not None
+    assert result.decision.mode is RoutingMode.PARALLEL
+    assert RAG in [attempt.paradigm for attempt in result.attempts]
+    assert env.embedder.misses - misses == 1
+    assert env.embedder.hits - hits >= 1
+
+
 async def test_the_unified_pipeline_answers_from_rag_and_records_the_real_budget(
     db_session, qdrant_url, embedding_model, distilgpt2_tokenizer, distilgpt2_model
 ):
@@ -142,7 +170,7 @@ async def test_the_unified_pipeline_answers_from_rag_and_records_the_real_budget
         db_session, qdrant_url, embedding_model, distilgpt2_tokenizer, distilgpt2_model
     )
     use_case = UnifiedAnswerQuestion(
-        embedding_model,
+        env.embedder,
         FixedScoresClassifier({CAG: 0.0, MAG: 0.0, RAG: 1.0}),
         env.cascade(),
         ContextEchoChatModel(),
@@ -210,7 +238,7 @@ async def test_a_mag_timeout_does_not_break_recording_the_turns_budget(
         db_session, qdrant_url, embedding_model, distilgpt2_tokenizer, distilgpt2_model
     )
     use_case = UnifiedAnswerQuestion(
-        embedding_model,
+        env.embedder,
         FixedScoresClassifier({CAG: 0.0, MAG: 1.0, RAG: 0.0}),
         _slow_mag_cascade(env),
         ContextEchoChatModel(),
