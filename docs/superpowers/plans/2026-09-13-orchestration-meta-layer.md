@@ -4728,3 +4728,16 @@ Invoke `superpowers:requesting-code-review` over `develop..HEAD`. Fix every conf
 - [ ] **Step 7: Integrate**
 
 Invoke `superpowers:finishing-a-development-branch` and take the standing path: merge to `develop` locally with a `merge:` commit, re-run the unit suite on the merged result, remove the worktree, and delete the branch. Close this batch's GitHub issues with a comment naming the merge commit and the report.
+
+---
+
+## Execution notes
+
+Where executing this plan against the real stack changed what the plan says, the change was kept and recorded here rather than bent back to match the text above.
+
+- **Partial thresholds (Task 9).** The plan set each partial threshold to the must-miss score minus 0.05. Against the measured MiniLM scores, that would have turned a clearly unrelated query into a PARTIAL match and put the superseded policy into its context. Each partial threshold instead sits midway between the must-miss score and the hit threshold: CAG hit 0.43 / partial 0.35, MAG hit 0.42 / partial 0.37. The measured scores are recorded in `tests/integration/orchestration_env.py`.
+- **Session recovery after a cancelled MAG query (Task 9).** The plan's integration test expected `rollback()` to recover a session whose MAG query the cascade cancelled mid-flight. It does not. SQLAlchemy treats the `CancelledError` as a disconnect and terminates the asyncpg connection, after which both `rollback()` and `close()` raise `InterfaceError`. A probe of four recovery paths showed that `invalidate()` recovers cleanly. The test asserts that contract, `MagTier` documents it, and the cascade runner invalidates before every turn.
+- **The budget recorder owns its unit of work (Task 7).** The same termination broke a recorder flushing through the MAG tier's session, failing the whole request after a MAG timeout. `PostgresSessionBudgetRecorder` now takes a sessionmaker and commits its own short transaction, and an integration test pins the MAG-timeout case.
+- **Held-out labels (Task 10).** Hand review kept 36 of qwen3.5's 40 generated labels and relabeled four MAG-only requests as MAG+RAG, because answering them also needs current catalog or stock data. Each correction carries a `review_note`.
+- **Scenario packages (Task 10).** No `__init__.py` was added under `evaluation/scenarios/orchestration-meta-layer/`, matching the other hyphenated scenario directories.
+- **Lint scope.** `ruff check tests` reports pre-existing line-length violations in files this batch never touched, so lint was run on every file this batch created or changed. `ruff check src` and `mypy src` are clean across the whole tree.
