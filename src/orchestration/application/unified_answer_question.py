@@ -35,7 +35,8 @@ DEFAULT_CONTEXT_TOKENS = 128_000
 # Seconds. The router comparison (evaluation/reports/orchestration-meta-layer-router.md)
 # measured the local qwen3.5 classifier at p50 18.9s and p95 60.0s, against 0.1ms for
 # the lexical classifier and 2.4ms for the prototype one. At this default the LLM
-# classifier therefore always falls back to routing every tier. That is deliberate:
+# classifier therefore falls back to routing every tier on at least half of all
+# queries, going by its median alone. That is deliberate:
 # waiting tens of seconds to pick between tiers budgeted at 10ms-2s defeats the
 # cascade, so a request-path classifier has to be a millisecond-scale one.
 DEFAULT_CLASSIFIER_TIMEOUT = 2.0
@@ -124,7 +125,9 @@ class UnifiedAnswerQuestion:
             raise QueryExceedsBudget(query_tokens, query_slice)
 
         started = time.perf_counter()
-        embedding = self._embedder.embed(question)
+        # Off the event loop: milliseconds of CPU that would otherwise stall
+        # every tier and every other request sharing the loop.
+        embedding = await asyncio.to_thread(self._embedder.embed, question)
         embedded = time.perf_counter()
 
         decision: RoutingDecision | None = None

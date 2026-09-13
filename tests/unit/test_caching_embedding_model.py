@@ -64,8 +64,43 @@ def test_mutating_a_returned_embedding_never_changes_what_the_cache_serves():
     assert model.embed("x") == expected
 
 
+class _FailingOnceEmbedder(EmbeddingModel):
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    def embed(self, text: str) -> list[float]:
+        self.attempts += 1
+        if self.attempts == 1:
+            raise RuntimeError("model unavailable")
+        return [1.0]
+
+
+def test_a_failed_embedding_is_not_cached():
+    inner = _FailingOnceEmbedder()
+    model = CachingEmbeddingModel(inner)
+
+    with pytest.raises(RuntimeError):
+        model.embed("x")
+
+    assert model.embed("x") == [1.0]
+    assert inner.attempts == 2
+    assert (model.hits, model.misses) == (0, 1)
+
+
+def test_the_cache_keeps_no_plaintext_of_the_texts_it_embedded():
+    # One process serves every tenant, so the cache holds digests of what was
+    # asked, not the questions themselves.
+    model = CachingEmbeddingModel(_CountingEmbedder())
+    model.embed("my private medical question")
+    model.embed("my private medical question")
+
+    assert model.hits == 1
+    assert "my private medical question" not in repr(vars(model))
+
+
 def test_concurrent_callers_all_get_correct_embeddings():
-    # CagTier's worker threads and the event loop can call one shared instance.
+    # UnifiedAnswerQuestion embeds on a worker thread while the RAG retriever
+    # embeds on the event loop, so one shared instance sees concurrent callers.
     inner = _CountingEmbedder()
     model = CachingEmbeddingModel(inner, max_entries=4)
     texts = [f"question {i}" for i in range(10)]

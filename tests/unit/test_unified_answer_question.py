@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 
 import pytest
@@ -12,6 +13,7 @@ from src.orchestration.domain.errors import (
     SessionNotFound,
 )
 from src.orchestration.domain.paradigm_router import fallback_decision
+from src.rag.domain.ports import EmbeddingModel
 from tests.unit.orchestration_fakes import (
     FakeCascadeTier,
     FakeQueryClassifier,
@@ -89,6 +91,36 @@ async def test_the_classifier_and_the_tiers_share_one_upstream_embedding_and_sco
     assert (request.tenant_id, request.user_id, request.session_id, request.query) == (
         tenant_id, user_id, session_id, _QUESTION,
     )
+
+
+class _LoopDetectingEmbeddingModel(EmbeddingModel):
+    def __init__(self) -> None:
+        self.ran_on_event_loop: list[bool] = []
+
+    def embed(self, text: str) -> list[float]:
+        try:
+            asyncio.get_running_loop()
+            self.ran_on_event_loop.append(True)
+        except RuntimeError:
+            self.ran_on_event_loop.append(False)
+        return [1.0, 0.0]
+
+
+async def test_the_question_is_embedded_off_the_event_loop():
+    # Embedding is milliseconds of CPU. On the loop it would stall every tier
+    # and every other request sharing that loop -- the starvation measured
+    # inside a single PARALLEL route before the RAG tier's embed was cached.
+    embedder = _LoopDetectingEmbeddingModel()
+    use_case = UnifiedAnswerQuestion(
+        embedder,
+        FakeQueryClassifier(_RAG_ONLY),
+        LatencyCascade([FakeCascadeTier(RAG, _hit(RAG, "doc"))], _GENEROUS),
+        FakeChatModel(),
+    )
+
+    await use_case.execute(*_ids(), _QUESTION)
+
+    assert embedder.ran_on_event_loop == [False]
 
 
 async def test_without_a_classifier_the_source_cascade_answers_unrouted():

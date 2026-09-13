@@ -26,11 +26,9 @@ import asyncio
 import dataclasses
 import io
 import os
-import re
 import sys
 import time
 import uuid
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -58,6 +56,7 @@ from evaluation.infrastructure.cascade_report import render_cascade_measurements
 from evaluation.infrastructure.markdown_report import render
 from evaluation.infrastructure.ollama_judge import OllamaJudge
 from evaluation.scenarios.loader import load_scenario
+from evaluation.scenarios.orchestration_meta_layer_checks import SUCCESS_CHECKS
 from evaluation.scenarios.orchestration_meta_layer_thresholds import (
     CAG_HIT,
     CAG_PARTIAL,
@@ -165,19 +164,6 @@ _FRESHNESS_QUERIES = [
     "What is the current number of days to return an item?",
     "Is there a new return policy as of today?",
 ]
-_TEN = re.compile(r"\b(10|ten)\b")
-_CHECKS: list[Callable[[str], bool]] = [
-    lambda t: "45" in t or "forty-five" in t,
-    lambda t: "45" in t or "forty-five" in t,
-    lambda t: ("five" in t and "seven" in t) or ("5" in t and "7" in t),
-    lambda t: "verification" in t or "twelve" in t or "12" in t,
-    lambda t: any(term in t for term in ("two-year", "two year", "2-year", "2 year")),
-    lambda t: "out of stock" in t,
-    lambda t: "20%" in t or "20 percent" in t or "twenty percent" in t,
-    lambda t: "expedited" in t or "two-day" in t or "2-day" in t,
-    lambda t: _TEN.search(t) is not None,
-    lambda t: "out of stock" in t and _TEN.search(t) is not None,
-]
 _CAVEATS = (
     "CAVEAT 1: judge and generator are both qwen3.5 (self-grading risk, as in every "
     "earlier batch). CAVEAT 2: CAG is a CPU distilgpt2 proxy whose lookup, not generation "
@@ -238,7 +224,7 @@ async def _create_user_and_session(
 async def _measure(app_url: str, qdrant_url: str, parts: frozenset[str]) -> None:
     scenario = load_scenario(_SCENARIO_DIR)
     questions = [q.question for q in scenario.questions]
-    checks = dict(zip(questions, _CHECKS, strict=True))
+    checks = dict(zip(questions, SUCCESS_CHECKS, strict=True))
     raw_questions: list[dict[str, Any]] = yaml.safe_load(
         (_SCENARIO_DIR / "queries.yaml").read_text(encoding="utf-8")
     )["questions"]
@@ -246,6 +232,11 @@ async def _measure(app_url: str, qdrant_url: str, parts: frozenset[str]) -> None
         str(entry["question"]): frozenset(Paradigm(str(value)) for value in entry["route"])
         for entry in raw_questions
     }
+    unlabeled = [question for question in questions if question not in routes]
+    if unlabeled:
+        # The oracle classifier would raise on these, and UnifiedAnswerQuestion would
+        # quietly route them to every tier in parallel instead.
+        raise SystemExit(f"queries.yaml has no route label for: {unlabeled}")
     # One shared caching embedder. UnifiedAnswerQuestion embeds each question and
     # SearchDocuments embeds the same text again inside the RAG tier; sharing the
     # cache makes that second embed a lookup instead of ~9ms of CPU on the event
@@ -433,6 +424,11 @@ async def _measure(app_url: str, qdrant_url: str, parts: frozenset[str]) -> None
 
         async def treatment(question: str) -> Answer:
             result = await unified.execute(tenant_id, user_id, session_id, question)
+            if result.routing_fallback is not None:
+                # A fallback runs every tier in parallel, which isn't the arm being measured.
+                raise RuntimeError(
+                    f"routing fell back ({result.routing_fallback}) on {question!r}"
+                )
             route = sorted(p.value for p in result.decision.paradigms) if result.decision else []
             routes_seen[question] = (
                 f"routed {route}, attempts "
@@ -451,14 +447,18 @@ async def _measure(app_url: str, qdrant_url: str, parts: frozenset[str]) -> None
         ).execute(
             scenario_name=scenario.name,
             model_config=f"{_MODEL_ID}, Ollama",
-            success_criterion="see evaluation/scenarios/orchestration-meta-layer/queries.yaml",
+            success_criterion=(
+                "each question's success_criterion in "
+                "evaluation/scenarios/orchestration-meta-layer/queries.yaml, checked by "
+                "evaluation/scenarios/orchestration_meta_layer_checks.py"
+            ),
             rag=True,
             cag=True,
             mag=True,
             questions=questions,
             baseline=baseline,
             treatment=treatment,
-            success_check=lambda question, answer: checks[question](answer.text.lower()),
+            success_check=lambda question, answer: checks[question](answer.text),
             reference_contexts=[q.gold_passage for q in scenario.questions],
             notes=(
                 f"Baseline = RAG-only AnswerQuestion (top_k=3). Treatment = "
@@ -467,7 +467,8 @@ async def _measure(app_url: str, qdrant_url: str, parts: frozenset[str]) -> None
                 f"{_CAVEATS}"
             ),
         )
-        await unified_drain(generous)
+        # Let cancelled tiers finish cleaning up before the next arm or engine disposal.
+        await generous.drain()
         comparison = dataclasses.replace(
             comparison,
             notes=comparison.notes
@@ -493,11 +494,6 @@ async def _measure(app_url: str, qdrant_url: str, parts: frozenset[str]) -> None
     await engine.dispose()
 
 
-async def unified_drain(cascade: LatencyCascade) -> None:
-    # Let cancelled tiers finish cleaning up before the next arm or engine disposal.
-    await cascade.drain()
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Orchestration meta-layer cascade measurements.")
     parser.add_argument(
@@ -505,7 +501,9 @@ def main() -> None:
         default=",".join(_PARTS),
         help="comma-separated subset of: " + ", ".join(_PARTS),
     )
-    parts = frozenset(part.strip() for part in parser.parse_args().parts.split(",") if part)
+    parts = frozenset(
+        part.strip() for part in parser.parse_args().parts.split(",") if part.strip()
+    )
     unknown = parts - set(_PARTS)
     if unknown:
         parser.error(f"unknown parts: {sorted(unknown)}")

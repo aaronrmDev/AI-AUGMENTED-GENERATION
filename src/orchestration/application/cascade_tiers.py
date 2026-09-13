@@ -115,6 +115,12 @@ class RagTier(CascadeTier):
     before searching; compose it with a CachingEmbeddingModel shared with
     UnifiedAnswerQuestion, which has already embedded the same question, so
     that embed is a lookup (see LatencyCascade for the measurement).
+
+    That only helps for text the use case already embedded. Retrievers that
+    embed anything else still do it on the loop: CompressingRetriever embeds
+    every candidate sentence, BiEncoderRerankReranker every result, and
+    HyDERetriever searches with a generated passage. Only SearchDocuments
+    has been measured inside the cascade's budgets.
     """
 
     def __init__(self, retriever: Retriever, *, top_k: int = 5) -> None:
