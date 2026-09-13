@@ -2,7 +2,15 @@ import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 
-from src.orchestration.domain.entities import CacheHit, WarmEntry
+from src.mag.domain.entities import ScoredFact
+from src.orchestration.domain.entities import (
+    BudgetAllocation,
+    CacheHit,
+    Paradigm,
+    TierRequest,
+    TierResult,
+    WarmEntry,
+)
 
 
 class AccessFrequencyTracker(ABC):
@@ -116,3 +124,52 @@ class WarmStore(ABC):
     async def contains(
         self, tenant_id: uuid.UUID, user_id: uuid.UUID, document_id: uuid.UUID
     ) -> bool: ...
+
+
+class QueryClassifier(ABC):
+    # Async because LlmQueryClassifier makes a network call -- a port's
+    # sync/async shape tracks whether ANY real implementation does I/O
+    # (WarmStore's comment above). query_embedding is passed in so a
+    # classifier that needs it never embeds the query a second time;
+    # UnifiedAnswerQuestion has already paid for it.
+    @abstractmethod
+    async def score(self, query: str, query_embedding: list[float]) -> dict[Paradigm, float]: ...
+
+
+class CascadeTier(ABC):
+    @property
+    @abstractmethod
+    def paradigm(self) -> Paradigm: ...
+
+    @abstractmethod
+    async def attempt(self, request: TierRequest) -> TierResult: ...
+
+
+class SemanticFactSearch(ABC):
+    # Each call is its own unit of work, owned by the implementation. The
+    # cascade cancels a timed-out tier mid-flight, and a cancelled SQLAlchemy
+    # query terminates the connection it ran on -- a tier sharing the request's
+    # session would break every later use of it (measured in
+    # tests/integration/test_orchestration_meta_layer.py).
+    @abstractmethod
+    async def search(
+        self,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        query_embedding: list[float],
+        top_k: int,
+    ) -> list[ScoredFact]: ...
+
+
+class SessionBudgetRecorder(ABC):
+    # user_id as well as tenant_id: RLS isolates tenants, and the write's own
+    # WHERE clause keeps one user from overwriting another user's record.
+    @abstractmethod
+    async def record(
+        self,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        session_id: uuid.UUID,
+        allocation: BudgetAllocation,
+        contributing: frozenset[Paradigm],
+    ) -> None: ...
