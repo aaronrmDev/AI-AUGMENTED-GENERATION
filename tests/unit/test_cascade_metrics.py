@@ -1,3 +1,5 @@
+import math
+
 from evaluation.domain.cascade_metrics import summarize_tier_latency, tally_staleness
 from src.orchestration.domain.entities import Paradigm, TierAttempt, TierOutcome
 
@@ -37,3 +39,8 @@ def test_staleness_separates_stale_only_current_only_and_mixed_contexts():
     )
     assert (tally.runs, tally.stale, tally.fresh, tally.mixed) == (4, 1, 1, 1)
     assert tally.stale_rate == 0.25
+
+
+def test_a_stale_rate_over_zero_runs_is_undefined_rather_than_zero():
+    # Matches routing_metrics: nan means "never measured", 0.0 would read as "never stale".
+    assert math.isnan(tally_staleness("empty", [], "old", "new").stale_rate)

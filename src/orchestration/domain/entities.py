@@ -149,7 +149,12 @@ class BudgetShares:
         values = (self.cag, self.mag, self.rag, self.query, self.reserve)
         if any(not math.isfinite(value) or value < 0.0 for value in values):
             raise ValueError("budget shares must be finite and non-negative")
-        if not math.isclose(sum(values), 1.0, abs_tol=1e-9):
+        # 1e-12 absorbs float noise in the sum (the defaults sum to exactly
+        # 1.0) while keeping any real overshoot from flooring the slices past
+        # the window and driving reserve negative at very large totals.
+        # rel_tol=0.0 explicitly: isclose's default rel_tol of 1e-9 would
+        # still let a 5e-10 overshoot through, whatever abs_tol says.
+        if not math.isclose(sum(values), 1.0, rel_tol=0.0, abs_tol=1e-12):
             raise ValueError(f"budget shares must sum to 1.0, got {sum(values)}")
 
     def for_paradigm(self, paradigm: Paradigm) -> float:

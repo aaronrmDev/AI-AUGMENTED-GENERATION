@@ -51,7 +51,9 @@ _SUBSETS = [
 ]
 
 
-@pytest.mark.parametrize("total", [0, 1, 7, 99, 1_000, 4_096, 128_000, 200_003])
+@pytest.mark.parametrize(
+    "total", [0, 1, 7, 99, 1_000, 4_096, 128_000, 200_003, 10**9, 10**12]
+)
 @pytest.mark.parametrize("contributing", _SUBSETS)
 def test_the_five_slices_always_sum_to_the_total_and_are_never_negative(total, contributing):
     allocation = allocate(total, contributing)

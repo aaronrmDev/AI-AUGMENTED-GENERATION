@@ -57,6 +57,13 @@ def test_shares_that_do_not_sum_to_one_are_rejected():
         BudgetShares(cag=0.5, mag=0.5, rag=0.5, query=0.0, reserve=0.0)
 
 
+def test_shares_off_by_more_than_float_rounding_noise_are_rejected():
+    # A 5e-10 overshoot passed the old 1e-9 tolerance, and at a billion-token
+    # window it would floor the slices past the total and drive reserve negative.
+    with pytest.raises(ValueError):
+        BudgetShares(cag=0.4 + 5e-10, mag=0.25, rag=0.2, query=0.1, reserve=0.05)
+
+
 def test_negative_shares_are_rejected():
     with pytest.raises(ValueError):
         BudgetShares(cag=-0.1, mag=0.35, rag=0.5, query=0.2, reserve=0.05)

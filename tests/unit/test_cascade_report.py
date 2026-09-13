@@ -24,3 +24,10 @@ def test_the_report_renders_tier_latency_staleness_and_allocator_sections():
     assert "| CAG | 4 | hit 3, miss 1 | 1.25 | 3.50 | 10 | 100% |" in report
     assert "| router off | 6 | 6 | 0 | 0 | 100% |" in report
     assert "| 1000 | 10 | 1 | 7 | 900 | 400 |" in report
+
+
+def test_an_arm_with_no_runs_renders_its_stale_rate_as_not_applicable():
+    report = render_cascade_measurements(
+        [], [StaleAnswerTally("empty", 0, 0, 0, 0)], AllocatorTally(1_000, 0, 0, 0, 0, 0), notes=""
+    )
+    assert "| empty | 0 | 0 | 0 | 0 | n/a |" in report

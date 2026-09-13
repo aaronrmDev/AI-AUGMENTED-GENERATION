@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from evaluation.domain.statistics import nearest_rank_percentile
@@ -57,7 +58,9 @@ class StaleAnswerTally:
 
     @property
     def stale_rate(self) -> float:
-        return self.stale / self.runs if self.runs else 0.0
+        # nan, not 0.0, over zero runs -- the same convention routing_metrics
+        # uses: "never measured" must not read as "never stale".
+        return self.stale / self.runs if self.runs else math.nan
 
 
 def tally_staleness(

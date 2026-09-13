@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import math
+
 from evaluation.domain.cascade_metrics import (
     AllocatorTally,
     StaleAnswerTally,
     TierLatencySummary,
 )
+
+
+def _pct(value: float) -> str:
+    return "n/a" if math.isnan(value) else f"{value:.0%}"
 
 
 def render_cascade_measurements(
@@ -27,7 +33,7 @@ def render_cascade_measurements(
         outcomes = ", ".join(f"{outcome.value} {n}" for outcome, n in s.outcomes.items())
         lines.append(
             f"| {s.paradigm.value.upper()} | {s.attempts} | {outcomes} | {s.p50_ms:.2f} "
-            f"| {s.p95_ms:.2f} | {s.budget_ms:.0f} | {s.within_budget_rate:.0%} |"
+            f"| {s.p95_ms:.2f} | {s.budget_ms:.0f} | {_pct(s.within_budget_rate)} |"
         )
     lines += [
         "",
@@ -37,7 +43,7 @@ def render_cascade_measurements(
         "|---|---|---|---|---|---|",
     ]
     lines += [
-        f"| {t.arm} | {t.runs} | {t.stale} | {t.fresh} | {t.mixed} | {t.stale_rate:.0%} |"
+        f"| {t.arm} | {t.runs} | {t.stale} | {t.fresh} | {t.mixed} | {_pct(t.stale_rate)} |"
         for t in tallies
     ]
     lines += [
