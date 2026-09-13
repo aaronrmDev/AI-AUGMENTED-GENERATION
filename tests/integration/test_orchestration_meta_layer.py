@@ -188,10 +188,15 @@ async def test_a_mag_query_cancelled_mid_flight_leaves_the_next_request_and_the_
         db_session, qdrant_url, embedding_model, distilgpt2_tokenizer, distilgpt2_model
     )
 
-    first = await _slow_mag_cascade(env).run(
-        env.request(PREFERENCE_QUERY, embedding_model), _route(MAG)
-    )
+    pool = db_session.bind.sync_engine.pool
+    baseline = pool.checkedout()
+    slow_cascade = _slow_mag_cascade(env)
+    first = await slow_cascade.run(env.request(PREFERENCE_QUERY, embedding_model), _route(MAG))
     assert _outcomes(first) == [(MAG, TierOutcome.TIMEOUT), (RAG, TierOutcome.HIT)]
+    # The cancelled MAG tier's cleanup is not awaited by run(); drain() waits for
+    # it, and once it has finished no connection is left checked out.
+    await slow_cascade.drain()
+    assert pool.checkedout() == baseline
 
     second = await env.cascade().run(env.request(PREFERENCE_QUERY, embedding_model), _route(MAG))
     assert _outcomes(second) == [(MAG, TierOutcome.HIT)]

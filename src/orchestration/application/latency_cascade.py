@@ -24,8 +24,10 @@ logger = logging.getLogger(__name__)
 
 RagFindingsSink = Callable[[TierRequest, list[ContextItem]], Awaitable[None]]
 
-# A background RAG completion gets this long after its tier timeout before it
-# is cancelled, and at most this many run at once.
+# Provisional, not measured: a background RAG completion gets this long after
+# its tier timeout before it is cancelled, and at most this many run at once.
+# They bound resource use when a RAG backend hangs; no run in this project has
+# exercised either limit under real load yet.
 DEFAULT_BACKGROUND_TIMEOUT = 30.0
 DEFAULT_MAX_BACKGROUND = 16
 
@@ -92,11 +94,14 @@ class LatencyCascade:
     query terminates its connection, so tiers sharing one session would
     break each other (see SessionScopedSemanticFactSearch).
 
-    A RAG attempt that times out keeps running in the background when
-    on_rag_findings is set ("if RAG is slow -> return best-effort + async
-    update"), bounded by background_timeout and max_background so a hung RAG
-    backend cannot accumulate tasks. That work lives in this process only --
-    src/workers/ doesn't exist yet -- so drain() before shutdown.
+    A timed-out tier is cancelled rather than awaited, so its cleanup never
+    holds up the answer; drain() waits for that cleanup, as well as for any
+    background RAG completion. A RAG attempt that times out keeps running in
+    the background when on_rag_findings is set ("if RAG is slow -> return
+    best-effort + async update"), bounded by background_timeout and
+    max_background so a hung RAG backend cannot accumulate tasks. That work
+    lives in this process only -- src/workers/ doesn't exist yet -- so drain()
+    before shutdown.
     """
 
     def __init__(
@@ -125,9 +130,10 @@ class LatencyCascade:
         self._clock = clock
         self._background_timeout = background_timeout
         self._max_background = max_background
-        # Strong references: the event loop only keeps weak ones, so an
-        # unreferenced background task can be garbage-collected mid-flight.
+        # Strong references for work nobody awaits: the event loop only keeps
+        # weak ones, so an unreferenced task can be garbage-collected mid-flight.
         self._background: set[asyncio.Task[None]] = set()
+        self._cancelled: set[asyncio.Task[TierResult]] = set()
 
     async def run(
         self, request: TierRequest, decision: RoutingDecision | None = None
@@ -144,8 +150,9 @@ class LatencyCascade:
         return await self._run_routed(request, decision.paradigms, eligible)
 
     async def drain(self) -> None:
-        while self._background:
-            await asyncio.gather(*self._background, return_exceptions=True)
+        """Wait for background RAG completions and for cancelled tiers' cleanup."""
+        while self._background or self._cancelled:
+            await asyncio.gather(*self._background, *self._cancelled, return_exceptions=True)
 
     async def _run_unrouted(self, request: TierRequest) -> CascadeResult:
         collector = _Collector()
@@ -206,10 +213,10 @@ class LatencyCascade:
             ):
                 self._finish_in_background(task, request, self._on_rag_findings)
             else:
-                task.cancel()
+                self._cancel_tier(task)
             return TierAttempt(paradigm, TierOutcome.TIMEOUT, _elapsed_ms(started)), None
         except asyncio.CancelledError:
-            task.cancel()
+            self._cancel_tier(task)
             raise
         except Exception:
             logger.warning(
@@ -220,6 +227,11 @@ class LatencyCascade:
             self._record_rag_access(request, result.items)
         return TierAttempt(paradigm, result.outcome, _elapsed_ms(started)), result
 
+    def _cancel_tier(self, task: asyncio.Task[TierResult]) -> None:
+        task.cancel()
+        self._cancelled.add(task)
+        task.add_done_callback(self._cancelled.discard)
+
     def _finish_in_background(
         self, task: asyncio.Task[TierResult], request: TierRequest, sink: RagFindingsSink
     ) -> None:
@@ -228,8 +240,10 @@ class LatencyCascade:
                 # wait_for cancels the task if it outlives the background deadline.
                 result = await asyncio.wait_for(task, self._background_timeout)
             except TimeoutError:
+                # Either the background deadline passed or the tier timed out on
+                # its own; the finding is dropped either way.
                 logger.warning(
-                    "background RAG attempt exceeded %.1fs and was cancelled",
+                    "background RAG attempt timed out (background limit %.1fs); dropped",
                     self._background_timeout,
                 )
                 return

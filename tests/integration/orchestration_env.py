@@ -12,10 +12,16 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from evaluation.scenarios.orchestration_meta_layer_thresholds import (
-    CAG_HIT,
-    CAG_PARTIAL,
-    MAG_HIT,
-    MAG_PARTIAL,
+    CAG_HIT as CAG_HIT,
+)
+from evaluation.scenarios.orchestration_meta_layer_thresholds import (
+    CAG_PARTIAL as CAG_PARTIAL,
+)
+from evaluation.scenarios.orchestration_meta_layer_thresholds import (
+    MAG_HIT as MAG_HIT,
+)
+from evaluation.scenarios.orchestration_meta_layer_thresholds import (
+    MAG_PARTIAL as MAG_PARTIAL,
 )
 from src.identity.infrastructure.db import get_sessionmaker, set_tenant_context
 from src.mag.domain.entities import SemanticMemory
@@ -35,8 +41,6 @@ from src.rag.application.search_documents import SearchDocuments
 from src.rag.domain.entities import Chunk
 from src.rag.domain.ports import ChatModel, EmbeddingModel
 from src.rag.infrastructure.qdrant_vector_store import QdrantVectorStore
-
-__all__ = ["CAG_HIT", "CAG_PARTIAL", "MAG_HIT", "MAG_PARTIAL"]
 
 VALID_HASH = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$aGFzaHZhbHVl"
 

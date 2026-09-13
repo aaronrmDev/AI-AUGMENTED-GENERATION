@@ -249,6 +249,24 @@ def test_non_positive_timeouts_are_rejected(bad):
         TierTimeouts(cag=bad)
 
 
+async def test_drain_waits_for_a_cancelled_tier_to_finish_cleaning_up():
+    # A timed-out tier is cancelled, not awaited, so the answer isn't held up
+    # by its cleanup -- but shutdown must not race that cleanup either.
+    cag = FakeCascadeTier(
+        CAG, _result(TierOutcome.HIT, CAG), delay_seconds=_SLOW, cleanup_seconds=0.2
+    )
+    rag = FakeCascadeTier(RAG, _result(TierOutcome.HIT, RAG))
+    cascade = LatencyCascade([cag, rag], _TIGHT)
+
+    await cascade.run(_request(), _route(CAG))
+    await asyncio.sleep(0.01)
+    assert cag.cancelled is True
+    assert cag.cleaned_up is False
+
+    await cascade.drain()
+    assert cag.cleaned_up is True
+
+
 def test_non_positive_background_limits_are_rejected():
     with pytest.raises(ValueError):
         LatencyCascade([FakeCascadeTier(RAG)], background_timeout=0.0)

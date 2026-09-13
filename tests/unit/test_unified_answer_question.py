@@ -201,6 +201,23 @@ async def test_the_budget_is_recorded_before_paying_for_generation():
     assert chat_model.last_question is None
 
 
+async def test_budget_recording_is_timed_as_its_own_stage():
+    def use_case(recorder):
+        return UnifiedAnswerQuestion(
+            FakeEmbeddingModel(),
+            FakeQueryClassifier(_RAG_ONLY),
+            LatencyCascade([FakeCascadeTier(RAG, _hit(RAG, "doc"))], _GENEROUS),
+            FakeChatModel(),
+            budget_recorder=recorder,
+        )
+
+    recorded = await use_case(FakeSessionBudgetRecorder()).execute(*_ids(), _QUESTION)
+    unrecorded = await use_case(None).execute(*_ids(), _QUESTION)
+
+    assert recorded.timings.record_ms >= 0.0
+    assert unrecorded.timings.record_ms == 0.0
+
+
 def test_a_non_positive_classifier_timeout_is_rejected():
     with pytest.raises(ValueError):
         UnifiedAnswerQuestion(

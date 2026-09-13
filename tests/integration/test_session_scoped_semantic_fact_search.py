@@ -68,9 +68,13 @@ async def test_a_search_cancelled_mid_flight_leaves_nothing_broken_behind(
     sessionmaker = get_sessionmaker(db_session.bind)
     embedding = embedding_model.embed(FACT_VALUE)
     slow = SessionScopedSemanticFactSearch(sessionmaker, repository_factory=_SlowRepository)
+    pool = db_session.bind.sync_engine.pool
+    baseline = pool.checkedout()
 
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(slow.search(tenant_id, user_id, embedding, 3), 0.05)
+    # wait_for has awaited the cancelled search's cleanup: no connection leaked.
+    assert pool.checkedout() == baseline
 
     # No sleep and no recovery call: the next search and the caller's own
     # session both work immediately.

@@ -173,6 +173,47 @@ def test_best_warmed_match_ignores_a_document_evicted_from_the_frozen_cache():
     assert retriever.best_warmed_match(_TENANT, embedding) is None
 
 
+class _WarmsAnotherDocumentMidScan(FakeBagOfWordsEmbeddingModel):
+    """For the warmed text, returns a vector that warms a second document the
+    first time it is read -- what note_warmed on the event loop does to a scan
+    running in CagTier's worker thread."""
+
+    def __init__(self) -> None:
+        self.retriever: CacheWarmedRetrieve | None = None
+        self.fired = False
+
+    def embed(self, text: str) -> list[float]:
+        vector = super().embed(text)
+        if text != _WARMED_CONTENT:
+            return vector
+        embedder = self
+
+        class _Vector(list):
+            def __iter__(inner):
+                if embedder.retriever is not None and not embedder.fired:
+                    embedder.fired = True
+                    embedder.retriever.note_warmed(_TENANT, uuid.uuid4(), "another warmed document")
+                return super().__iter__()
+
+        return _Vector(vector)
+
+
+def test_best_warmed_match_survives_a_document_being_warmed_during_its_scan():
+    embedder = _WarmsAnotherDocumentMidScan()
+    cache = FakeFrozenCache()
+    retriever = CacheWarmedRetrieve(embedder, cache, FakeRetriever(), _THRESHOLD)
+    document_id = uuid.uuid4()
+    cache.preload(_TENANT, document_id, _WARMED_CONTENT)
+    retriever.note_warmed(_TENANT, document_id, _WARMED_CONTENT)
+    embedder.retriever = retriever
+
+    result = retriever.best_warmed_match(_TENANT, embedder.embed(_MATCHING_QUERY))
+
+    assert embedder.fired is True
+    assert result is not None
+    assert result.document_id == document_id
+
+
 async def test_execute_does_not_embed_the_query_when_nothing_is_warmed_for_the_tenant():
     embedder = _CountingEmbedder()
     retriever = CacheWarmedRetrieve(embedder, FakeFrozenCache(), FakeRetriever(), _THRESHOLD)

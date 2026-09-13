@@ -43,6 +43,14 @@ async def test_an_unusable_reply_is_an_explicit_classification_failure(reply):
     assert classifier.parse_failures == 1
 
 
+async def test_a_failure_message_carries_neither_the_model_reply_nor_the_question():
+    # The use case logs this exception; a model reply can echo the user's question.
+    reply = "Sorry, I can't route a question about account 4242-9981."
+    with pytest.raises(ClassificationFailed) as raised:
+        await LlmQueryClassifier(FakeChatModel(reply)).score("Why is account 4242-9981 locked?", [])
+    assert "4242" not in str(raised.value)
+
+
 async def test_a_query_containing_braces_does_not_break_the_prompt():
     chat_model = FakeChatModel('{"cag": 0.0, "mag": 0.0, "rag": 1.0}')
     await LlmQueryClassifier(chat_model).score("parse {this} json", [])

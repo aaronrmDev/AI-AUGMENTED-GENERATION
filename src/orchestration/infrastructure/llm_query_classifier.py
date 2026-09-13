@@ -57,5 +57,7 @@ class LlmQueryClassifier(QueryClassifier):
             self.parse_failures += 1
             # Raised rather than returned as neutral scores: 0.5 everywhere
             # only lands inside the router's uncertainty band at one threshold.
-            raise ClassificationFailed(f"unparseable classifier reply: {raw[:120]!r}")
+            # The message carries the reply's length, never its text: the use
+            # case logs this exception, and a reply can echo the user's question.
+            raise ClassificationFailed(f"unparseable classifier reply ({len(raw)} characters)")
         return scores

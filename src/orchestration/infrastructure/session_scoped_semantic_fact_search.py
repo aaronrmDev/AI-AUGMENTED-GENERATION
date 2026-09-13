@@ -58,9 +58,21 @@ class SessionScopedSemanticFactSearch(SemanticFactSearch):
             facts = await self._repository_factory(session).search_by_similarity(
                 query_embedding, user_id, tenant_id, top_k
             )
-            await session.close()
         except BaseException:
             # Shielded so a second cancellation can't interrupt the cleanup.
+            await asyncio.shield(_discard(session))
+            raise
+        try:
+            await session.close()
+        except Exception:
+            # The facts are already in hand; a cleanup failure must not turn a
+            # good MAG answer into an ERROR outcome.
+            logger.warning(
+                "closing a MAG search session failed after a successful search; discarding it",
+                exc_info=True,
+            )
+            await asyncio.shield(_discard(session))
+        except BaseException:
             await asyncio.shield(_discard(session))
             raise
         return facts

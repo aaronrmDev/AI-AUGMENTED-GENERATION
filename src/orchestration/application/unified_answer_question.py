@@ -4,6 +4,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass
+from typing import Literal
 
 from src.orchestration.application.assemble_context import assemble_context
 from src.orchestration.application.latency_cascade import LatencyCascade
@@ -31,9 +32,15 @@ from src.shared.tokenization import count_tokens
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONTEXT_TOKENS = 128_000
-# Seconds. Generous enough for a local LLM classifier, bounded so a slow or
-# hung classifier degrades routing instead of hanging the request.
+# Seconds. The router comparison (evaluation/reports/orchestration-meta-layer-router.md)
+# measured the local qwen3.5 classifier at p50 18.9s and p95 60.0s, against 0.1ms for
+# the lexical classifier and 2.4ms for the prototype one. At this default the LLM
+# classifier therefore always falls back to routing every tier. That is deliberate:
+# waiting tens of seconds to pick between tiers budgeted at 10ms-2s defeats the
+# cascade, so a request-path classifier has to be a millisecond-scale one.
 DEFAULT_CLASSIFIER_TIMEOUT = 2.0
+
+RoutingFallback = Literal["classifier_timeout", "classifier_error"]
 
 
 @dataclass(frozen=True)
@@ -42,6 +49,7 @@ class StageTimings:
     route_ms: float
     cascade_ms: float
     assemble_ms: float
+    record_ms: float  # 0.0 when no SessionBudgetRecorder is configured
     generate_ms: float
 
 
@@ -50,9 +58,8 @@ class UnifiedAnswer:
     answer: str
     sources: list[ContextItem]
     decision: RoutingDecision | None
-    # None when the classifier decided the route (or none was configured);
-    # "classifier_timeout" or "classifier_error" when fallback_decision() was used.
-    routing_fallback: str | None
+    # None when the classifier decided the route (or none was configured).
+    routing_fallback: RoutingFallback | None
     attempts: list[TierAttempt]
     allocation: BudgetAllocation
     dropped: dict[Paradigm, int]
@@ -71,6 +78,10 @@ class UnifiedAnswerQuestion:
     draws it -- the ablation baseline the router is measured against. A
     classifier that times out or raises doesn't fail the request: the query
     is routed with fallback_decision(), every tier in parallel.
+
+    The budget is recorded after the cascade and before generation: a
+    session that doesn't exist, or isn't this user's, fails the request
+    before an answer is paid for, though the retrieval work is already spent.
     """
 
     def __init__(
@@ -117,7 +128,7 @@ class UnifiedAnswerQuestion:
         embedded = time.perf_counter()
 
         decision: RoutingDecision | None = None
-        routing_fallback: str | None = None
+        routing_fallback: RoutingFallback | None = None
         if self._classifier is not None:
             decision, routing_fallback = await self._route(self._classifier, question, embedding)
         routed = time.perf_counter()
@@ -130,14 +141,12 @@ class UnifiedAnswerQuestion:
         assembled = assemble_context(cascade_result.items, allocation)
         assembled_at = time.perf_counter()
 
-        # Recorded before generation: a session that doesn't exist, or belongs
-        # to someone else, fails the request before an answer is paid for.
         if self._budget_recorder is not None:
             await self._budget_recorder.record(
                 tenant_id, user_id, session_id, allocation, cascade_result.contributing
             )
+        recorded = time.perf_counter()
 
-        generation_started = time.perf_counter()
         answer = await self._chat_model.generate(question=question, context=assembled.text)
         generated = time.perf_counter()
 
@@ -155,21 +164,23 @@ class UnifiedAnswerQuestion:
                 route_ms=_ms(embedded, routed),
                 cascade_ms=_ms(routed, cascaded),
                 assemble_ms=_ms(cascaded, assembled_at),
-                generate_ms=_ms(generation_started, generated),
+                record_ms=_ms(assembled_at, recorded) if self._budget_recorder else 0.0,
+                generate_ms=_ms(recorded, generated),
             ),
         )
 
     async def _route(
         self, classifier: QueryClassifier, question: str, embedding: list[float]
-    ) -> tuple[RoutingDecision, str | None]:
+    ) -> tuple[RoutingDecision, RoutingFallback | None]:
         try:
             scores = await asyncio.wait_for(
                 classifier.score(question, embedding), self._classifier_timeout
             )
             return decide(scores, self._select_threshold, self._uncertainty_margin), None
         except TimeoutError:
+            # The classifier_timeout limit, or a timeout the classifier raised itself.
             logger.warning(
-                "query classifier exceeded %.2fs; routing every tier in parallel",
+                "query classifier timed out (limit %.2fs); routing every tier in parallel",
                 self._classifier_timeout,
             )
             return fallback_decision(), "classifier_timeout"

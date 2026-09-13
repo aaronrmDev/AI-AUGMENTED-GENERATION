@@ -111,13 +111,18 @@ class FakeCascadeTier(CascadeTier):
         result: TierResult | None = None,
         delay_seconds: float = 0.0,
         error: BaseException | None = None,
+        cleanup_seconds: float = 0.0,
     ) -> None:
         self._paradigm = paradigm
         self._result = result if result is not None else TierResult(TierOutcome.MISS)
         self._delay = delay_seconds
         self._error = error
+        # How long this tier takes to clean up after being cancelled -- the
+        # shape of a real tier invalidating its database session.
+        self._cleanup = cleanup_seconds
         self.requests: list[TierRequest] = []
         self.cancelled = False
+        self.cleaned_up = False
 
     @property
     def paradigm(self) -> Paradigm:
@@ -130,6 +135,9 @@ class FakeCascadeTier(CascadeTier):
                 await asyncio.sleep(self._delay)
         except asyncio.CancelledError:
             self.cancelled = True
+            if self._cleanup:
+                await asyncio.sleep(self._cleanup)
+                self.cleaned_up = True
             raise
         if self._error is not None:
             raise self._error
