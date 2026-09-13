@@ -4760,3 +4760,18 @@ A review of `develop..HEAD` found no critical issues and seven important ones. E
   - `stale_rate` is NaN over zero runs.
   - Budget-share tolerance is `abs_tol=1e-12` with `rel_tol=0.0`. `isclose`'s default relative tolerance had silently allowed a 5e-10 overshoot, and the new test caught it.
 - **The integration Postgres URL.** After the review fixes, one test still failed. A MAG search cancelled by the cascade was followed by a fresh search that hung until its 5s timeout. A probe ruled out the cascade and SQLAlchemy: raw asyncpg connections to the TestContainers Postgres via `localhost` timed out after 20s even before any cancellation, while `127.0.0.1` connected in about 40ms, including immediately after a cancel. Pooled connections had been hiding it; an invalidated connection forces the next request to open a new one. The `database_url` fixture now pins `127.0.0.1`, as `redis_url`, `qdrant_url`, and `neo4j_url` already did, and the cascade runner does the same. The three affected test files went from 535s to 23s.
+
+### What running the measurements changed
+
+- **The CAG tier missed its budget because another tier blocked the event loop, not because of its own work.** The first cascade run put CAG inside its 10ms budget only 29% of the time (p50 10.76ms; 32 of 45 attempts timed out). Measured alone, a CAG attempt is p50 0.40ms. Two hypotheses were tested with probes against the real `LatencyCascade`, `CagTier`, and MiniLM:
+  - *Rejected:* contention left over from the query embedding computed just before the cascade. A CAG attempt right after an embedding is still p50 0.68ms.
+  - *Confirmed:* in PARALLEL routes, `SearchDocuments` re-embeds the question synchronously on the event loop, delaying delivery of the CAG thread's result past its timeout. That produced 15 of 60 CAG timeouts at p50 9.77ms, against none at p50 0.86ms with the embedding on a worker thread.
+
+  The fix is `CachingEmbeddingModel`, shared by `UnifiedAnswerQuestion` and the retriever, plus a documented contract that a tier must never block the loop. Re-run on the fixed composition, CAG met its budget in 45 of 45 attempts (p50 2.00ms, no timeouts).
+- **The allocator comparison needed smaller windows.** At a 1,000-token window every slice had room to spare, so dynamic and static allocation dropped nothing either way — a null result that measured nothing. The runner now sweeps 1,000, 400, 250, and 150 tokens:
+  - No difference at 1,000 or 400.
+  - At 250, static slices dropped 8 items where reallocation dropped none.
+  - At 150, 14 dropped against 6.
+- **An oracle-routed comparison arm was added.** The first prototype-routed comparison showed the unified pipeline barely beating RAG-only (80% vs. 76% task success). The router comparison had already measured the prototype classifier's MAG recall at 63%, and here it never routed the corpus's three personal questions to MAG at all. A treatment routed by per-question labels in `queries.yaml` separates what the pipeline adds from what the classifier loses.
+- **The runner writes UTF-8 to the console.** The comparison report's Δ character crashed a run under Windows cp1252 after both reports were written, skipping `engine.dispose()`.
+- **The shared embedding cache is pinned by an integration test.** `tests/integration/orchestration_env.py` now composes one `CachingEmbeddingModel` for the use case and the retriever, the way the runner does, and a PARALLEL-route test against real MiniLM asserts that the retriever's embed of the question is a cache hit. With the retriever on the raw model, the test fails with zero hits.
