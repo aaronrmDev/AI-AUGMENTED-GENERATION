@@ -2,7 +2,14 @@ import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 
-from src.orchestration.domain.entities import CacheHit, WarmEntry
+from src.orchestration.domain.entities import (
+    BudgetAllocation,
+    CacheHit,
+    Paradigm,
+    TierRequest,
+    TierResult,
+    WarmEntry,
+)
 
 
 class AccessFrequencyTracker(ABC):
@@ -116,3 +123,33 @@ class WarmStore(ABC):
     async def contains(
         self, tenant_id: uuid.UUID, user_id: uuid.UUID, document_id: uuid.UUID
     ) -> bool: ...
+
+
+class QueryClassifier(ABC):
+    # Async because LlmQueryClassifier makes a network call -- a port's
+    # sync/async shape tracks whether ANY real implementation does I/O
+    # (WarmStore's comment above). query_embedding is passed in so a
+    # classifier that needs it never embeds the query a second time;
+    # UnifiedAnswerQuestion has already paid for it.
+    @abstractmethod
+    async def score(self, query: str, query_embedding: list[float]) -> dict[Paradigm, float]: ...
+
+
+class CascadeTier(ABC):
+    @property
+    @abstractmethod
+    def paradigm(self) -> Paradigm: ...
+
+    @abstractmethod
+    async def attempt(self, request: TierRequest) -> TierResult: ...
+
+
+class SessionBudgetRecorder(ABC):
+    @abstractmethod
+    async def record(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        allocation: BudgetAllocation,
+        contributing: frozenset[Paradigm],
+    ) -> None: ...

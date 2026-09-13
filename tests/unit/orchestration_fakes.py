@@ -1,8 +1,23 @@
+import asyncio
 import hashlib
 import uuid
 
-from src.orchestration.domain.entities import CacheHit, WarmEntry
-from src.orchestration.domain.ports import FrozenCache, WarmStore
+from src.orchestration.domain.entities import (
+    BudgetAllocation,
+    CacheHit,
+    Paradigm,
+    TierOutcome,
+    TierRequest,
+    TierResult,
+    WarmEntry,
+)
+from src.orchestration.domain.ports import (
+    CascadeTier,
+    FrozenCache,
+    QueryClassifier,
+    SessionBudgetRecorder,
+    WarmStore,
+)
 from src.orchestration.domain.sync_mixer import content_hash
 from src.rag.domain.ports import EmbeddingModel
 
@@ -87,3 +102,61 @@ class FakeBagOfWordsEmbeddingModel(EmbeddingModel):
         if norm == 0.0:
             return vector
         return [v / norm for v in vector]
+
+
+class FakeCascadeTier(CascadeTier):
+    def __init__(
+        self,
+        paradigm: Paradigm,
+        result: TierResult | None = None,
+        delay_seconds: float = 0.0,
+        error: BaseException | None = None,
+    ) -> None:
+        self._paradigm = paradigm
+        self._result = result if result is not None else TierResult(TierOutcome.MISS)
+        self._delay = delay_seconds
+        self._error = error
+        self.requests: list[TierRequest] = []
+        self.cancelled = False
+
+    @property
+    def paradigm(self) -> Paradigm:
+        return self._paradigm
+
+    async def attempt(self, request: TierRequest) -> TierResult:
+        self.requests.append(request)
+        try:
+            if self._delay:
+                await asyncio.sleep(self._delay)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+class FakeQueryClassifier(QueryClassifier):
+    def __init__(self, scores: dict[Paradigm, float]) -> None:
+        self._scores = scores
+        self.calls: list[tuple[str, list[float]]] = []
+
+    async def score(self, query: str, query_embedding: list[float]) -> dict[Paradigm, float]:
+        self.calls.append((query, query_embedding))
+        return dict(self._scores)
+
+
+class FakeSessionBudgetRecorder(SessionBudgetRecorder):
+    def __init__(self) -> None:
+        self.records: list[
+            tuple[uuid.UUID, uuid.UUID, BudgetAllocation, frozenset[Paradigm]]
+        ] = []
+
+    async def record(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        allocation: BudgetAllocation,
+        contributing: frozenset[Paradigm],
+    ) -> None:
+        self.records.append((tenant_id, session_id, allocation, contributing))
