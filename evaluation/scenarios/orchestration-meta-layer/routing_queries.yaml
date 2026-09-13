@@ -1,0 +1,259 @@
+name: orchestration-meta-layer-routing
+queries:
+- query: Please explain the eligibility criteria for a free return if the item is
+    damaged during transit.
+  expected:
+  - cag
+  source: qwen3.5
+- query: What are the specific safety warnings included in the user manual for this
+    power adapter?
+  expected:
+  - cag
+  source: qwen3.5
+- query: Retrieve the standard operating procedure for escalating a chargeback dispute
+    based on our internal guidelines.
+  expected:
+  - cag
+  source: qwen3.5
+- query: Explain how this API endpoint handles rate limiting errors based on the developer
+    documentation.
+  expected:
+  - cag
+  source: qwen3.5
+- query: Summarize the terms outlined in the warranty section regarding accidental
+    damage coverage for electronics.
+  expected:
+  - cag
+  source: qwen3.5
+- query: What are the step-by-step instructions for initializing a device from its
+    factory settings according to the setup guide?
+  expected:
+  - cag
+  source: qwen3.5
+- query: Provide the specific clauses in our terms of service that govern automatic
+    order cancellation after three days of no payment.
+  expected:
+  - cag
+  source: qwen3.5
+- query: Where can I find the section in the product documentation that defines the
+    maximum operating temperature for this server?
+  expected:
+  - cag
+  source: qwen3.5
+- query: 'Where is my package #5590 right now and what is the updated delivery date
+    based on current traffic conditions?'
+  expected:
+  - rag
+  source: qwen3.5
+- query: Can you tell me the live exchange rate between USD and EUR so I can calculate
+    shipping costs for an international order?
+  expected:
+  - rag
+  source: qwen3.5
+- query: Are any of our featured seasonal items out of stock after the spike in orders
+    this morning?
+  expected:
+  - rag
+  source: qwen3.5
+- query: What percentage of our website visitors from mobile devices are converting
+    right now compared to desktop sales?
+  expected:
+  - rag
+  source: qwen3.5
+- query: Is there a scheduled maintenance window happening tonight that might affect
+    checkout functionality today?
+  expected:
+  - rag
+  source: qwen3.5
+- query: How many support tickets opened for shipping issues in the last six hours
+    need priority routing?
+  expected:
+  - rag
+  source: qwen3.5
+- query: Which region is currently experiencing the longest average wait time on phone
+    lines this afternoon?
+  expected:
+  - rag
+  source: qwen3.5
+- query: Did the system auto-pause any credit card transactions due to recent bank
+    compliance updates or news?
+  expected:
+  - rag
+  source: qwen3.5
+- query: Show me sustainable clothing options similar to the coat we discussed in
+    our chat two days ago.
+  expected:
+  - mag
+  - rag
+  source: qwen3.5
+  review_note: 'Relabeled mag -> mag,rag in hand review: answering needs current catalog
+    or stock data as well as the user''s own history, not the history alone.'
+- query: Update my shipping address to the location stored in your notes from last
+    month's phone call.
+  expected:
+  - mag
+  source: qwen3.5
+- query: Filter results to exclude blue items since I mentioned disliking that color
+    during our sizing conversation.
+  expected:
+  - mag
+  source: qwen3.5
+- query: Find a replacement gift card with the design you showed me when we talked
+    about wedding favors yesterday.
+  expected:
+  - mag
+  - rag
+  source: qwen3.5
+  review_note: 'Relabeled mag -> mag,rag in hand review: answering needs current catalog
+    or stock data as well as the user''s own history, not the history alone.'
+- query: Apply the discount code from the campaign we agreed on during last week's
+    newsletter signup.
+  expected:
+  - mag
+  source: qwen3.5
+- query: Send the receipt to the email address saved in our conversation history regarding
+    my work account.
+  expected:
+  - mag
+  source: qwen3.5
+- query: Recommend sneakers that match the style I said I needed for running instead
+    of casual wear.
+  expected:
+  - mag
+  - rag
+  source: qwen3.5
+  review_note: 'Relabeled mag -> mag,rag in hand review: answering needs current catalog
+    or stock data as well as the user''s own history, not the history alone.'
+- query: Check availability for the specific item size you flagged as limited stock
+    during my last visit.
+  expected:
+  - mag
+  - rag
+  source: qwen3.5
+  review_note: 'Relabeled mag -> mag,rag in hand review: answering needs current catalog
+    or stock data as well as the user''s own history, not the history alone.'
+- query: Find similar jeans to my last purchase but only show those available in today’s
+    restock batch that align with my saved preference for size large.
+  expected:
+  - mag
+  - rag
+  source: qwen3.5
+- query: Check international delivery costs based on my profile address history versus
+    today’s fluctuating exchange rates announced in our newsletter right now.
+  expected:
+  - mag
+  - rag
+  source: qwen3.5
+- query: Suggest a substitute fabric for my custom order since I previously disliked
+    rayon, while checking today’s supply chain delay status from our live logistics
+    feed.
+  expected:
+  - mag
+  - rag
+  source: qwen3.5
+- query: Display items currently in my wishlist sorted by price descending if they
+    match my color theme saved in settings, excluding any pre-orders based on inventory
+    changes updated this hour.
+  expected:
+  - mag
+  - rag
+  source: qwen3.5
+- query: Draft a thank you note referencing the gift wrapping request I made two weeks
+    ago while incorporating the urgent shipping deadline cutoff times published today.
+  expected:
+  - mag
+  - rag
+  source: qwen3.5
+- query: Apply the discount rule we discussed earlier to this order’s total cost,
+    considering the new tax jurisdiction changes that applied specifically at checkout
+    this afternoon.
+  expected:
+  - mag
+  - rag
+  source: qwen3.5
+- query: Recommend a subscription box that fits my monthly budget set previously while
+    filtering out items recently reformulated based on safety data released just now.
+  expected:
+  - mag
+  - rag
+  source: qwen3.5
+- query: Determine if my upgrade path from chat last week is still active, factoring
+    in the new weekend bonus points rule that expired yesterday.
+  expected:
+  - mag
+  - rag
+  source: qwen3.5
+- query: What does the official return policy handbook state about restocking fees,
+    and is there any indication that these terms have changed since their publication?
+  expected:
+  - cag
+  - rag
+  source: qwen3.5
+- query: Please list the warranty coverage details found in the electronics product
+    sheet and confirm whether that document has been superseded by a newer version
+    recently.
+  expected:
+  - cag
+  - rag
+  source: qwen3.5
+- query: Can you extract the free shipping thresholds from the current customer guide
+    and verify if those eligibility requirements are still available today?
+  expected:
+  - cag
+  - rag
+  source: qwen3.5
+- query: State the loyalty point earning rules outlined in the staff manual and indicate
+    if any of those calculation methods have been updated or deprecated.
+  expected:
+  - cag
+  - rag
+  source: qwen3.5
+- query: What conditions for bulk order discounts appear in the B2B terms document,
+    and has that specific policy been revised in the last few quarters?
+  expected:
+  - cag
+  - rag
+  source: qwen3.5
+- query: Retrieve the product safety warnings from the compliance documentation and
+    tell me if those alerts are still valid under current regulations today.
+  expected:
+  - cag
+  - rag
+  source: qwen3.5
+- query: What does the privacy framework define as user consent requirements and confirm
+    whether that section of the documentation remains unchanged or updated.
+  expected:
+  - cag
+  - rag
+  source: qwen3.5
+- query: List the accepted bank cards according to the payment security doc and let
+    me know if any listed processors are no longer supported right now.
+  expected:
+  - cag
+  - rag
+  source: qwen3.5
+- query: What's our refund policy?
+  expected:
+  - cag
+  source: concept-1-table
+- query: What changed in the policy today?
+  expected:
+  - rag
+  source: concept-1-table
+- query: Continue where we left off yesterday
+  expected:
+  - mag
+  source: concept-1-table
+- query: Compare today's sales with last month
+  expected:
+  - mag
+  - rag
+  source: concept-1-table
+- query: Explain this code file
+  expected:
+  - cag
+  source: concept-1-table
+- query: What did I ask you to remember?
+  expected:
+  - mag
+  source: concept-1-table
