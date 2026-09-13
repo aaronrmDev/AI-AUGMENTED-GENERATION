@@ -1,0 +1,44 @@
+name: orchestration-meta-layer
+questions:
+  - question: What is the return window for unopened items?
+    success_criterion: States forty-five days (the current policy), not thirty.
+    gold_passage: >-
+      Our return policy allows customers to return unopened items within forty-five days
+      of purchase for a full refund. The window changed from thirty days today.
+  - question: What changed in the return policy today?
+    success_criterion: States the window changed to forty-five days.
+    gold_passage: >-
+      Our return policy allows customers to return unopened items within forty-five days
+      of purchase for a full refund. The window changed from thirty days today.
+  - question: How long does standard shipping take?
+    success_criterion: States five to seven business days.
+    gold_passage: >-
+      Standard shipping takes five to seven business days. Expedited shipping arrives
+      within two business days.
+  - question: How do I set up an account?
+    success_criterion: Mentions the twelve-character password or the verification email.
+    gold_passage: >-
+      To set up an account, provide your email address and choose a password of at least
+      twelve characters. A verification email is sent immediately after registration.
+  - question: How long is the product warranty?
+    success_criterion: States a two-year limited warranty.
+    gold_passage: Every product carries a two-year limited warranty covering manufacturing defects.
+  - question: Are the blue running shoes in stock today?
+    success_criterion: States they are out of stock in sizes 9 and 10.
+    gold_passage: >-
+      As of this morning, the blue running shoes are out of stock in sizes 9 and 10, with
+      a restock expected on Friday.
+  - question: Is there a sale on backpacks today?
+    success_criterion: States 20% off backpacks today.
+    gold_passage: A flash sale today takes 20% off every backpack until midnight.
+  - question: What shipping speed did I say I prefer?
+    success_criterion: States expedited two-day shipping.
+    gold_passage: The user prefers expedited two-day shipping on every order.
+  - question: What shoe size do I wear?
+    success_criterion: States size 10.
+    gold_passage: The user wears size 10 running shoes.
+  - question: Are the running shoes in my size in stock right now?
+    success_criterion: States that size 10 is out of stock.
+    gold_passage: >-
+      The user wears size 10 running shoes. As of this morning, the blue running shoes are
+      out of stock in sizes 9 and 10, with a restock expected on Friday.
