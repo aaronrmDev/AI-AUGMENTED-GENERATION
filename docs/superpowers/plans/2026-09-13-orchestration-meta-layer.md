@@ -4772,6 +4772,22 @@ A review of `develop..HEAD` found no critical issues and seven important ones. E
   - No difference at 1,000 or 400.
   - At 250, static slices dropped 8 items where reallocation dropped none.
   - At 150, 14 dropped against 6.
-- **An oracle-routed comparison arm was added.** The first prototype-routed comparison showed the unified pipeline barely beating RAG-only (80% vs. 76% task success). The router comparison had already measured the prototype classifier's MAG recall at 63%, and here it never routed the corpus's three personal questions to MAG at all. A treatment routed by per-question labels in `queries.yaml` separates what the pipeline adds from what the classifier loses.
+- **An oracle-routed comparison arm was added.** The first prototype-routed comparison showed the unified pipeline barely beating RAG-only (80% vs. 76% task success, under the first version of the success checks, which the final review found counted non-answers to the personal questions as successes). The router comparison had already measured the prototype classifier's MAG recall at 63%, and here it never routed the corpus's three personal questions to MAG at all. A treatment routed by per-question labels in `queries.yaml` separates what the pipeline adds from what the classifier loses.
 - **The runner writes UTF-8 to the console.** The comparison report's Δ character crashed a run under Windows cp1252 after both reports were written, skipping `engine.dispose()`.
 - **The shared embedding cache is pinned by an integration test.** `tests/integration/orchestration_env.py` now composes one `CachingEmbeddingModel` for the use case and the retriever, the way the runner does, and a PARALLEL-route test against real MiniLM asserts that the retriever's embed of the question is a cache hit. With the retriever on the raw model, the test fails with zero hits.
+
+### Changes from the final review
+
+A final review of the measurement pass (`3821134..a4ff15f`) found no critical issues and four important ones. Each was checked against the code before anything changed:
+
+- **The starvation fix covered one request.** `UnifiedAnswerQuestion` still embedded the question on the event loop, where it would stall concurrent requests. It now embeds with `asyncio.to_thread`, pinned by a unit test. `RagTier` documents the retrievers that still embed other text on the loop, and #168 tracks moving that work off it.
+- **The embedding cache is shared across tenants.** The spec's isolation section said the batch adds no shared state. `CachingEmbeddingModel` now keys entries by SHA-256 digest, so it holds no query text, and the spec names the remaining timing signal for the endpoint's security review.
+- **The success checks counted non-answers.** For the personal questions, "it does not specify what your shoe size is, only that ... sizes 9 and 10 are out of stock" passed, because it contains a 10. The checks moved to `evaluation/scenarios/orchestration_meta_layer_checks.py`, with unit tests built from real answers, and all three measurement parts were rerun on them.
+- **The narrative overclaimed.** It asserted savings from classification that were never measured, and gave a cause for a latency difference smaller than the spread between two runs of the identical baseline. Its noise estimate also left out the first comparison run. The report now states only what the data supports.
+
+Minor fixes:
+
+- The runner fails loudly on an unlabeled oracle question or a routing fallback.
+- `--parts` tolerates stray spaces.
+- `TESTING.md` records the Ollama skips.
+- `CONTEXT_GRAPH.md` gives the class count as 256.
