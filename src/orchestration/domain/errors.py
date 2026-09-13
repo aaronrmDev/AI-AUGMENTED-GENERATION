@@ -7,6 +7,12 @@ class SessionNotFound(Exception):
         self.session_id = session_id
 
 
+class ClassificationFailed(Exception):
+    """A query classifier could not produce usable scores -- an unparseable
+    model reply, for example. UnifiedAnswerQuestion routes such a query with
+    paradigm_router.fallback_decision()."""
+
+
 class QueryExceedsBudget(Exception):
     def __init__(self, query_tokens: int, query_slice: int) -> None:
         super().__init__(

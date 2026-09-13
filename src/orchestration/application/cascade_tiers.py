@@ -1,6 +1,5 @@
 import asyncio
 
-from src.mag.application.queries.find_semantic_facts import FindSemanticFacts
 from src.orchestration.application.cache_warmed_retrieve import CacheWarmedRetrieve
 from src.orchestration.domain.entities import (
     ContextItem,
@@ -9,7 +8,7 @@ from src.orchestration.domain.entities import (
     TierRequest,
     TierResult,
 )
-from src.orchestration.domain.ports import CascadeTier
+from src.orchestration.domain.ports import CascadeTier, SemanticFactSearch
 from src.rag.domain.ports import Retriever
 
 
@@ -43,43 +42,35 @@ class CagTier(CascadeTier):
         return Paradigm.CAG
 
     async def attempt(self, request: TierRequest) -> TierResult:
-        # Matching is CPU work (a cosine pass over the warmed set plus a
-        # FrozenCache lookup). Inline, it would hold the event loop and the
-        # cascade's 10ms timeout could never fire.
-        match = await asyncio.to_thread(
+        # Matching is CPU work (a cosine pass over the tenant's warmed set plus
+        # a FrozenCache lookup). Inline, it would hold the event loop and the
+        # cascade's 10ms timeout could never fire. A thread that outlives its
+        # timeout can't be killed, though: it runs to completion, and latency
+        # measured right after a CAG timeout can include that overlap.
+        result = await asyncio.to_thread(
             self._retrieve.best_warmed_match, request.tenant_id, request.query_embedding
         )
-        if match is None:
+        if result is None or result.score < self._partial:
             return TierResult(TierOutcome.MISS)
-        result, score = match
-        if score < self._partial:
-            return TierResult(TierOutcome.MISS)
-        item = ContextItem(Paradigm.CAG, result.content, score, result.document_id)
-        outcome = TierOutcome.HIT if score >= self._hit else TierOutcome.PARTIAL
+        item = ContextItem(Paradigm.CAG, result.content, result.score, result.document_id)
+        outcome = TierOutcome.HIT if result.score >= self._hit else TierOutcome.PARTIAL
         return TierResult(outcome, [item])
 
 
 class MagTier(CascadeTier):
     """The cascade's second tier: this user's semantic facts.
 
-    Invalidated and archived facts never arrive here --
-    PostgresSemanticMemoryRepository.search_by_similarity filters them --
-    which is Concept 5's "if MAG has stale state -> invalidate". Like every
-    MAG repository, the one behind find_semantic_facts relies on its caller
-    having set the transaction-local tenant context (set_tenant_context).
-
-    The cascade's timeout can cancel this tier's query mid-flight, and
-    SQLAlchemy treats that CancelledError as a disconnect: it terminates the
-    asyncpg connection, after which rollback() and close() on the session
-    both raise InterfaceError. A caller that sees a MAG TIMEOUT or ERROR must
-    invalidate() that session before using it again, and nothing else in the
-    same request should write through it (measured in
-    tests/integration/test_orchestration_meta_layer.py).
+    Invalidated and archived facts never arrive here -- the real search
+    (PostgresSemanticMemoryRepository.search_by_similarity, behind
+    SessionScopedSemanticFactSearch) filters them -- which is Concept 5's
+    "if MAG has stale state -> invalidate". The search owns its unit of work,
+    so this tier being cancelled by its timeout never damages a session that
+    another tier or the caller is using.
     """
 
     def __init__(
         self,
-        find_semantic_facts: FindSemanticFacts,
+        fact_search: SemanticFactSearch,
         *,
         hit_threshold: float,
         partial_threshold: float,
@@ -87,7 +78,7 @@ class MagTier(CascadeTier):
     ) -> None:
         _check_thresholds(hit_threshold, partial_threshold)
         _check_top_k(top_k)
-        self._find = find_semantic_facts
+        self._search = fact_search
         self._hit = hit_threshold
         self._partial = partial_threshold
         self._top_k = top_k
@@ -97,8 +88,8 @@ class MagTier(CascadeTier):
         return Paradigm.MAG
 
     async def attempt(self, request: TierRequest) -> TierResult:
-        facts = await self._find.by_similarity(
-            request.query_embedding, request.user_id, request.tenant_id, self._top_k
+        facts = await self._search.search(
+            request.tenant_id, request.user_id, request.query_embedding, self._top_k
         )
         relevant = [scored for scored in facts if scored.score >= self._partial]
         if not relevant:

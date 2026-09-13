@@ -2,6 +2,7 @@ import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 
+from src.mag.domain.entities import ScoredFact
 from src.orchestration.domain.entities import (
     BudgetAllocation,
     CacheHit,
@@ -144,11 +145,30 @@ class CascadeTier(ABC):
     async def attempt(self, request: TierRequest) -> TierResult: ...
 
 
+class SemanticFactSearch(ABC):
+    # Each call is its own unit of work, owned by the implementation. The
+    # cascade cancels a timed-out tier mid-flight, and a cancelled SQLAlchemy
+    # query terminates the connection it ran on -- a tier sharing the request's
+    # session would break every later use of it (measured in
+    # tests/integration/test_orchestration_meta_layer.py).
+    @abstractmethod
+    async def search(
+        self,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        query_embedding: list[float],
+        top_k: int,
+    ) -> list[ScoredFact]: ...
+
+
 class SessionBudgetRecorder(ABC):
+    # user_id as well as tenant_id: RLS isolates tenants, and the write's own
+    # WHERE clause keeps one user from overwriting another user's record.
     @abstractmethod
     async def record(
         self,
         tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
         session_id: uuid.UUID,
         allocation: BudgetAllocation,
         contributing: frozenset[Paradigm],

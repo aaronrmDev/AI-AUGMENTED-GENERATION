@@ -1,13 +1,12 @@
 import uuid
-from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from src.mag.application.queries.find_semantic_facts import FindSemanticFacts
-from src.mag.domain.entities import SemanticMemory
+from src.mag.domain.entities import ScoredFact, SemanticMemory
 from src.orchestration.application.cache_warmed_retrieve import CacheWarmedRetrieve
 from src.orchestration.application.cascade_tiers import CagTier, MagTier, RagTier
 from src.orchestration.domain.entities import Paradigm, TierOutcome, TierRequest
+from src.orchestration.domain.ports import SemanticFactSearch
 from src.orchestration.domain.similarity import cosine_similarity
 from src.rag.domain.entities import SearchResult
 from tests.unit.mag_fakes import FakeSemanticMemoryRepository
@@ -85,28 +84,42 @@ async def test_cag_tier_misses_once_the_document_is_evicted():
     assert result.outcome is TierOutcome.MISS
 
 
-def _fact(key: str, embedding: list[float], valid_until: datetime | None = None):
+class _FakeFactSearch(SemanticFactSearch):
+    # Scores facts with the fake repository's real cosine similarity and records
+    # the scope each search ran under.
+    def __init__(self, facts: list[SemanticMemory] | None = None) -> None:
+        self._repository = FakeSemanticMemoryRepository()
+        self._repository.set_search_results(facts or [])
+        self.calls: list[tuple[uuid.UUID, uuid.UUID, int]] = []
+
+    async def search(
+        self,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        query_embedding: list[float],
+        top_k: int,
+    ) -> list[ScoredFact]:
+        self.calls.append((tenant_id, user_id, top_k))
+        return await self._repository.search_by_similarity(
+            query_embedding, user_id, tenant_id, top_k
+        )
+
+
+def _fact(key: str, embedding: list[float]) -> SemanticMemory:
     return SemanticMemory(
-        id=uuid.uuid4(),
-        user_id=_USER,
-        fact_key=key,
-        fact_value=f"{key} value",
-        embedding=embedding,
-        valid_until=valid_until,
+        id=uuid.uuid4(), user_id=_USER, fact_key=key, fact_value=f"{key} value", embedding=embedding
     )
 
 
-def _mag_tier(facts, top_k: int = 5) -> MagTier:
-    repository = FakeSemanticMemoryRepository()
-    repository.set_search_results(facts)
-    return MagTier(
-        FindSemanticFacts(repository), hit_threshold=0.9, partial_threshold=0.5, top_k=top_k
-    )
+def _mag_tier(search: _FakeFactSearch, top_k: int = 5) -> MagTier:
+    return MagTier(search, hit_threshold=0.9, partial_threshold=0.5, top_k=top_k)
 
 
 async def test_mag_tier_hits_when_the_best_fact_clears_the_hit_threshold_and_drops_weak_facts():
     strong, weak = _fact("strong", [1.0, 0.0]), _fact("weak", [0.0, 1.0])
-    result = await _mag_tier([strong, weak]).attempt(_request(embedding=[1.0, 0.0]))
+    result = await _mag_tier(_FakeFactSearch([strong, weak])).attempt(
+        _request(embedding=[1.0, 0.0])
+    )
     assert result.outcome is TierOutcome.HIT
     assert [(i.paradigm, i.content, i.source_id) for i in result.items] == [
         (Paradigm.MAG, "strong: strong value", strong.id)
@@ -115,37 +128,22 @@ async def test_mag_tier_hits_when_the_best_fact_clears_the_hit_threshold_and_dro
 
 async def test_mag_tier_reports_partial_when_relevant_facts_fall_short_of_a_hit():
     a, b = _fact("a", [1.0, 0.0]), _fact("b", [0.0, 1.0])
-    result = await _mag_tier([a, b]).attempt(_request(embedding=[0.8, 0.6]))
+    result = await _mag_tier(_FakeFactSearch([a, b])).attempt(_request(embedding=[0.8, 0.6]))
     assert result.outcome is TierOutcome.PARTIAL
     assert [item.content for item in result.items] == ["a: a value", "b: b value"]
 
 
 async def test_mag_tier_misses_when_no_fact_clears_the_partial_threshold():
-    result = await _mag_tier([_fact("a", [1.0, 0.0])]).attempt(_request(embedding=[-1.0, 0.0]))
+    search = _FakeFactSearch([_fact("a", [1.0, 0.0])])
+    result = await _mag_tier(search).attempt(_request(embedding=[-1.0, 0.0]))
     assert result.outcome is TierOutcome.MISS
 
 
-async def test_mag_tier_never_sees_an_invalidated_fact():
-    stale = _fact("stale", [1.0, 0.0], valid_until=datetime.now(UTC) - timedelta(days=1))
-    result = await _mag_tier([stale]).attempt(_request(embedding=[1.0, 0.0]))
-    assert result.outcome is TierOutcome.MISS
-
-
-async def test_mag_tier_scopes_its_search_to_the_requesting_user_and_tenant():
-    class _SpyRepository(FakeSemanticMemoryRepository):
-        def __init__(self) -> None:
-            super().__init__()
-            self.search_calls: list[tuple[uuid.UUID, uuid.UUID, int]] = []
-
-        async def search_by_similarity(self, query_embedding, user_id, tenant_id, top_k):
-            self.search_calls.append((user_id, tenant_id, top_k))
-            return await super().search_by_similarity(query_embedding, user_id, tenant_id, top_k)
-
-    spy = _SpyRepository()
-    tier = MagTier(FindSemanticFacts(spy), hit_threshold=0.9, partial_threshold=0.5, top_k=3)
+async def test_mag_tier_scopes_its_search_to_the_requesting_tenant_and_user():
+    search = _FakeFactSearch()
     other_tenant, other_user = uuid.uuid4(), uuid.uuid4()
-    await tier.attempt(_request(tenant_id=other_tenant, user_id=other_user))
-    assert spy.search_calls == [(other_user, other_tenant, 3)]
+    await _mag_tier(search, top_k=3).attempt(_request(tenant_id=other_tenant, user_id=other_user))
+    assert search.calls == [(other_tenant, other_user, 3)]
 
 
 async def test_rag_tier_hits_with_every_retrieved_result():
@@ -171,11 +169,7 @@ def test_a_partial_threshold_above_the_hit_threshold_is_rejected():
     with pytest.raises(ValueError):
         CagTier(retriever, hit_threshold=0.5, partial_threshold=0.6)
     with pytest.raises(ValueError):
-        MagTier(
-            FindSemanticFacts(FakeSemanticMemoryRepository()),
-            hit_threshold=0.5,
-            partial_threshold=0.6,
-        )
+        MagTier(_FakeFactSearch(), hit_threshold=0.5, partial_threshold=0.6)
 
 
 @pytest.mark.parametrize("bad", [0, -1])
@@ -183,9 +177,4 @@ def test_a_non_positive_top_k_is_rejected(bad):
     with pytest.raises(ValueError):
         RagTier(FakeRetriever(), top_k=bad)
     with pytest.raises(ValueError):
-        MagTier(
-            FindSemanticFacts(FakeSemanticMemoryRepository()),
-            hit_threshold=0.9,
-            partial_threshold=0.5,
-            top_k=bad,
-        )
+        MagTier(_FakeFactSearch(), hit_threshold=0.9, partial_threshold=0.5, top_k=bad)

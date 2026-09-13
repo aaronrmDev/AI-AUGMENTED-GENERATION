@@ -1,11 +1,11 @@
 import pytest
 
 from src.orchestration.domain.entities import Paradigm
+from src.orchestration.domain.errors import ClassificationFailed
 from src.orchestration.infrastructure.llm_query_classifier import LlmQueryClassifier
 from tests.unit.rag_fakes import FakeChatModel
 
 CAG, MAG, RAG = Paradigm.CAG, Paradigm.MAG, Paradigm.RAG
-_FALLBACK = {CAG: 0.5, MAG: 0.5, RAG: 0.5}
 
 
 async def test_a_clean_json_response_becomes_the_scores():
@@ -34,9 +34,12 @@ async def test_prose_around_the_json_object_is_tolerated():
         '{"cag": 0.1, "mag": 0.2, "rag": 0.3',
     ],
 )
-async def test_an_unusable_reply_routes_everything_into_the_uncertainty_band(reply):
+async def test_an_unusable_reply_is_an_explicit_classification_failure(reply):
+    # Raised, not disguised as a score: a magic 0.5 only lands in the uncertainty
+    # band at one particular threshold. The use case maps this to the fallback route.
     classifier = LlmQueryClassifier(FakeChatModel(reply))
-    assert await classifier.score("q", []) == _FALLBACK
+    with pytest.raises(ClassificationFailed):
+        await classifier.score("q", [])
     assert classifier.parse_failures == 1
 
 

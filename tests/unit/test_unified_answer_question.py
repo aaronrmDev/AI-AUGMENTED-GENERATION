@@ -6,7 +6,12 @@ from src.orchestration.application.latency_cascade import LatencyCascade, TierTi
 from src.orchestration.application.unified_answer_question import UnifiedAnswerQuestion
 from src.orchestration.domain.budget_allocator import allocate
 from src.orchestration.domain.entities import ContextItem, Paradigm, TierOutcome, TierResult
-from src.orchestration.domain.errors import QueryExceedsBudget
+from src.orchestration.domain.errors import (
+    ClassificationFailed,
+    QueryExceedsBudget,
+    SessionNotFound,
+)
+from src.orchestration.domain.paradigm_router import fallback_decision
 from tests.unit.orchestration_fakes import (
     FakeCascadeTier,
     FakeQueryClassifier,
@@ -55,8 +60,11 @@ async def test_a_routed_question_flows_through_every_stage_and_records_its_budge
     assert "(RAG)" in chat_model.last_context
     assert "stale" not in chat_model.last_context
     assert [source.content for source in result.sources] == ["fresh doc"]
-    assert recorder.records == [(tenant_id, session_id, result.allocation, frozenset({RAG}))]
+    assert recorder.records == [
+        (tenant_id, user_id, session_id, result.allocation, frozenset({RAG}))
+    ]
     assert result.degraded is False
+    assert result.routing_fallback is None
     timings = result.timings
     assert min(
         timings.embed_ms, timings.route_ms, timings.cascade_ms,
@@ -133,6 +141,75 @@ async def test_items_that_do_not_fit_their_slice_are_reported_as_dropped():
     assert result.dropped[RAG] == 1
     assert result.sources == []
     assert chat_model.last_context == ""
+
+
+def _all_tiers() -> list[FakeCascadeTier]:
+    return [
+        FakeCascadeTier(CAG, _hit(CAG, "cached")),
+        FakeCascadeTier(MAG, _hit(MAG, "remembered")),
+        FakeCascadeTier(RAG, _hit(RAG, "fresh")),
+    ]
+
+
+@pytest.mark.parametrize(
+    "error", [RuntimeError("ollama is down"), ClassificationFailed("unparseable reply")]
+)
+async def test_a_classifier_that_fails_falls_back_to_every_tier_in_parallel(error):
+    use_case = UnifiedAnswerQuestion(
+        FakeEmbeddingModel(),
+        FakeQueryClassifier(_RAG_ONLY, error=error),
+        LatencyCascade(_all_tiers(), _GENEROUS),
+        FakeChatModel("still answered"),
+    )
+
+    result = await use_case.execute(*_ids(), _QUESTION)
+
+    assert result.answer == "still answered"
+    assert result.routing_fallback == "classifier_error"
+    assert result.decision == fallback_decision()
+    assert sorted(attempt.paradigm.value for attempt in result.attempts) == ["cag", "mag", "rag"]
+
+
+async def test_a_classifier_slower_than_its_timeout_falls_back_to_every_tier_in_parallel():
+    use_case = UnifiedAnswerQuestion(
+        FakeEmbeddingModel(),
+        FakeQueryClassifier(_RAG_ONLY, delay_seconds=0.5),
+        LatencyCascade(_all_tiers(), _GENEROUS),
+        FakeChatModel(),
+        classifier_timeout=0.05,
+    )
+
+    result = await use_case.execute(*_ids(), _QUESTION)
+
+    assert result.routing_fallback == "classifier_timeout"
+    assert result.decision == fallback_decision()
+
+
+async def test_the_budget_is_recorded_before_paying_for_generation():
+    chat_model = FakeChatModel()
+    use_case = UnifiedAnswerQuestion(
+        FakeEmbeddingModel(),
+        FakeQueryClassifier(_RAG_ONLY),
+        LatencyCascade([FakeCascadeTier(RAG, _hit(RAG, "doc"))], _GENEROUS),
+        chat_model,
+        budget_recorder=FakeSessionBudgetRecorder(error=SessionNotFound(uuid.uuid4())),
+    )
+
+    with pytest.raises(SessionNotFound):
+        await use_case.execute(*_ids(), _QUESTION)
+
+    assert chat_model.last_question is None
+
+
+def test_a_non_positive_classifier_timeout_is_rejected():
+    with pytest.raises(ValueError):
+        UnifiedAnswerQuestion(
+            FakeEmbeddingModel(),
+            None,
+            LatencyCascade([FakeCascadeTier(RAG)]),
+            FakeChatModel(),
+            classifier_timeout=0.0,
+        )
 
 
 def test_a_non_positive_context_window_is_rejected():

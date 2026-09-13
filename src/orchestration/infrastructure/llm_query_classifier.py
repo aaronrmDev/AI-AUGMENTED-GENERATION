@@ -2,6 +2,7 @@ import json
 import math
 
 from src.orchestration.domain.entities import PARADIGM_ORDER, Paradigm
+from src.orchestration.domain.errors import ClassificationFailed
 from src.orchestration.domain.ports import QueryClassifier
 from src.rag.domain.ports import ChatModel
 
@@ -19,10 +20,6 @@ _PROMPT_TEMPLATE = (
     '"rag": 0.0}} and nothing else.\n\n'
     "Question: {query}"
 )
-# Exactly the default decision threshold, so every paradigm lands inside the
-# uncertainty band and the route runs PARALLEL across all tiers: an
-# unreadable classification becomes the safest route, not a guess.
-_UNPARSEABLE_SCORE = 0.5
 
 
 def _parse_scores(raw: str) -> dict[Paradigm, float] | None:
@@ -58,5 +55,7 @@ class LlmQueryClassifier(QueryClassifier):
         scores = _parse_scores(raw)
         if scores is None:
             self.parse_failures += 1
-            return dict.fromkeys(PARADIGM_ORDER, _UNPARSEABLE_SCORE)
+            # Raised rather than returned as neutral scores: 0.5 everywhere
+            # only lands inside the router's uncertainty band at one threshold.
+            raise ClassificationFailed(f"unparseable classifier reply: {raw[:120]!r}")
         return scores

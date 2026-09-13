@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import math
 import time
 import uuid
@@ -20,12 +22,18 @@ from src.orchestration.domain.paradigm_router import (
     DEFAULT_SELECT_THRESHOLD,
     DEFAULT_UNCERTAINTY_MARGIN,
     decide,
+    fallback_decision,
 )
 from src.orchestration.domain.ports import QueryClassifier, SessionBudgetRecorder
 from src.rag.domain.ports import ChatModel, EmbeddingModel
 from src.shared.tokenization import count_tokens
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_CONTEXT_TOKENS = 128_000
+# Seconds. Generous enough for a local LLM classifier, bounded so a slow or
+# hung classifier degrades routing instead of hanging the request.
+DEFAULT_CLASSIFIER_TIMEOUT = 2.0
 
 
 @dataclass(frozen=True)
@@ -42,6 +50,9 @@ class UnifiedAnswer:
     answer: str
     sources: list[ContextItem]
     decision: RoutingDecision | None
+    # None when the classifier decided the route (or none was configured);
+    # "classifier_timeout" or "classifier_error" when fallback_decision() was used.
+    routing_fallback: str | None
     attempts: list[TierAttempt]
     allocation: BudgetAllocation
     dropped: dict[Paradigm, int]
@@ -57,7 +68,9 @@ class UnifiedAnswerQuestion:
     """Section 3.4 Pattern 1, "The Smart Router": route, cascade, budget, answer.
 
     With classifier=None the cascade runs unrouted, exactly as Concept 5
-    draws it -- the ablation baseline the router is measured against.
+    draws it -- the ablation baseline the router is measured against. A
+    classifier that times out or raises doesn't fail the request: the query
+    is routed with fallback_decision(), every tier in parallel.
     """
 
     def __init__(
@@ -71,10 +84,13 @@ class UnifiedAnswerQuestion:
         shares: BudgetShares = DEFAULT_SHARES,
         select_threshold: float = DEFAULT_SELECT_THRESHOLD,
         uncertainty_margin: float = DEFAULT_UNCERTAINTY_MARGIN,
+        classifier_timeout: float = DEFAULT_CLASSIFIER_TIMEOUT,
         budget_recorder: SessionBudgetRecorder | None = None,
     ) -> None:
         if total_context_tokens <= 0:
             raise ValueError("total_context_tokens must be positive")
+        if classifier_timeout <= 0.0:
+            raise ValueError("classifier_timeout must be positive")
         self._embedder = embedding_model
         self._classifier = classifier
         self._cascade = cascade
@@ -83,6 +99,7 @@ class UnifiedAnswerQuestion:
         self._shares = shares
         self._select_threshold = select_threshold
         self._uncertainty_margin = uncertainty_margin
+        self._classifier_timeout = classifier_timeout
         self._budget_recorder = budget_recorder
 
     async def execute(
@@ -100,9 +117,9 @@ class UnifiedAnswerQuestion:
         embedded = time.perf_counter()
 
         decision: RoutingDecision | None = None
+        routing_fallback: str | None = None
         if self._classifier is not None:
-            scores = await self._classifier.score(question, embedding)
-            decision = decide(scores, self._select_threshold, self._uncertainty_margin)
+            decision, routing_fallback = await self._route(self._classifier, question, embedding)
         routed = time.perf_counter()
 
         request = TierRequest(tenant_id, user_id, session_id, question, embedding)
@@ -113,18 +130,22 @@ class UnifiedAnswerQuestion:
         assembled = assemble_context(cascade_result.items, allocation)
         assembled_at = time.perf_counter()
 
-        answer = await self._chat_model.generate(question=question, context=assembled.text)
-        generated = time.perf_counter()
-
+        # Recorded before generation: a session that doesn't exist, or belongs
+        # to someone else, fails the request before an answer is paid for.
         if self._budget_recorder is not None:
             await self._budget_recorder.record(
-                tenant_id, session_id, allocation, cascade_result.contributing
+                tenant_id, user_id, session_id, allocation, cascade_result.contributing
             )
+
+        generation_started = time.perf_counter()
+        answer = await self._chat_model.generate(question=question, context=assembled.text)
+        generated = time.perf_counter()
 
         return UnifiedAnswer(
             answer=answer,
             sources=assembled.included,
             decision=decision,
+            routing_fallback=routing_fallback,
             attempts=cascade_result.attempts,
             allocation=allocation,
             dropped=assembled.dropped,
@@ -134,6 +155,24 @@ class UnifiedAnswerQuestion:
                 route_ms=_ms(embedded, routed),
                 cascade_ms=_ms(routed, cascaded),
                 assemble_ms=_ms(cascaded, assembled_at),
-                generate_ms=_ms(assembled_at, generated),
+                generate_ms=_ms(generation_started, generated),
             ),
         )
+
+    async def _route(
+        self, classifier: QueryClassifier, question: str, embedding: list[float]
+    ) -> tuple[RoutingDecision, str | None]:
+        try:
+            scores = await asyncio.wait_for(
+                classifier.score(question, embedding), self._classifier_timeout
+            )
+            return decide(scores, self._select_threshold, self._uncertainty_margin), None
+        except TimeoutError:
+            logger.warning(
+                "query classifier exceeded %.2fs; routing every tier in parallel",
+                self._classifier_timeout,
+            )
+            return fallback_decision(), "classifier_timeout"
+        except Exception:
+            logger.warning("query classifier failed; routing every tier in parallel", exc_info=True)
+            return fallback_decision(), "classifier_error"

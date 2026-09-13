@@ -14,8 +14,9 @@ import yaml
 
 from evaluation.domain.routing_metrics import RoutingObservation, summarize
 from evaluation.infrastructure.routing_report import render_router_comparison
-from src.orchestration.domain.entities import Paradigm
-from src.orchestration.domain.paradigm_router import decide
+from src.orchestration.domain.entities import Paradigm, RoutingDecision
+from src.orchestration.domain.errors import ClassificationFailed
+from src.orchestration.domain.paradigm_router import decide, fallback_decision
 from src.orchestration.domain.ports import QueryClassifier
 from src.orchestration.infrastructure.lexical_query_classifier import LexicalQueryClassifier
 from src.orchestration.infrastructure.llm_query_classifier import LlmQueryClassifier
@@ -33,6 +34,17 @@ def _ms(started: float) -> float:
     return (time.perf_counter() - started) * 1000
 
 
+async def _classify(
+    classifier: QueryClassifier, query: str, embedding: list[float]
+) -> RoutingDecision:
+    # The same mapping UnifiedAnswerQuestion applies: a classification failure
+    # routes every tier in parallel. Counted separately via parse_failures.
+    try:
+        return decide(await classifier.score(query, embedding))
+    except ClassificationFailed:
+        return fallback_decision()
+
+
 async def _observe(
     classifier: QueryClassifier,
     queries: list[dict[str, Any]],
@@ -43,7 +55,7 @@ async def _observe(
         query = str(entry["query"])
         expected = frozenset(Paradigm(str(value)) for value in entry["expected"])
         started = time.perf_counter()
-        decision = decide(await classifier.score(query, embeddings[query]))
+        decision = await _classify(classifier, query, embeddings[query])
         observations.append(RoutingObservation(query, expected, decision, _ms(started)))
     return observations
 
@@ -69,7 +81,7 @@ async def _run() -> None:
         "llm (qwen3.5)": llm,
     }
     for classifier in classifiers.values():  # untimed warm-up: model load is not routing cost
-        await classifier.score("warm up", embeddings[queries[0]["query"]])
+        await _classify(classifier, "warm up", embeddings[queries[0]["query"]])
     llm.parse_failures = 0
 
     observations = {
@@ -85,8 +97,9 @@ async def _run() -> None:
         f"example queries verbatim. Latency is classify + decide only. Query embedding is paid "
         f"once per question by UnifiedAnswerQuestion whichever classifier runs, and is "
         f"measured separately here: p50 {embed_ms[len(embed_ms) // 2]:.2f}ms, max "
-        f"{embed_ms[-1]:.2f}ms (MiniLM, CPU). LLM classifier parse failures: "
-        f"{llm.parse_failures} of {len(queries)}."
+        f"{embed_ms[-1]:.2f}ms (MiniLM, CPU). A query with no signal, and any classification "
+        f"failure, routes to every paradigm in parallel (fallback_decision). LLM classifier "
+        f"parse failures: {llm.parse_failures} of {len(queries)}."
     )
     report = render_router_comparison(metrics, observations, notes)
     _REPORT.write_text(report, encoding="utf-8")

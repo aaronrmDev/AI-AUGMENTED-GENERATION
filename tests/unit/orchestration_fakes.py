@@ -137,26 +137,41 @@ class FakeCascadeTier(CascadeTier):
 
 
 class FakeQueryClassifier(QueryClassifier):
-    def __init__(self, scores: dict[Paradigm, float]) -> None:
+    def __init__(
+        self,
+        scores: dict[Paradigm, float],
+        delay_seconds: float = 0.0,
+        error: Exception | None = None,
+    ) -> None:
         self._scores = scores
+        self._delay = delay_seconds
+        self._error = error
         self.calls: list[tuple[str, list[float]]] = []
 
     async def score(self, query: str, query_embedding: list[float]) -> dict[Paradigm, float]:
         self.calls.append((query, query_embedding))
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        if self._error is not None:
+            raise self._error
         return dict(self._scores)
 
 
 class FakeSessionBudgetRecorder(SessionBudgetRecorder):
-    def __init__(self) -> None:
+    def __init__(self, error: Exception | None = None) -> None:
+        self._error = error
         self.records: list[
-            tuple[uuid.UUID, uuid.UUID, BudgetAllocation, frozenset[Paradigm]]
+            tuple[uuid.UUID, uuid.UUID, uuid.UUID, BudgetAllocation, frozenset[Paradigm]]
         ] = []
 
     async def record(
         self,
         tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
         session_id: uuid.UUID,
         allocation: BudgetAllocation,
         contributing: frozenset[Paradigm],
     ) -> None:
-        self.records.append((tenant_id, session_id, allocation, contributing))
+        if self._error is not None:
+            raise self._error
+        self.records.append((tenant_id, user_id, session_id, allocation, contributing))

@@ -17,8 +17,7 @@ VALID_HASH = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$aGFzaHZhbHVl"
 _CONTRIBUTING = frozenset({Paradigm.CAG, Paradigm.RAG})
 
 
-async def _create_user_and_session(db_session, tenant_id: uuid.UUID) -> uuid.UUID:
-    await set_tenant_context(db_session, tenant_id)
+async def _create_user(db_session, tenant_id: uuid.UUID) -> uuid.UUID:
     now = datetime.now(UTC)
     user_id = uuid.uuid4()
     await db_session.execute(
@@ -31,6 +30,12 @@ async def _create_user_and_session(db_session, tenant_id: uuid.UUID) -> uuid.UUI
             "tenant_id": tenant_id, "created_at": now, "updated_at": now,
         },
     )
+    return user_id
+
+
+async def _create_user_and_session(db_session, tenant_id: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
+    await set_tenant_context(db_session, tenant_id)
+    user_id = await _create_user(db_session, tenant_id)
     session_id = uuid.uuid4()
     await db_session.execute(
         text(
@@ -40,7 +45,7 @@ async def _create_user_and_session(db_session, tenant_id: uuid.UUID) -> uuid.UUI
         {"id": session_id, "user_id": user_id, "tenant_id": tenant_id, "title": "t"},
     )
     await db_session.commit()
-    return session_id
+    return user_id, session_id
 
 
 async def _stored_budget(db_session, tenant_id: uuid.UUID, session_id: uuid.UUID):
@@ -61,10 +66,12 @@ def _recorder(db_session, **kwargs) -> PostgresSessionBudgetRecorder:
 
 async def test_record_commits_the_allocation_into_the_real_sessions_row(db_session):
     tenant_id = uuid.uuid4()
-    session_id = await _create_user_and_session(db_session, tenant_id)
+    user_id, session_id = await _create_user_and_session(db_session, tenant_id)
     recorder = _recorder(db_session, clock=lambda: datetime(2026, 9, 13, 12, 0, tzinfo=UTC))
 
-    await recorder.record(tenant_id, session_id, allocate(128_000, _CONTRIBUTING), _CONTRIBUTING)
+    await recorder.record(
+        tenant_id, user_id, session_id, allocate(128_000, _CONTRIBUTING), _CONTRIBUTING
+    )
 
     # Read through db_session's own connection: only a committed write is visible here.
     assert await _stored_budget(db_session, tenant_id, session_id) == {
@@ -79,18 +86,39 @@ async def test_recording_under_another_tenant_is_refused_by_rls_and_leaves_the_r
     db_session,
 ):
     owner = uuid.uuid4()
-    session_id = await _create_user_and_session(db_session, owner)
+    user_id, session_id = await _create_user_and_session(db_session, owner)
 
     with pytest.raises(SessionNotFound):
         await _recorder(db_session).record(
-            uuid.uuid4(), session_id, allocate(128_000, _CONTRIBUTING), _CONTRIBUTING
+            uuid.uuid4(), user_id, session_id, allocate(128_000, _CONTRIBUTING), _CONTRIBUTING
         )
 
     assert await _stored_budget(db_session, owner, session_id) is None
 
 
+async def test_recording_as_another_user_in_the_same_tenant_is_refused_and_leaves_the_row_untouched(
+    db_session,
+):
+    tenant_id = uuid.uuid4()
+    _, session_id = await _create_user_and_session(db_session, tenant_id)
+    await set_tenant_context(db_session, tenant_id)
+    other_user = await _create_user(db_session, tenant_id)
+    await db_session.commit()
+
+    with pytest.raises(SessionNotFound):
+        await _recorder(db_session).record(
+            tenant_id, other_user, session_id, allocate(128_000, _CONTRIBUTING), _CONTRIBUTING
+        )
+
+    assert await _stored_budget(db_session, tenant_id, session_id) is None
+
+
 async def test_recording_for_a_session_that_does_not_exist_raises(db_session):
     with pytest.raises(SessionNotFound):
         await _recorder(db_session).record(
-            uuid.uuid4(), uuid.uuid4(), allocate(128_000, _CONTRIBUTING), _CONTRIBUTING
+            uuid.uuid4(),
+            uuid.uuid4(),
+            uuid.uuid4(),
+            allocate(128_000, _CONTRIBUTING),
+            _CONTRIBUTING,
         )

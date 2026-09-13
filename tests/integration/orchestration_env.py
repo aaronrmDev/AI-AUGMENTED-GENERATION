@@ -9,10 +9,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.identity.infrastructure.db import set_tenant_context
-from src.mag.application.queries.find_semantic_facts import FindSemanticFacts
+from evaluation.scenarios.orchestration_meta_layer_thresholds import (
+    CAG_HIT,
+    CAG_PARTIAL,
+    MAG_HIT,
+    MAG_PARTIAL,
+)
+from src.identity.infrastructure.db import get_sessionmaker, set_tenant_context
 from src.mag.domain.entities import SemanticMemory
 from src.mag.infrastructure.postgres_semantic_memory_repository import (
     PostgresSemanticMemoryRepository,
@@ -23,10 +28,15 @@ from src.orchestration.application.latency_cascade import LatencyCascade, TierTi
 from src.orchestration.domain.entities import Paradigm, TierRequest
 from src.orchestration.domain.ports import CascadeTier, QueryClassifier
 from src.orchestration.infrastructure.hf_frozen_cache import HFFrozenCache
+from src.orchestration.infrastructure.session_scoped_semantic_fact_search import (
+    SessionScopedSemanticFactSearch,
+)
 from src.rag.application.search_documents import SearchDocuments
 from src.rag.domain.entities import Chunk
 from src.rag.domain.ports import ChatModel, EmbeddingModel
 from src.rag.infrastructure.qdrant_vector_store import QdrantVectorStore
+
+__all__ = ["CAG_HIT", "CAG_PARTIAL", "MAG_HIT", "MAG_PARTIAL"]
 
 VALID_HASH = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$aGFzaHZhbHVl"
 
@@ -48,21 +58,6 @@ FACT_VALUE = "The user prefers expedited two-day shipping on every order."
 FRESHNESS_QUERY = "What changed in the return policy today?"
 POLICY_QUERY = "What is the return policy for unopened items?"
 PREFERENCE_QUERY = "What shipping speed did I say I prefer?"
-
-# Measured with real MiniLM on 2026-09-13 (plan Task 9, Step 1):
-#   CAG must hit:  freshness query vs POLICY_V1 0.5771, policy query vs POLICY_V1 0.7700
-#   CAG must miss: shipping query vs POLICY_V1 0.2833
-#   MAG must hit:  preference query vs FACT_VALUE 0.5202
-#   MAG must miss: policy query vs FACT_VALUE 0.3290
-# Hit = midpoint of the lowest must-hit and highest must-miss score, floored to
-# two decimals. Partial = midpoint of the must-miss score and the hit threshold.
-# That is a deliberate change from the plan's "must-miss minus 0.05", which
-# would have turned a clearly unrelated query into a PARTIAL match and put the
-# stale policy into its context.
-CAG_HIT = 0.43
-CAG_PARTIAL = 0.35
-MAG_HIT = 0.42
-MAG_PARTIAL = 0.37
 
 # Generous on purpose: these tests check routing correctness against real
 # stores. Latency against Concept 5's budgets is the evaluation runner's
@@ -94,13 +89,15 @@ class OrchestrationEnv:
     policy_document_id: uuid.UUID
     search: SearchDocuments
     warmed: CacheWarmedRetrieve
-    repository: PostgresSemanticMemoryRepository
+    # The tiers' and the recorder's own units of work come from here, never
+    # from the test's db_session.
+    sessionmaker: async_sessionmaker[AsyncSession]
 
     def tiers(self) -> list[CascadeTier]:
         return [
             CagTier(self.warmed, hit_threshold=CAG_HIT, partial_threshold=CAG_PARTIAL),
             MagTier(
-                FindSemanticFacts(self.repository),
+                SessionScopedSemanticFactSearch(self.sessionmaker),
                 hit_threshold=MAG_HIT,
                 partial_threshold=MAG_PARTIAL,
             ),
@@ -178,12 +175,8 @@ async def build_env(
     warmed = CacheWarmedRetrieve(embedding_model, cache, search, similarity_threshold=CAG_HIT)
     warmed.note_warmed(tenant_id, policy_id, POLICY_V1)
 
-    # set_tenant_context is transaction-local, and PostgresSemanticMemoryRepository
-    # (like every MAG repository) relies on its caller having set it -- so the
-    # MAG tier's reads in these tests run inside this same transaction.
     await set_tenant_context(db_session, tenant_id)
-    repository = PostgresSemanticMemoryRepository(db_session)
-    await repository.save(
+    await PostgresSemanticMemoryRepository(db_session).save(
         SemanticMemory(
             id=uuid.uuid4(),
             user_id=user_id,
@@ -193,4 +186,15 @@ async def build_env(
         ),
         tenant_id,
     )
-    return OrchestrationEnv(tenant_id, user_id, session_id, policy_id, search, warmed, repository)
+    # Committed, because the MAG tier reads through its own sessions and can
+    # only see committed rows.
+    await db_session.commit()
+    return OrchestrationEnv(
+        tenant_id,
+        user_id,
+        session_id,
+        policy_id,
+        search,
+        warmed,
+        get_sessionmaker(db_session.bind),
+    )

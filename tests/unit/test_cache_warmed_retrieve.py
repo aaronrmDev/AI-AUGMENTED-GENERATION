@@ -150,13 +150,12 @@ def test_best_warmed_match_reports_the_closest_document_with_no_threshold_applie
     embedder = FakeBagOfWordsEmbeddingModel()
     query_embedding = embedder.embed(_UNRELATED_QUERY)
 
-    match = retriever.best_warmed_match(_TENANT, query_embedding)
+    result = retriever.best_warmed_match(_TENANT, query_embedding)
 
-    assert match is not None
-    result, score = match
+    assert result is not None
     assert result.document_id == document_id
     assert result.content == _WARMED_CONTENT
-    assert score == pytest.approx(
+    assert result.score == pytest.approx(
         cosine_similarity(query_embedding, embedder.embed(_WARMED_CONTENT))
     )
 
