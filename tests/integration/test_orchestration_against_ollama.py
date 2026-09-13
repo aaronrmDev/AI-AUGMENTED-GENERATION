@@ -59,4 +59,11 @@ async def test_the_unified_pipeline_answers_a_freshness_question_from_the_curren
     )
     result = await use_case.execute(env.tenant_id, env.user_id, env.session_id, FRESHNESS_QUERY)
     print(f"answer: {result.answer!r}")
-    assert "45" in result.answer or "forty-five" in result.answer.lower()
+    # What the pipeline controls: only the current document reached the model.
+    assert result.sources
+    assert all(source.paradigm is Paradigm.RAG for source in result.sources)
+    assert any("forty-five days" in source.content for source in result.sources)
+    # What the model then did with it: no superseded value, and the current one stated.
+    answer = result.answer.lower()
+    assert "thirty" not in answer and "30" not in answer
+    assert "45" in answer or "forty-five" in answer

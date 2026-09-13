@@ -44,9 +44,13 @@ POLICY_V1 = (
     "Our return policy allows customers to return unopened items within thirty days "
     "of purchase for a full refund."
 )
+# The current policy never mentions the superseded value. An earlier version
+# ended "The window changed from thirty days today.", and the live model
+# answered a freshness question by quoting exactly that sentence -- correct
+# context, an answer naming only the old number.
 POLICY_V2 = (
     "Our return policy allows customers to return unopened items within forty-five days "
-    "of purchase for a full refund. The window changed from thirty days today."
+    "of purchase for a full refund. The return window was extended to forty-five days today."
 )
 SHIPPING = (
     "Standard shipping takes five to seven business days. Expedited shipping arrives "

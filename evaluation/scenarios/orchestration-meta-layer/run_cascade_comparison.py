@@ -113,8 +113,10 @@ _WARRANTY = "Every product carries a two-year limited warranty covering manufact
 # (text Qdrant holds now, text frozen into CAG or None when the document is RAG-only)
 _DOCUMENTS: list[tuple[str, str | None]] = [
     (
+        # Never mentions the superseded thirty days, so an answer drawn from the
+        # current document cannot name only the old value (see orchestration_env.py).
         "Our return policy allows customers to return unopened items within forty-five days "
-        "of purchase for a full refund. The window changed from thirty days today.",
+        "of purchase for a full refund. The return window was extended to forty-five days today.",
         "Our return policy allows customers to return unopened items within thirty days of "
         "purchase for a full refund.",
     ),

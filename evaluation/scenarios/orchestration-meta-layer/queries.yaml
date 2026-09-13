@@ -4,12 +4,12 @@ questions:
     success_criterion: States forty-five days (the current policy), not thirty.
     gold_passage: >-
       Our return policy allows customers to return unopened items within forty-five days
-      of purchase for a full refund. The window changed from thirty days today.
+      of purchase for a full refund. The return window was extended to forty-five days today.
   - question: What changed in the return policy today?
     success_criterion: States the window changed to forty-five days.
     gold_passage: >-
       Our return policy allows customers to return unopened items within forty-five days
-      of purchase for a full refund. The window changed from thirty days today.
+      of purchase for a full refund. The return window was extended to forty-five days today.
   - question: How long does standard shipping take?
     success_criterion: States five to seven business days.
     gold_passage: >-
