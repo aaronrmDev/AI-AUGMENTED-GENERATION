@@ -35,8 +35,17 @@ def redis_container():
 
 @pytest.fixture(scope="session")
 def database_url(postgres_container: PostgresContainer) -> str:
-    url = postgres_container.get_connection_url()
-    return url.replace("postgresql+psycopg2", "postgresql+asyncpg")
+    # 127.0.0.1 explicitly, for the same Windows reason documented on redis_url
+    # and qdrant_url below: get_connection_url() uses "localhost", which resolves
+    # to ::1 as well as 127.0.0.1 here. Measured with raw asyncpg on 2026-09-13
+    # (orchestration meta-layer batch): connecting via "localhost" timed out
+    # after 20s while 127.0.0.1 connected in ~40ms. Pooled connections usually
+    # masked it; it surfaced when a cancelled query's connection was invalidated
+    # and the very next request had to open a fresh one.
+    url = make_url(postgres_container.get_connection_url()).set(
+        drivername="postgresql+asyncpg", host="127.0.0.1"
+    )
+    return url.render_as_string(hide_password=False)
 
 
 @pytest.fixture(scope="session")
