@@ -67,6 +67,14 @@ class MagTier(CascadeTier):
     which is Concept 5's "if MAG has stale state -> invalidate". Like every
     MAG repository, the one behind find_semantic_facts relies on its caller
     having set the transaction-local tenant context (set_tenant_context).
+
+    The cascade's timeout can cancel this tier's query mid-flight, and
+    SQLAlchemy treats that CancelledError as a disconnect: it terminates the
+    asyncpg connection, after which rollback() and close() on the session
+    both raise InterfaceError. A caller that sees a MAG TIMEOUT or ERROR must
+    invalidate() that session before using it again, and nothing else in the
+    same request should write through it (measured in
+    tests/integration/test_orchestration_meta_layer.py).
     """
 
     def __init__(
