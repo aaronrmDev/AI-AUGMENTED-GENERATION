@@ -1,6 +1,9 @@
 import uuid
 
+import pytest
+
 from src.orchestration.application.cache_warmed_retrieve import CacheWarmedRetrieve
+from src.orchestration.domain.similarity import cosine_similarity
 from src.rag.domain.entities import SearchResult
 from tests.unit.orchestration_fakes import FakeBagOfWordsEmbeddingModel, FakeFrozenCache
 from tests.unit.rag_fakes import FakeRetriever
@@ -123,3 +126,56 @@ async def test_stats_accumulate_correctly_across_a_mixed_sequence():
     await retriever.execute(_TENANT, _MATCHING_QUERY, top_k=5)  # hit
 
     assert retriever.stats() == (2, 1)
+
+
+class _CountingEmbedder(FakeBagOfWordsEmbeddingModel):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def embed(self, text: str) -> list[float]:
+        self.calls += 1
+        return super().embed(text)
+
+
+def _warmed() -> tuple[CacheWarmedRetrieve, FakeFrozenCache, uuid.UUID]:
+    retriever, cache, _ = _build()
+    document_id = uuid.uuid4()
+    cache.preload(_TENANT, document_id, _WARMED_CONTENT)
+    retriever.note_warmed(_TENANT, document_id, _WARMED_CONTENT)
+    return retriever, cache, document_id
+
+
+def test_best_warmed_match_reports_the_closest_document_with_no_threshold_applied():
+    retriever, _, document_id = _warmed()
+    embedder = FakeBagOfWordsEmbeddingModel()
+    query_embedding = embedder.embed(_UNRELATED_QUERY)
+
+    match = retriever.best_warmed_match(_TENANT, query_embedding)
+
+    assert match is not None
+    result, score = match
+    assert result.document_id == document_id
+    assert result.content == _WARMED_CONTENT
+    assert score == pytest.approx(
+        cosine_similarity(query_embedding, embedder.embed(_WARMED_CONTENT))
+    )
+
+
+def test_best_warmed_match_is_scoped_to_the_tenant():
+    retriever, _, _ = _warmed()
+    embedding = FakeBagOfWordsEmbeddingModel().embed(_WARMED_CONTENT)
+    assert retriever.best_warmed_match(uuid.uuid4(), embedding) is None
+
+
+def test_best_warmed_match_ignores_a_document_evicted_from_the_frozen_cache():
+    retriever, cache, document_id = _warmed()
+    cache.evict(_TENANT, document_id)
+    embedding = FakeBagOfWordsEmbeddingModel().embed(_WARMED_CONTENT)
+    assert retriever.best_warmed_match(_TENANT, embedding) is None
+
+
+async def test_execute_does_not_embed_the_query_when_nothing_is_warmed_for_the_tenant():
+    embedder = _CountingEmbedder()
+    retriever = CacheWarmedRetrieve(embedder, FakeFrozenCache(), FakeRetriever(), _THRESHOLD)
+    await retriever.execute(_TENANT, _MATCHING_QUERY, top_k=5)
+    assert embedder.calls == 0

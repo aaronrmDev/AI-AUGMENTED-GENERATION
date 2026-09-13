@@ -1,21 +1,12 @@
-import math
 import uuid
 
 from src.orchestration.domain.ports import FrozenCache
+from src.orchestration.domain.similarity import cosine_similarity
 from src.orchestration.domain.sync_mixer import content_hash
 from src.rag.domain.entities import SearchResult
 from src.rag.domain.ports import EmbeddingModel, Retriever
 
 _Key = tuple[uuid.UUID, uuid.UUID]  # (tenant_id, document_id)
-
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(y * y for y in b))
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return dot / (norm_a * norm_b)
 
 
 class CacheWarmedRetrieve(Retriever):
@@ -49,6 +40,11 @@ class CacheWarmedRetrieve(Retriever):
       match tenant B's query against tenant A's warmed content and return
       it, a cross-tenant data leak the moment this module gets wired into
       a real endpoint.
+
+    best_warmed_match is public so the orchestration cascade's CagTier can
+    reuse the same confirmed matching with its own hit/partial thresholds
+    and a query embedding computed once upstream, instead of a second copy
+    of this logic.
     """
 
     def __init__(
@@ -77,41 +73,43 @@ class CacheWarmedRetrieve(Retriever):
         return self._hits, self._misses
 
     async def execute(self, tenant_id: uuid.UUID, query: str, top_k: int) -> list[SearchResult]:
-        hit = self._best_warmed_match(tenant_id, query)
-        if hit is not None:
-            document_id, score = hit
-            local_content = self._warmed_content[(tenant_id, document_id)]
-            cached_hit = self._frozen_cache.lookup(tenant_id, document_id)
-            if cached_hit is not None and cached_hit.content_hash == content_hash(local_content):
+        # Embedding the query only when this tenant has something warmed
+        # keeps a cold tenant's queries from paying for a lookup that
+        # cannot succeed.
+        if self._has_warmed(tenant_id):
+            match = self.best_warmed_match(tenant_id, self._embedder.embed(query))
+            if match is not None and match[1] >= self._threshold:
                 self._hits += 1
-                return [
-                    SearchResult(
-                        document_id=document_id,
-                        chunk_id=document_id,
-                        content=local_content,
-                        score=score,
-                    )
-                ]
+                return [match[0]]
 
         self._misses += 1
         return await self._fallback.execute(tenant_id, query, top_k)
 
-    def _best_warmed_match(
-        self, tenant_id: uuid.UUID, query: str
-    ) -> tuple[uuid.UUID, float] | None:
-        candidates = {
-            document_id: embedding
-            for (tid, document_id), embedding in self._warmed_embeddings.items()
-            if tid == tenant_id
-        }
-        if not candidates:
+    def best_warmed_match(
+        self, tenant_id: uuid.UUID, query_embedding: list[float]
+    ) -> tuple[SearchResult, float] | None:
+        """The closest warmed document for this tenant and its similarity,
+        confirmed against FrozenCache's real content_hash, with no threshold
+        applied -- the caller decides what score counts."""
+        best: tuple[uuid.UUID, float] | None = None
+        for (tid, document_id), embedding in self._warmed_embeddings.items():
+            if tid != tenant_id:
+                continue
+            score = cosine_similarity(query_embedding, embedding)
+            if best is None or score > best[1]:
+                best = (document_id, score)
+        if best is None:
             return None
-        query_embedding = self._embedder.embed(query)
-        best_document_id, best_score = None, -1.0
-        for document_id, embedding in candidates.items():
-            score = _cosine_similarity(query_embedding, embedding)
-            if score > best_score:
-                best_document_id, best_score = document_id, score
-        if best_document_id is None or best_score < self._threshold:
+
+        document_id, score = best
+        local_content = self._warmed_content[(tenant_id, document_id)]
+        cached_hit = self._frozen_cache.lookup(tenant_id, document_id)
+        if cached_hit is None or cached_hit.content_hash != content_hash(local_content):
             return None
-        return best_document_id, best_score
+        result = SearchResult(
+            document_id=document_id, chunk_id=document_id, content=local_content, score=score
+        )
+        return result, score
+
+    def _has_warmed(self, tenant_id: uuid.UUID) -> bool:
+        return any(tid == tenant_id for tid, _ in self._warmed_embeddings)
