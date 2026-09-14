@@ -37,3 +37,6 @@ class RedisRefreshTokenStore(RefreshTokenStore):
 
     async def delete(self, token_id: uuid.UUID) -> None:
         await self._client.delete(f"{_KEY_PREFIX}{token_id}")
+
+    async def aclose(self) -> None:
+        await self._client.aclose()

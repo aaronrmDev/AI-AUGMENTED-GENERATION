@@ -36,12 +36,43 @@ def get_token_issuer() -> JWTTokenIssuer:
     return JWTTokenIssuer(secret_key=os.environ["JWT_SECRET_KEY"])
 
 
+# One Redis client per process for each of these. redis.from_url opens a connection pool,
+# and building one per request opened a pool on every rate-limited request that nothing
+# ever closed.
+@functools.cache
 def get_refresh_token_store() -> RedisRefreshTokenStore:
     return RedisRefreshTokenStore(os.environ["REDIS_URL"])
 
 
+@functools.cache
 def get_rate_limiter() -> RedisRateLimiter:
     return RedisRateLimiter(os.environ["REDIS_URL"])
+
+
+async def close_redis_clients() -> None:
+    """Close the process's shared Redis clients, so the next call builds fresh ones.
+
+    An asyncio Redis connection belongs to the event loop that opened it, so the app calls
+    this on shutdown, on the loop that served its requests. Both clients are forgotten
+    before either is closed, so a close that fails can't leave a dead client cached for
+    the next call. Both are attempted, and the first failure is raised afterwards.
+    """
+    clients: list[RedisRateLimiter | RedisRefreshTokenStore] = []
+    if get_rate_limiter.cache_info().currsize:
+        clients.append(get_rate_limiter())
+    if get_refresh_token_store.cache_info().currsize:
+        clients.append(get_refresh_token_store())
+    get_rate_limiter.cache_clear()
+    get_refresh_token_store.cache_clear()
+
+    failures: list[Exception] = []
+    for client in clients:
+        try:
+            await client.aclose()
+        except Exception as exc:
+            failures.append(exc)
+    if failures:
+        raise failures[0]
 
 
 async def get_raw_db_session() -> AsyncGenerator[AsyncSession, None]:

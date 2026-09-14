@@ -29,9 +29,10 @@ async def ensure_qdrant_collection() -> None:
 
 
 @app.on_event("shutdown")
-async def drain_unified_cascade() -> None:
-    from src.api.dependencies import get_unified_pipeline
+async def release_process_resources() -> None:
+    from src.api.dependencies import close_redis_clients, get_unified_pipeline
 
     # Only a pipeline some request built has anything to drain; don't build one now.
     if get_unified_pipeline.cache_info().currsize:
         await get_unified_pipeline().cascade.drain()
+    await close_redis_clients()
