@@ -194,3 +194,16 @@ async def test_tenant_isolation_policy_exists_on_both_data_source_tables(db_sess
         )
     )
     assert {row.tablename for row in result} == {"data_sources", "data_source_versions"}
+
+
+async def test_sessions_are_indexed_by_owner_newest_first(db_session):
+    result = await db_session.execute(
+        text(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE tablename = 'sessions' AND indexname = 'ix_sessions_user_id_created_at'"
+        )
+    )
+    assert result.scalar_one() == (
+        "CREATE INDEX ix_sessions_user_id_created_at ON public.sessions "
+        "USING btree (user_id, created_at DESC)"
+    )
