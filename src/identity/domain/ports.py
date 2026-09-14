@@ -5,7 +5,13 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
 
-from src.identity.domain.entities import PasswordHash, RefreshToken, TokenPair, User
+from src.identity.domain.entities import (
+    ChatSession,
+    PasswordHash,
+    RefreshToken,
+    TokenPair,
+    User,
+)
 
 
 class PasswordHasher(ABC):
@@ -60,4 +66,26 @@ class RateLimiter(ABC):
     @abstractmethod
     async def check(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int, datetime]:
         """Returns (allowed, remaining, reset_at)."""
+        ...
+
+
+class ChatSessionRepository(ABC):
+    """Every method is scoped to one tenant and one owning user: a session another user
+    owns is simply not found, exactly like a session that doesn't exist."""
+
+    @abstractmethod
+    async def create(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID, title: str | None
+    ) -> ChatSession: ...
+
+    @abstractmethod
+    async def find_owned(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID, session_id: uuid.UUID
+    ) -> ChatSession | None: ...
+
+    @abstractmethod
+    async def list_owned(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID, limit: int
+    ) -> list[ChatSession]:
+        """Newest first."""
         ...
