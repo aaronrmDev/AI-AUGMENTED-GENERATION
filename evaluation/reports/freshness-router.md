@@ -7,14 +7,16 @@
 Batch A built the three meta-layer components that decide something per query. This batch builds the fifth and last: Concept 9's Freshness-Aware Data Router, which decides once per data source, at ingestion, which paradigm should hold that data at all.
 
 - **The rules** are pure functions in `src/orchestration/domain/freshness_router.py`. A declared change interval under one day routes RAG only; a day or longer routes to a CAG pre-load with RAG as backup; a user-scoped source routes to MAG. A cached copy's TTL is half the interval. Three changes inside three days demote a cached source, and seven quiet days promote a RAG-only one.
-- **`IngestDataSource`** applies the routing to each delivered version. A change replaces RAG's copy, and evicts a cached copy at once.
+- **`IngestDataSource`** applies the routing to each delivered version. A change replaces RAG's copy, and evicts a cached copy at once. The change stays marked pending until every effect and the save have landed, so a failure part-way is re-applied by the next ingestion.
 - **`RefreshCachedSources`** is the batch pre-load. It pre-loads only content an ingestion confirmed within its TTL.
 - **`ReviewSourceFreshness`** re-learns each tenant source's interval from its version history, and migrates the source when it drifts.
 
+The refresh and the review write only while the source still has the hash they read and no change is pending, so neither can cache or migrate a source that changed under it.
+
 Existing code changed in three places:
 
-- `CacheWarmedRetrieve.forget`, so an evicted document stops shadowing valid ones;
-- concrete `delete_document` methods on `QdrantVectorStore` and `PostgresDocumentRepository`, so a replaced source leaves no superseded chunk in either store;
+- `CacheWarmedRetrieve`: `forget` drops a warmed memo, and `best_warmed_match` falls through to the best candidate the cache still confirms, so an evicted or expired document never shadows valid ones;
+- concrete `delete_document` methods on `QdrantVectorStore` and `PostgresDocumentRepository`, so a replaced source leaves no superseded chunk in either store. Qdrant's can keep named chunks, so a replacement is upserted before the old version is deleted;
 - migration 0006, for `data_sources` and `data_source_versions`, with RLS from creation.
 
 The shared RAG ports are unchanged.
@@ -46,7 +48,9 @@ Four arms place the same sources:
 
 The claim holds for a cache that is only refreshed in batches. The price feed served its previous hour's price on every probe except the one that fell right after the nightly re-warm. It doesn't hold as stated for a cache that is invalidated when a source changes: that arm never served superseded text either, with no routing at all.
 
-The honest reading, then, is that invalidation removes staleness, and routing decides whether caching a source is worth doing. That cost appears under pre-load churn, below. No arm ever produced a mixed context, because a source's RAG copy is replaced in place, so old and new text never sit side by side.
+That result depends on a condition this simulation makes perfect: the router hears of every change in the hour it happens, because every source is ingested hourly and every change lands on the hour. With real ingestion lag, an invalidate-on-change cache keeps serving superseded text until the change arrives, as a batch-refreshed cache does until its refresh. The honest reading, then, is that invalidation removes the staleness a cache adds beyond ingestion lag, and routing decides whether caching a source is worth doing. That cost appears under pre-load churn, below.
+
+No arm ever produced a mixed context. Two things guarantee that here. A source's RAG copy is replaced in place, so old and new text never sit side by side in RAG. And the cascade stops at the first tier that hits, so a context built from a CAG hit never also carries RAG's copy.
 
 ## Claim 2: stable data in RAG wastes latency
 
@@ -70,14 +74,16 @@ Probes by one user whose context contained another user's size preference:
 |---|---|---|---|
 | 241 of 241 | 241 of 241 | 241 of 241 | 0 of 241 |
 
-This is the batch's largest measured effect, and Concept 9 doesn't mention it. It argues for MAG from mutability. Any tenant-wide placement of a user's personal fact, in the RAG index or the frozen cache, put that fact in front of every other user of the tenant, on every probe. Placed in MAG, it reached its owner on all 241 probes, current throughout, including after its day-15 change, and it never reached the other user.
+This is the batch's largest effect, and Concept 9 doesn't mention it. It argues for MAG from mutability. Any tenant-wide placement of a user's personal fact, in the RAG index or the frozen cache, put that fact into every other user's assembled context, on every probe. Placed in MAG, the fact reached its owner on all 241 probes, current throughout, including after its day-15 change, and it never reached the other user.
+
+The 241 of 241 is structural rather than a retrieval finding. Calibration guarantees that the size question retrieves the size source from whichever store holds it, and a tenant-wide store holds it for every user. What the measurement adds is that nothing between ingestion and the assembled context stopped it.
 
 ## Claim 4: placements must migrate when change patterns shift
 
-| Source | Migration | Pattern shift | Migrated | Lag |
-|---|---|---|---|---|
-| Catalog | cached → RAG only | day 10, 00:00 | day 11, 00:00 | 24 h |
-| Flash sale | RAG only → cached | day 5, 00:00 | day 12, 00:00 | 168 h |
+| Source | Migration | Pattern shift | Migrated | Lag | Pre-loads before | Pre-loads after |
+|---|---|---|---|---|---|---|
+| Catalog | cached → RAG only | day 10, 00:00 | day 11, 00:00 | 24 h | 10 | 0 |
+| Flash sale | RAG only → cached | day 5, 00:00 | day 12, 00:00 | 168 h | 0 | 1 |
 
 Both lags are what the rules and the review cadence allow, not detection delays:
 
@@ -103,13 +109,15 @@ The planned "never-served pre-loads" column reads 0 for every arm and source. A 
 
 | Arm and source | Pre-loads | Probes served from CAG | Per pre-load |
 |---|---|---|---|
-| Invalidate on change, hourly price feed | 31 | about 31 (13% of 241) | about 1 |
-| Invalidate on change, flash sale | 31 | about 31 (13%) | about 1 |
+| Invalidate on change, hourly price feed | 31 | 31 (13% of 241) | 1 |
+| Invalidate on change, flash sale | 31 | 31 (13%) | 1 |
 | Freshness-aware, return policy | 2 | 236 (98%) | 118 |
 | Freshness-aware, shipping guide | 1 | 241 (100%) | 241 |
-| Freshness-aware, flash sale | 1 | about 152 (63%) | about 152 |
+| Freshness-aware, flash sale | 1 | 153 (63%), every probe from day 12 on | 153 |
 
-Invalidating on change kept the volatile sources fresh by paying for a pre-load every night that one hourly change threw away. On the real GPU cache this CPU proxy stands in for, a pre-load is a full prefill. Routing the volatile feed away from CAG avoided every one of those.
+Every invalidate-on-change pre-load of those two sources served exactly one probe, the midnight probe right after the refresh, and then expired. Invalidation isn't what ended them. Both sources declare a one-hour interval, so their TTL is 30 minutes. Each entry expired at 00:30, before the 01:00 ingestion could change or confirm it, and a confirmation can't renew an entry that's already gone. The flash sale shows it plainly: it stopped changing on day 5, and still served one probe per pre-load for the rest of the month.
+
+This churn comes from caching a source whose TTL is shorter than its ingestion cadence (see "Known limits of the rules"). On the real GPU cache this CPU proxy stands in for, each of those pre-loads is a full prefill. Freshness-aware routing kept both sources off the cache while they changed hourly. Once the flash sale went quiet, one promotion and one pre-load served its 153 remaining probes.
 
 ## Concept 9's spectrum, routed
 
@@ -124,6 +132,16 @@ Seven of Concept 9's eight data types route where the source puts them. The exce
   The catalog, the flash sale, and the warranty moved to distinct topics (kitchen blenders, garden hoses, a bicycle frame). Every question then scored at least 0.52 against its own source and at most 0.32 against any other. Batch A's thresholds were not changed.
 - **Interval parameters.** A schema test first bound intervals as strings through a cast, and asyncpg rejected them before Postgres checked any constraint. The test binds `timedelta` values now.
 - **End-to-end tests held first time.** All six passed on their first run, with the planned questions and Batch A's thresholds.
+- **The final review.** An independent review of the whole branch found six important issues, each fixed test-first before the merge:
+  - Races. The refresh and the review acted on snapshots that a concurrent ingestion could supersede.
+  - Partial failure. An ingestion that evicted the cache and then failed to save let the next refresh re-cache superseded text.
+  - Shadowing. An expired warmed memo hid live documents scoring below it.
+  - Report accuracy. Two conclusions in this report were overstated: the flash sale's pre-load churn was attributed to changes, and invalidation's zero staleness was stated without its zero-lag condition.
+  - Personal text. A MAG source's text was copied into the version history.
+  - User deletes. The user foreign key had no delete rule.
+
+  The first three are fixed by the pending marker, the conditional writes, and the fall-through described above. The report's two conclusions are corrected here, MAG versions now carry no text, and user deletes cascade. The plan's execution notes record each fix, with the minor findings fixed alongside them.
+- **Undisclosed departures.** The same review found two plan departures the report hadn't named. Every source is ingested hourly rather than on its own schedule, so confirmations exist to anchor a TTL. And the migration table first lacked its planned pre-load columns, which it now has.
 
 ## What these measurements cannot show
 
@@ -131,9 +149,17 @@ Seven of Concept 9's eight data types route where the source puts them. The exce
 - **A simulated clock.** Nothing here measures wall-clock latency, concurrency, or scheduling. Tier latency is cited from Batch A.
 - **Contexts, not answers.** Staleness and exposure are read from the assembled context. Whether a model would repeat the stale or foreign text wasn't measured, although Batch A's comparison showed qwen3.5 reproducing a stale cached value when that was all it was given.
 - **A CPU cache proxy.** The frozen cache is distilgpt2 on CPU, so the cost of a pre-load is argued from what a prefill is, not measured on a GPU.
+- **CAG share by paradigm, not by document.** A probe counts as served from CAG when its context holds any CAG item. The check doesn't confirm that the item is the probed source's own document. Calibration keeps every question well below the hit threshold against other sources, which makes a cross-source CAG hit unlikely, but the share isn't verified document by document.
+- **No concurrency or failure.** Ingestion, refresh, review, and probes run one after another, and no effect fails. The pending marker and the conditional writes that protect against races and partial failures are covered by unit and integration tests, not by this run.
 - **One probe cadence.** Probes every 3 hours, aligned with a midnight refresh, is why the never-served column reads 0.
-- **One unexplained retrieval miss.** One of 241 RAG-only flash-sale probes held neither the current nor any superseded text. Every other RAG probe found its source. A plausible cause, which this run doesn't verify, is approximate vector search recall under this run's churn of tens of thousands of deletes and re-inserts in one collection.
+- **One retrieval miss that didn't recur.** In the first full run, one of 241 RAG-only flash-sale probes held neither the current nor any superseded text. In the rerun after the final review, every RAG probe found its source, and every other number reproduced exactly. The rerun also changed how Qdrant replaces a document (upsert first, then delete), so it can't separate chance from that change. A plausible cause, which neither run verifies, is approximate vector search recall under tens of thousands of deletes and re-inserts in one collection.
 - **Default thresholds.** The one-day boundary, the 3-change and 7-quiet-day hysteresis, and the 0.5 TTL factor are disclosed defaults, not tuned against real change data.
+
+## Known limits of the rules
+
+- **A confirmation renews only a live entry.** A source whose TTL is shorter than its ingestion cadence drops out of the cache between confirmations, and returns only at the next refresh after one. With hourly ingestion, any declared interval under two hours has that problem.
+- **A burst of corrections shortens a stable source's TTL for good.** Three changes inside three days demote a source declared at, say, 60 days. Seven quiet days later it is promoted with a re-learned interval of about seven days, and its TTL drops from 30 days to about 3.5. Nothing lengthens a cached source's interval again.
+- **`cached_until` is a record, not a control.** The cache enforces its own expiry; the column exists for operators and the measurement runner.
 
 ## What this batch does not do
 
@@ -145,7 +171,7 @@ Seven of Concept 9's eight data types route where the source puts them. The exce
 
 ## The numbers
 
-- **Unit tests:** 1,037 on `develop` before this batch, 1,109 after, across 9 new unit test files (148 in all).
-- **Integration tests:** 239 before, 260 after, across 4 new integration test files and 2 new tests in `test_migration.py` (62 files in all). The full integration run passed 252 and skipped 8.
-- **Skips:** all 8 are the pre-existing vLLM tests, which need this project's own GPU machine.
+- **Unit tests:** 1,037 on `develop` before this batch, 1,123 after, across 9 new unit test files (148 in all). The final review's fixes account for 14 of the new tests.
+- **Integration tests:** 239 before, 265 after, across 4 new integration test files and 2 new tests in `test_migration.py` (62 files in all). The final review's fixes account for 5 of the new tests. The full integration run after those fixes passed 257 and skipped 8.
+- **Skips:** all 8 are the pre-existing vLLM tests, which need this project's own GPU machine. The two Ollama tests ran, because a local Ollama model was available.
 - **Static checks:** `mypy` in strict mode reports no issues across the 223 source files in `src/`. `ruff` is clean on `src/` and on every file this batch created or changed.

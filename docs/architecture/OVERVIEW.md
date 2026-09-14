@@ -47,17 +47,17 @@ RAG's index updates the instant a source document changes; CAG's cache invalidat
 
 This is a different decision from the Paradigm Router's, and it happens at a different time: the Paradigm Router decides, per query, which paradigm to consult; the Freshness-Aware Data Router decides, per data source, which paradigm should hold that data at all, based on how fast it changes. Stock prices and live scores change by the second and are "too volatile for cache," so they go to RAG only; company policies and manuals change monthly or quarterly and are "stable enough to pre-load," so they go to CAG; user session state changes every turn and "must be mutable per interaction," so it goes to MAG (`docs/inputs/concepts/unified_rag_cag_mag_architecture.md`, Concept 9). This is a system-wide policy decision made once per data source, not a per-request routing decision, which is why it belongs at the orchestration layer rather than inside any single paradigm — a paradigm layer only sees the data it's already been given; deciding where new data should land in the first place requires seeing across all three. In this project the router's rules live in `src/orchestration/domain/freshness_router.py`, and three use cases apply them:
 
-- **`IngestDataSource`** routes a source's first version by its declared change interval: under one day to RAG only, a day or longer to a CAG pre-load with RAG as backup, and anything user-scoped to MAG. On every later version it replaces RAG's copy and evicts the stale CAG entry at once.
+- **`IngestDataSource`** routes a source's first version by its declared change interval: under one day to RAG only, a day or longer to a CAG pre-load with RAG as backup, and anything user-scoped to MAG. On every later version it replaces RAG's copy and evicts the stale CAG entry at once. The change stays marked pending until all of that has landed, and the refresh and review below write only while nothing is pending, so a failed or concurrent step can't re-cache superseded text.
 - **`RefreshCachedSources`** is the batch pre-load. It trusts a cached copy for half the source's expected change interval after the last ingestion that confirmed it. `ExpiringFrozenCache` enforces that expiry at lookup, so an expired entry falls through to RAG without waiting for a sweep.
 - **`ReviewSourceFreshness`** re-learns each tenant source's interval from its version history in `data_sources` and `data_source_versions` (`docs/database/DATABASE.md`). It demotes a cached source after three changes inside three days, and promotes a RAG-only source after seven quiet days.
 
 Measured over 30 simulated days against real stores (`evaluation/reports/freshness-router.md`):
 
-- **Staleness.** Freshness-aware placement never put superseded text in front of the model. Caching every source with only a nightly refresh did so on 87% of an hourly price feed's probes.
+- **Staleness.** Freshness-aware placement never assembled a context holding superseded text. Caching every source with only a nightly refresh did so on 87% of an hourly price feed's probes.
 - **Stable sources.** They still answered from CAG: 98% of return-policy probes.
 - **Personal data.** Placed in MAG, a user's personal fact never reached another user of the same tenant. Every tenant-wide placement exposed it on all 241 probes.
 
-Invalidating cached copies on every change also removed staleness, with no routing at all. There, routing's measured benefit was fewer wasted pre-loads, and isolation of personal data.
+Invalidating cached copies on every change also removed staleness, with no routing at all, but only because the simulation delivers each change to the router in the hour it happens. With real ingestion lag, a cached copy serves superseded text until the change arrives. Against that baseline, routing's measured benefit was fewer wasted pre-loads, and isolation of personal data.
 
 ## Slicing the context window: the budget numbers and why they're shaped this way
 

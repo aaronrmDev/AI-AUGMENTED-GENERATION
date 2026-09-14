@@ -37,7 +37,7 @@ Simulated clock from 2026-01-01 (day 1) for 30 days. Every source is ingested ho
 | RAG only | return-policy | 241 | 0 | 0 | 241 | 0 | 0% | 0% | 0 | 0 | 0 |
 | RAG only | blender-catalog | 241 | 0 | 0 | 241 | 0 | 0% | 0% | 0 | 0 | 0 |
 | RAG only | shipping-guide | 241 | 0 | 0 | 241 | 0 | 0% | 0% | 0 | 0 | 0 |
-| RAG only | flash-sale | 241 | 0 | 0 | 240 | 1 | 0% | 0% | 0 | 0 | 0 |
+| RAG only | flash-sale | 241 | 0 | 0 | 241 | 0 | 0% | 0% | 0 | 0 | 0 |
 | RAG only | size-preference (owner) | 241 | 0 | 0 | 241 | 0 | 0% | 0% | 0 | 0 | 0 |
 | RAG only | size-preference (other user) | 241 | 0 | 0 | 241 | 0 | 0% | 0% | 0 | 0 | 241 |
 | freshness-aware | backpack-price | 241 | 0 | 0 | 241 | 0 | 0% | 0% | 0 | 0 | 0 |
@@ -50,10 +50,10 @@ Simulated clock from 2026-01-01 (day 1) for 30 days. Every source is ingested ho
 
 ## Migration lag
 
-| Source | Migration | Pattern shift | Migrated | Lag |
-|---|---|---|---|---|
-| blender-catalog | cag_with_rag_backup → rag_only | 2026-01-10 00:00 | 2026-01-11 00:00 | 24.0 h |
-| flash-sale | rag_only → cag_with_rag_backup | 2026-01-05 00:00 | 2026-01-12 00:00 | 168.0 h |
+| Source | Migration | Pattern shift | Migrated | Lag | Pre-loads before | Pre-loads after |
+|---|---|---|---|---|---|---|
+| blender-catalog | cag_with_rag_backup → rag_only | 2026-01-10 00:00 | 2026-01-11 00:00 | 24.0 h | 10 | 0 |
+| flash-sale | rag_only → cag_with_rag_backup | 2026-01-05 00:00 | 2026-01-12 00:00 | 168.0 h | 0 | 1 |
 
 ## TTL bound on a silently changed cached source
 
