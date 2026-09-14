@@ -4030,3 +4030,19 @@ Invoke `superpowers:finishing-a-development-branch` and take the standing path:
 3. Remove the worktree and delete the branch.
 4. Close this batch's GitHub issues with a comment naming the merge commit and the report.
 5. Close Story #155, and close Epic #150 once #168 is its only open child; if #168 is still open, leave the epic open with a comment saying why.
+
+## Execution notes
+
+Where executing this plan changed what it says, the change was kept and recorded here rather than bent back to match the text above.
+
+- **Schema test parameter types (Task 6).** The schema-refusal test first bound its intervals as strings through `CAST(:interval AS interval)`. asyncpg types a parameter from that cast, so it rejected the string with a `DataError` before Postgres evaluated any constraint. The test now binds `timedelta` values directly. The repository needed no casts: asyncpg inferred every NULL parameter's type from its target column.
+- **TTL revert check (Task 3).** Making the expiry comparison inclusive failed three tests, not one. The renew test and the tenant-scoping test also probe the exact expiry instant, and the boundary test was among the three.
+- **End-to-end wording (Task 9).** All six end-to-end tests passed on their first real run with the planned questions. Batch A's thresholds and the question wording both held unchanged.
+- **Corpus calibration (Task 11).** The runner's calibration rejected the planned corpus before any arm ran, because some sources were too similar to other sources' questions:
+  - The shoe-catalog question scored 0.49 against the size-preference text, and the size question 0.37 against the catalog.
+  - The warranty question ("product") scored 0.36 against the return policy.
+  - The backpack question sat exactly at the 0.35 partial threshold against the catalog.
+
+  The fix moved three sources to distinct topics: the catalog to kitchen blenders (key `blender-catalog`), the flash sale to garden hoses, and the warranty to a bicycle frame. Calibration then passed with every question scoring at least 0.52 against its own source and at most 0.32 against any other. The tier thresholds were not changed.
+- **Never-served pre-loads (Task 11).** The plan expected the invalidate-on-change arm to show more never-served pre-loads than the freshness-aware arm for the hourly price feed. The column reads 0 for every arm and source. A probe runs at midnight, right after the nightly refresh, so every pre-load serves at least that one probe before an hourly change evicts it. The metric is correct as defined, but this probe schedule can't show churn through it. The narrative report therefore compares probes served per pre-load, taken from the same table. In the invalidate-on-change arm the price feed was pre-loaded 31 times and served about 31 probes, roughly one per pre-load. The freshness-aware return policy was pre-loaded twice and served 236.
+- **One unexplained miss (Task 11).** One of 241 RAG-only probes for the flash sale came back with neither its current nor any superseded text. Every other RAG-only probe found its source. The run doesn't show why. A plausible, unverified cause is approximate vector search recall degrading under this run's churn: tens of thousands of deletes and re-inserts in one Qdrant collection. It is reported as observed.

@@ -4,7 +4,7 @@ This system splits its data across four different stores — PostgreSQL, Qdrant,
 
 ## PostgreSQL holds the durable record: users, sessions, and structured memory
 
-PostgreSQL is this project's relational core — the place data goes when it needs foreign-key integrity, transactional writes, and a schema that Alembic migrations can track over time. Eight tables live here, and they split naturally into four groups by what they're for.
+PostgreSQL is this project's relational core — the place data goes when it needs foreign-key integrity, transactional writes, and a schema that Alembic migrations can track over time. Ten tables live here, and they split naturally into five groups by what they're for.
 
 The first group is identity and session tracking. `Users` is the root of the tenant model: every row carries a `tenant_id`, and everything else in the system that scopes to a tenant ultimately traces back to this table or to `Sessions`, which represents one conversation and carries its own `context_budget` — the per-session record of how the 128K context window gets sliced between the CAG, MAG, and RAG portions of a given turn. The column is JSONB and holds the most recent turn only: `total`, a `slices` object with `cag`, `mag`, `rag`, `query`, and `reserve` token counts, the `contributing` paradigms whose tiers actually returned content, and a `recorded_at` timestamp. Its first writer is `PostgresSessionBudgetRecorder` (`src/orchestration/infrastructure/postgres_session_budget_recorder.py`). It sets the tenant context itself so the `tenant_isolation` policy always applies, treats an update that matches no row — a missing session, or one RLS hides because it belongs to another tenant — as `SessionNotFound`, and commits its own short transaction rather than flushing into its caller's session. That last choice is measured rather than stylistic: when the orchestration cascade's timeout cancels a MAG query mid-flight, SQLAlchemy terminates that session's connection, and a budget write sharing it would fail the whole request.
 
@@ -14,9 +14,21 @@ The third group is Memory Evolution's own record of what a fact used to say. Mem
 
 The fourth group is the RAG document pipeline: `Documents` tracks an uploaded file's status and chunk count, and `Chunks` holds the actual pieces that get embedded and retrieved. `Chunks.parent_id` is a self-reference — it's what makes parent-document retrieval possible, where a small chunk is what matches a query but a larger surrounding block is what actually gets handed to the model. `Chunks` also carries its own `tenant_id` column rather than scoping to a tenant only indirectly through `document_id`: the migration that created the table (`alembic/versions/0002_documents_chunks.py`) sets `tenant_id` on every chunk and indexes it, specifically so the `tenant_isolation` row-level security policy can evaluate `tenant_id = current_setting('app.current_tenant_id', true)::uuid` directly against the `Chunks` row being read or written, without a join back through `Documents` on every query.
 
-Every one of this schema's eight tables carries an explicit `tenant_id` column, per the tables shown below. That's not an accident of eight separate decisions: `Chunks` was the first place an indirect join (through `document_id` back to `Documents.tenant_id`) was judged not good enough on its own — the RLS policy needs the column directly rather than joining on every query — and the migration that added `EpisodicMemory` and `SemanticMemory` (`alembic/versions/0003_mag_episodic_semantic_memory.py`) followed the same reasoning for both: every tenant-scoped table added from that point on carries `tenant_id` directly and enforces it with a `tenant_isolation` RLS policy, rather than relying on an indirect join (an earlier draft of that migration scoped `SemanticMemory` through `user_id` alone with no RLS at all, on the mistaken premise that `Sessions` does the same — it doesn't, and the schema below reflects the corrected version). `ProceduralMemory` (`alembic/versions/0004_mag_procedural_memory_and_consolidation.py`) and `SemanticMemoryHistory` (`alembic/versions/0005_mag_memory_evolution.py`) both carry `tenant_id` and RLS from their first version rather than needing a follow-up fix the way `SemanticMemory` did — by the time either was built, "every tenant-scoped table gets `tenant_id` and RLS from creation" was already the established rule, not a case-by-case judgment call.
+The fifth group is the Freshness-Aware Data Router's registry, added by `alembic/versions/0006_data_sources.py`. `DataSources` holds one row per data source the router places. Each row records:
 
-`alembic/versions/0001_users_sessions.py` gives `Users` the same `tenant_id` column and index every other table in this schema carries — but in that same migration, only `Sessions` actually gets `ENABLE ROW LEVEL SECURITY` / `FORCE ROW LEVEL SECURITY` / `CREATE POLICY tenant_isolation`. That makes `Users` tenant-scoped by column but not by policy, the one real exception to "enforces it with RLS" among this schema's eight tables — worth being direct about rather than implying uniform enforcement, and a gap the codebase itself documents rather than hides: `tests/integration/test_rls_tenant_isolation.py` notes in its own setup that inserting two users needs no tenant context of its own, "since `users` carries no RLS." Nothing downstream depends on this gap being closed — every other table's RLS policy reaches `Users` only through a `tenant_id` it already carries directly, never through a query that needs `Users`' own RLS to hold — but it means a compromised connection could still read across tenants' `Users` rows directly, which every other table in this schema is specifically built to prevent.
+- the source's `source_key`, unique within its tenant and, for a user-scoped source, within its user;
+- its `expected_change_interval`, a PostgreSQL `interval` that is declared when the source is created and re-learned whenever the source migrates;
+- the `route` it currently holds: `rag_only`, `cag_with_rag_backup`, or `mag`;
+- the `content_hash` of its current version, and when it last changed and was last ingested;
+- `cached_until`, the expiry of its current frozen-cache copy, if it has one.
+
+Two `CHECK` constraints keep a row coherent: a `user_id` is present exactly when the scope is `user`, and the interval is positive. Uniqueness on `(tenant_id, user_id, source_key)` is declared `NULLS NOT DISTINCT`, so a tenant-scoped key can't be registered twice even though its `user_id` is `NULL`. The row's `id` is not server-generated: `source_id_for` derives it from tenant, user, and key, so a retried ingestion replaces the same RAG document instead of orphaning one.
+
+`DataSourceVersions` records the full text and arrival time of every version whose content hash differed from the one before. That history is what `ReviewSourceFreshness` reads to decide whether a source's observed change rate has drifted far enough to migrate it. Both tables are written by `PostgresDataSourceRepository`, which commits a short transaction of its own per call: the unit-of-work rule `PostgresSessionBudgetRecorder` follows too.
+
+Every one of this schema's ten tables carries an explicit `tenant_id` column, per the tables shown below. That's not an accident of ten separate decisions: `Chunks` was the first place an indirect join (through `document_id` back to `Documents.tenant_id`) was judged not good enough on its own — the RLS policy needs the column directly rather than joining on every query — and the migration that added `EpisodicMemory` and `SemanticMemory` (`alembic/versions/0003_mag_episodic_semantic_memory.py`) followed the same reasoning for both: every tenant-scoped table added from that point on carries `tenant_id` directly and enforces it with a `tenant_isolation` RLS policy, rather than relying on an indirect join (an earlier draft of that migration scoped `SemanticMemory` through `user_id` alone with no RLS at all, on the mistaken premise that `Sessions` does the same — it doesn't, and the schema below reflects the corrected version). `ProceduralMemory` (`alembic/versions/0004_mag_procedural_memory_and_consolidation.py`) and `SemanticMemoryHistory` (`alembic/versions/0005_mag_memory_evolution.py`) both carry `tenant_id` and RLS from their first version rather than needing a follow-up fix the way `SemanticMemory` did — by the time either was built, "every tenant-scoped table gets `tenant_id` and RLS from creation" was already the established rule, not a case-by-case judgment call. `DataSources` and `DataSourceVersions` (`alembic/versions/0006_data_sources.py`) followed the same rule.
+
+`alembic/versions/0001_users_sessions.py` gives `Users` the same `tenant_id` column and index every other table in this schema carries — but in that same migration, only `Sessions` actually gets `ENABLE ROW LEVEL SECURITY` / `FORCE ROW LEVEL SECURITY` / `CREATE POLICY tenant_isolation`. That makes `Users` tenant-scoped by column but not by policy, the one real exception to "enforces it with RLS" among this schema's ten tables — worth being direct about rather than implying uniform enforcement, and a gap the codebase itself documents rather than hides: `tests/integration/test_rls_tenant_isolation.py` notes in its own setup that inserting two users needs no tenant context of its own, "since `users` carries no RLS." Nothing downstream depends on this gap being closed — every other table's RLS policy reaches `Users` only through a `tenant_id` it already carries directly, never through a query that needs `Users`' own RLS to hold — but it means a compromised connection could still read across tenants' `Users` rows directly, which every other table in this schema is specifically built to prevent.
 
 | Table | Column | Notes |
 |---|---|---|
@@ -90,6 +102,28 @@ Every one of this schema's eight tables carries an explicit `tenant_id` column, 
 | Chunks | parent_id | self-reference, enables parent-document retrieval |
 | Chunks | metadata | JSONB |
 | Chunks | tenant_id | explicit column, indexed — lets `tenant_isolation` evaluate RLS directly, without a join through `document_id` |
+
+| Table | Column | Notes |
+|---|---|---|
+| DataSources | id | UUID, primary key; derived from tenant, user, and key rather than server-generated |
+| DataSources | tenant_id | explicit column, indexed, RLS-enforced from creation |
+| DataSources | user_id | nullable foreign key → Users; present exactly when `scope` is `user` |
+| DataSources | source_key | unique per `(tenant_id, user_id, source_key)`, `NULLS NOT DISTINCT` |
+| DataSources | scope | `tenant` or `user` |
+| DataSources | expected_change_interval | interval, positive; declared at creation, re-learned on migration |
+| DataSources | route | `rag_only`, `cag_with_rag_backup`, or `mag` |
+| DataSources | content_hash | SHA-256 of the current version |
+| DataSources | last_changed_at | — |
+| DataSources | last_ingested_at | the last ingestion that changed or confirmed the content; anchors the cache TTL |
+| DataSources | cached_until | nullable; expiry of the current frozen-cache copy |
+| DataSources | created_at | — |
+| DataSources | updated_at | — |
+| DataSourceVersions | id | UUID, primary key |
+| DataSourceVersions | data_source_id | foreign key → DataSources; indexed with `ingested_at` |
+| DataSourceVersions | tenant_id | explicit column, indexed, RLS-enforced from creation |
+| DataSourceVersions | content_hash | — |
+| DataSourceVersions | content | the version's full text |
+| DataSourceVersions | ingested_at | when the version arrived |
 
 Columns without a type noted in the "Notes" column above (`email`, `filename`, `title`, and similar) are conventional scalar fields — text, timestamps — whose exact SQL type isn't pinned down at the documentation level; that's deliberate, since this project's database-first rule puts the Alembic migration, not this document, in charge of the literal `CREATE TABLE` statement. This document records the shape of the schema — which tables exist, which columns they carry, which relationships tie them together — not the migration itself.
 
