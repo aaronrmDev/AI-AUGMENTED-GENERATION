@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 
 from src.rag.domain.entities import SearchResult
@@ -10,5 +11,7 @@ class SearchDocuments(Retriever):
         self._vector_store = vector_store
 
     async def execute(self, tenant_id: uuid.UUID, query: str, top_k: int) -> list[SearchResult]:
-        query_embedding = self._embedder.embed(query)
+        # Embedding is CPU work. On the event loop it would stall every other coroutine,
+        # which in a PARALLEL cascade route means the CAG and MAG tiers' budgets.
+        query_embedding = await asyncio.to_thread(self._embedder.embed, query)
         return await self._vector_store.search(query_embedding, tenant_id=tenant_id, top_k=top_k)

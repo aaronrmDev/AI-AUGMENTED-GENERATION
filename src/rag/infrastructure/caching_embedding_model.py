@@ -16,11 +16,12 @@ class CachingEmbeddingModel(EmbeddingModel):
 
     Built for the orchestration cascade. UnifiedAnswerQuestion embeds each
     question once, and a RAG retriever such as SearchDocuments embeds the same
-    text again inside its tier. That second embed is CPU work on the event
-    loop, and in PARALLEL routes it blocked the loop long enough to starve the
-    CAG tier past its 10ms budget -- measured: 15 of 60 CAG attempts timed out
-    with the embedding on the loop, none with it off. Giving both the use case
-    and the retriever one shared instance turns the second call into a lookup.
+    text again inside its tier. Before SearchDocuments moved that embed to a
+    worker thread, it was CPU work on the event loop, and in PARALLEL routes it
+    starved the CAG tier past its 10ms budget -- measured: 15 of 60 CAG attempts
+    timed out with the embedding on the loop, none with it off. Giving both the
+    use case and the retriever one shared instance still turns the second call
+    into a lookup, rather than a second embedding's worth of CPU.
 
     One instance serves every tenant in the process. An embedding is a pure
     function of its text, so a cached value reveals nothing a fresh one
@@ -30,8 +31,8 @@ class CachingEmbeddingModel(EmbeddingModel):
     exact text recently". Nothing exposes this path over HTTP yet; weighing
     that signal belongs to the security review of the endpoint that does.
 
-    Thread-safe: UnifiedAnswerQuestion embeds on a worker thread while a
-    retriever embeds on the event loop. The wrapped model runs outside the
+    Thread-safe: UnifiedAnswerQuestion and SearchDocuments each embed on their
+    own worker thread, so one instance sees concurrent callers. The wrapped model runs outside the
     lock, so two concurrent misses for the same text may both compute it; the
     result is identical either way. Callers get copies, so mutating a returned
     list never changes the cache.

@@ -99,8 +99,8 @@ def test_the_cache_keeps_no_plaintext_of_the_texts_it_embedded():
 
 
 def test_concurrent_callers_all_get_correct_embeddings():
-    # UnifiedAnswerQuestion embeds on a worker thread while the RAG retriever
-    # embeds on the event loop, so one shared instance sees concurrent callers.
+    # UnifiedAnswerQuestion and SearchDocuments each embed on their own worker
+    # thread, so one shared instance sees concurrent callers.
     inner = _CountingEmbedder()
     model = CachingEmbeddingModel(inner, max_entries=4)
     texts = [f"question {i}" for i in range(10)]
