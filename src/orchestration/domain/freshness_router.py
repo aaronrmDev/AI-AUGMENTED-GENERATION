@@ -14,6 +14,7 @@ from src.orchestration.domain.entities import (
 )
 
 _SOURCE_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_OID, "orchestration:data_source")
+_MIN_INTERVAL = timedelta(seconds=1)
 
 
 def source_id_for(tenant_id: uuid.UUID, source_key: str, user_id: uuid.UUID | None) -> uuid.UUID:
@@ -72,7 +73,9 @@ def decide_migration(
         interval = observed_change_interval(recent)
         if interval is None:
             return None
-        return MigrationDecision(IngestionRoute.RAG_ONLY, interval)
+        # A burst ingested under one timestamp averages to zero; the schema, and any TTL
+        # derived from the interval, need it positive.
+        return MigrationDecision(IngestionRoute.RAG_ONLY, max(interval, _MIN_INTERVAL))
     quiet = now - history[-1]
     if quiet >= boundary * policy.promote_after_quiet_multiple:
         return MigrationDecision(IngestionRoute.CAG_WITH_RAG_BACKUP, quiet)

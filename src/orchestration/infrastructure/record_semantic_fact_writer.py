@@ -15,10 +15,11 @@ from src.rag.domain.ports import EmbeddingModel
 class RecordSemanticFactWriter(SessionFactWriter):
     """Writes a user-scoped data source into MAG through RecordSemanticFact, unmodified.
 
-    The source key is the fact key, so RecordSemanticFact's upsert on
-    (user_id, fact_key) makes each new version overwrite the last. The Postgres
-    repository flushes into a session, and this writer owns that session's
-    transaction: the same unit-of-work rule the cascade's MAG search follows.
+    The fact key is the source key under a "source:" prefix. RecordSemanticFact
+    upserts on (user_id, fact_key), so each new version overwrites the last, and the
+    prefix keeps a router source from overwriting a fact MAG learned under the same
+    name. The Postgres repository flushes into a session, and this writer owns that
+    session's transaction: the same unit-of-work rule the cascade's MAG search follows.
     """
 
     def __init__(
@@ -44,4 +45,6 @@ class RecordSemanticFactWriter(SessionFactWriter):
             command = RecordSemanticFact(
                 PostgresSemanticMemoryRepository(session), self._index, self._embedder, self._graph
             )
-            await command.execute(tenant_id, user_id, fact_key, fact_value, source=self._source)
+            await command.execute(
+                tenant_id, user_id, f"source:{fact_key}", fact_value, source=self._source
+            )

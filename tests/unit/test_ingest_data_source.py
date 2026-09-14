@@ -30,11 +30,14 @@ POLICY_DOC = DataSourceProfile("return-policy", SourceScope.TENANT, 7 * DAY)
 SIZE = DataSourceProfile("size", SourceScope.USER, 30 * DAY)
 
 
-def _build(policy: FreshnessPolicy | None = None, route_policy=None):
-    repository, rag, cache = FakeDataSourceRepository(), FakeRagIndex(), FakeExpiringCache()
+def _build(
+    policy: FreshnessPolicy | None = None, route_policy=None, repository=None, **options
+):
+    repository = repository or FakeDataSourceRepository()
+    rag, cache = FakeRagIndex(), FakeExpiringCache()
     writer = FakeSessionFactWriter()
     warmed = CacheWarmedRetrieve(FakeBagOfWordsEmbeddingModel(), cache, FakeRetriever(), 0.3)
-    kwargs = {"policy": policy}
+    kwargs = {"policy": policy, **options}
     if route_policy is not None:
         kwargs["route_policy"] = route_policy
     use_case = IngestDataSource(repository, rag, cache, warmed, writer, **kwargs)
@@ -173,7 +176,8 @@ async def test_scope_and_user_id_must_agree(profile, user_id):
 async def test_an_injected_route_policy_can_cache_a_user_scoped_source():
     # The measurement's "cache everything" baseline: the same code path, one route.
     use_case, _, rag, _, _, writer = _build(
-        route_policy=lambda profile, policy: IngestionRoute.CAG_WITH_RAG_BACKUP
+        route_policy=lambda profile, policy: IngestionRoute.CAG_WITH_RAG_BACKUP,
+        permit_user_scope_outside_mag=True,
     )
     result = await use_case.execute(TENANT, SIZE, "wears size 10", T0, user_id=USER)
     assert result.route is IngestionRoute.CAG_WITH_RAG_BACKUP
@@ -207,3 +211,75 @@ async def test_the_same_key_in_two_tenants_is_two_sources():
     b = await use_case.execute(other, PRICES, "v1", T0)
     assert a.source_id != b.source_id
     assert len(await repository.list_sources(TENANT)) == 1
+
+
+class _SaveFailsOnce(FakeDataSourceRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_save = False
+
+    async def save(self, source, version=None) -> None:
+        if self.fail_next_save:
+            self.fail_next_save = False
+            raise ConnectionError("database went away")
+        await super().save(source, version)
+
+
+async def test_a_change_whose_save_fails_stays_pending_until_a_retry_reapplies_it():
+    repository = _SaveFailsOnce()
+    use_case, _, rag, cache, _, _ = _build(repository=repository)
+    first = await use_case.execute(TENANT, POLICY_DOC, "forty-five days", T0)
+
+    repository.fail_next_save = True
+    with pytest.raises(ConnectionError):
+        await use_case.execute(TENANT, POLICY_DOC, "sixty days", T0 + HOUR)
+    stranded = await repository.get(TENANT, "return-policy", None)
+    assert stranded is not None
+    assert stranded.pending_hash is not None
+    assert stranded.content_hash != stranded.pending_hash  # the stored hash is still v1's
+
+    retried = await use_case.execute(TENANT, POLICY_DOC, "sixty days", T0 + 2 * HOUR)
+
+    assert retried.changed is True
+    assert [text for *_, text in rag.replaced] == ["forty-five days", "sixty days", "sixty days"]
+    stored = await repository.get(TENANT, "return-policy", None)
+    assert stored is not None
+    assert stored.pending_hash is None
+    assert await repository.version_times(TENANT, first.source_id) == [T0, T0 + 2 * HOUR]
+    assert (TENANT, first.source_id) in cache.evict_calls
+
+
+async def test_a_pending_change_is_reapplied_even_when_the_feed_reverts():
+    repository = _SaveFailsOnce()
+    use_case, _, rag, _, _, _ = _build(repository=repository)
+    first = await use_case.execute(TENANT, PRICES, "costs 41 dollars", T0)
+    repository.fail_next_save = True
+    with pytest.raises(ConnectionError):
+        await use_case.execute(TENANT, PRICES, "costs 43 dollars", T0 + HOUR)
+
+    # RAG may already hold 43; the feed now delivers 41 again, the stored version.
+    result = await use_case.execute(TENANT, PRICES, "costs 41 dollars", T0 + 2 * HOUR)
+
+    assert result.changed is False  # no new version: the content matches what is stored
+    assert rag.replaced[-1][3] == "costs 41 dollars"
+    assert await repository.version_times(TENANT, first.source_id) == [T0]
+    stored = await repository.get(TENANT, "prices", None)
+    assert stored is not None
+    assert stored.pending_hash is None
+
+
+async def test_a_mag_routed_change_records_its_version_without_the_text():
+    use_case, repository, _, _, _, writer = _build()
+    result = await use_case.execute(TENANT, SIZE, "wears size 10", T0, user_id=USER)
+    assert writer.records == [(TENANT, USER, "size", "wears size 10")]
+    assert await repository.version_times(TENANT, result.source_id) == [T0]
+    assert await repository.current_content(TENANT, result.source_id) is None
+
+
+async def test_a_route_policy_cannot_place_user_scoped_data_outside_mag_by_default():
+    use_case, _, rag, _, _, _ = _build(
+        route_policy=lambda profile, policy: IngestionRoute.CAG_WITH_RAG_BACKUP
+    )
+    with pytest.raises(ValueError):
+        await use_case.execute(TENANT, SIZE, "wears size 10", T0, user_id=USER)
+    assert rag.replaced == []

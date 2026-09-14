@@ -20,11 +20,14 @@ The fifth group is the Freshness-Aware Data Router's registry, added by `alembic
 - its `expected_change_interval`, a PostgreSQL `interval` that is declared when the source is created and re-learned whenever the source migrates;
 - the `route` it currently holds: `rag_only`, `cag_with_rag_backup`, or `mag`;
 - the `content_hash` of its current version, and when it last changed and was last ingested;
-- `cached_until`, the expiry of its current frozen-cache copy, if it has one.
+- `pending_content_hash`, set while a changed version is being applied to RAG, the cache, or MAG, and cleared by the save that records it;
+- `cached_until`, the expiry recorded for its current frozen-cache copy, if it has one. The cache enforces its own expiry, so this column is a record for operators and the measurement runner, and nothing reads it to decide whether to serve.
 
-Two `CHECK` constraints keep a row coherent: a `user_id` is present exactly when the scope is `user`, and the interval is positive. Uniqueness on `(tenant_id, user_id, source_key)` is declared `NULLS NOT DISTINCT`, so a tenant-scoped key can't be registered twice even though its `user_id` is `NULL`. The row's `id` is not server-generated: `source_id_for` derives it from tenant, user, and key, so a retried ingestion replaces the same RAG document instead of orphaning one.
+Two `CHECK` constraints keep a row coherent: a `user_id` is present exactly when the scope is `user`, and the interval is positive. Uniqueness on `(tenant_id, user_id, source_key)` is declared `NULLS NOT DISTINCT`, so a tenant-scoped key can't be registered twice even though its `user_id` is `NULL`. The row's `id` is not server-generated: `source_id_for` derives it from tenant, user, and key, so a retried ingestion replaces the same RAG document instead of orphaning one. Deleting a user deletes their sources, and the versions with them, through `ON DELETE CASCADE`.
 
-`DataSourceVersions` records the full text and arrival time of every version whose content hash differed from the one before. That history is what `ReviewSourceFreshness` reads to decide whether a source's observed change rate has drifted far enough to migrate it. Both tables are written by `PostgresDataSourceRepository`, which commits a short transaction of its own per call: the unit-of-work rule `PostgresSessionBudgetRecorder` follows too.
+The pending marker is what keeps the router's three use cases from racing each other. Ingestion sets it before any effect runs. The batch pre-load and the freshness review each write through a conditional `UPDATE` that names the content hash they read and requires the marker to be clear, so a pre-load or migration decided from a snapshot that a concurrent change has since superseded matches no row and is abandoned. A later save updates only the content columns, so it can't overwrite a route or interval a migration just wrote. If an effect fails part-way, the marker stays set, and the next ingestion re-applies the change even if the feed has meanwhile reverted to the stored hash.
+
+`DataSourceVersions` records the arrival time of every version whose content hash differed from the one before, and the text of every tenant-scoped version. A MAG-routed version's `content` is `NULL`: the text is a user's personal fact, which MAG already holds, and a second copy here would outlive the fact. A `seq` identity column orders versions that arrive under the same timestamp. That history is what `ReviewSourceFreshness` reads to decide whether a source's observed change rate has drifted far enough to migrate it. Both tables are written by `PostgresDataSourceRepository`, which commits a short transaction of its own per call: the unit-of-work rule `PostgresSessionBudgetRecorder` follows too.
 
 Every one of this schema's ten tables carries an explicit `tenant_id` column, per the tables shown below. That's not an accident of ten separate decisions: `Chunks` was the first place an indirect join (through `document_id` back to `Documents.tenant_id`) was judged not good enough on its own — the RLS policy needs the column directly rather than joining on every query — and the migration that added `EpisodicMemory` and `SemanticMemory` (`alembic/versions/0003_mag_episodic_semantic_memory.py`) followed the same reasoning for both: every tenant-scoped table added from that point on carries `tenant_id` directly and enforces it with a `tenant_isolation` RLS policy, rather than relying on an indirect join (an earlier draft of that migration scoped `SemanticMemory` through `user_id` alone with no RLS at all, on the mistaken premise that `Sessions` does the same — it doesn't, and the schema below reflects the corrected version). `ProceduralMemory` (`alembic/versions/0004_mag_procedural_memory_and_consolidation.py`) and `SemanticMemoryHistory` (`alembic/versions/0005_mag_memory_evolution.py`) both carry `tenant_id` and RLS from their first version rather than needing a follow-up fix the way `SemanticMemory` did — by the time either was built, "every tenant-scoped table gets `tenant_id` and RLS from creation" was already the established rule, not a case-by-case judgment call. `DataSources` and `DataSourceVersions` (`alembic/versions/0006_data_sources.py`) followed the same rule.
 
@@ -107,7 +110,7 @@ Every one of this schema's ten tables carries an explicit `tenant_id` column, pe
 |---|---|---|
 | DataSources | id | UUID, primary key; derived from tenant, user, and key rather than server-generated |
 | DataSources | tenant_id | explicit column, indexed, RLS-enforced from creation |
-| DataSources | user_id | nullable foreign key → Users; present exactly when `scope` is `user` |
+| DataSources | user_id | nullable foreign key → Users, `ON DELETE CASCADE`; present exactly when `scope` is `user` |
 | DataSources | source_key | unique per `(tenant_id, user_id, source_key)`, `NULLS NOT DISTINCT` |
 | DataSources | scope | `tenant` or `user` |
 | DataSources | expected_change_interval | interval, positive; declared at creation, re-learned on migration |
@@ -115,14 +118,16 @@ Every one of this schema's ten tables carries an explicit `tenant_id` column, pe
 | DataSources | content_hash | SHA-256 of the current version |
 | DataSources | last_changed_at | — |
 | DataSources | last_ingested_at | the last ingestion that changed or confirmed the content; anchors the cache TTL |
-| DataSources | cached_until | nullable; expiry of the current frozen-cache copy |
+| DataSources | cached_until | nullable; the recorded expiry of the current frozen-cache copy, informational |
+| DataSources | pending_content_hash | nullable; the hash of a change still being applied, which blocks conditional pre-load and migration writes |
 | DataSources | created_at | — |
 | DataSources | updated_at | — |
 | DataSourceVersions | id | UUID, primary key |
-| DataSourceVersions | data_source_id | foreign key → DataSources; indexed with `ingested_at` |
+| DataSourceVersions | seq | bigint identity, always generated; orders versions under one timestamp |
+| DataSourceVersions | data_source_id | foreign key → DataSources, `ON DELETE CASCADE`; indexed with `seq` |
 | DataSourceVersions | tenant_id | explicit column, indexed, RLS-enforced from creation |
 | DataSourceVersions | content_hash | — |
-| DataSourceVersions | content | the version's full text |
+| DataSourceVersions | content | nullable; the version's full text, `NULL` for a MAG-routed source |
 | DataSourceVersions | ingested_at | when the version arrived |
 
 Columns without a type noted in the "Notes" column above (`email`, `filename`, `title`, and similar) are conventional scalar fields — text, timestamps — whose exact SQL type isn't pinned down at the documentation level; that's deliberate, since this project's database-first rule puts the Alembic migration, not this document, in charge of the literal `CREATE TABLE` statement. This document records the shape of the schema — which tables exist, which columns they carry, which relationships tie them together — not the migration itself.

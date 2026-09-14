@@ -138,3 +138,9 @@ def test_source_ids_are_deterministic_and_distinguish_scope():
     assert tenant_source == source_id_for(TENANT, "prices", None)
     assert tenant_source != source_id_for(TENANT, "prices", USER)
     assert tenant_source != source_id_for(uuid.uuid4(), "prices", None)
+
+
+def test_a_burst_of_simultaneous_changes_demotes_with_the_minimum_positive_interval():
+    times = [NOW - HOUR] * 4  # four versions ingested under one timestamp
+    decision = decide_migration(_source(IngestionRoute.CAG_WITH_RAG_BACKUP), times, NOW, POLICY)
+    assert decision == MigrationDecision(IngestionRoute.RAG_ONLY, timedelta(seconds=1))

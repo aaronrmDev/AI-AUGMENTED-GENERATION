@@ -1,7 +1,12 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from src.orchestration.domain.entities import DataSource, IngestionRoute, SourceScope
+from src.orchestration.domain.entities import (
+    DataSource,
+    IngestionRoute,
+    SourceScope,
+    SourceVersion,
+)
 from tests.unit.freshness_fakes import FakeDataSourceRepository, FakeExpiringCache
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -20,10 +25,10 @@ def _source(**changes) -> DataSource:
 async def test_the_fake_repository_records_versions_only_for_changed_content():
     repository = FakeDataSourceRepository()
     source = _source()
-    await repository.save(source, changed_content="v1")
+    await repository.save(source, SourceVersion("v1"))
     await repository.save(source)  # a confirmation: no new version
     later = _source(id=source.id, content_hash="h2", last_changed_at=T0 + timedelta(hours=1))
-    await repository.save(later, changed_content="v2")
+    await repository.save(later, SourceVersion("v2"))
 
     assert await repository.version_times(TENANT, source.id) == [T0, T0 + timedelta(hours=1)]
     assert await repository.current_content(TENANT, source.id) == "v2"
@@ -39,3 +44,21 @@ def test_the_fake_cache_renews_only_live_entries():
     cache.preload_until(TENANT, document, "text", T0)
     assert cache.renew(TENANT, document, T0 + timedelta(days=1)) is True
     assert cache.expiry(TENANT, document) == T0 + timedelta(days=1)
+
+
+async def test_the_fake_repository_applies_conditional_writes_only_to_an_unchanged_source():
+    repository = FakeDataSourceRepository()
+    source = _source()
+    await repository.save(source, SourceVersion("v1"))
+    cached, week = IngestionRoute.CAG_WITH_RAG_BACKUP, timedelta(days=7)
+
+    assert await repository.record_cached_until(TENANT, source.id, "h1", T0) is True
+    assert await repository.record_cached_until(TENANT, source.id, "stale", T0) is False
+    await repository.mark_pending(TENANT, source.id, "h2")
+    assert await repository.migrate(TENANT, source.id, "h1", cached, week, None) is False
+
+    await repository.save(source)  # clears the pending marker, keeps the stored route
+    assert await repository.migrate(TENANT, source.id, "h1", cached, week, None) is True
+    stored = await repository.get(TENANT, "k", None)
+    assert stored is not None
+    assert (stored.route, stored.pending_hash) == (cached, None)

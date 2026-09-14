@@ -309,6 +309,9 @@ async def _build_rig(
         ingest=IngestDataSource(
             repository, rag_index, cache, warmed, writer, policy=effective,
             route_policy=route_policy,
+            # The baselines place the user-scoped source in tenant-wide stores on purpose:
+            # that exposure is one of the things this measurement reports.
+            permit_user_scope_outside_mag=route_policy is not route_for,
         ),
         refresh=RefreshCachedSources(repository, cache, warmed, policy=effective),
         review=(

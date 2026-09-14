@@ -8,7 +8,9 @@ from src.orchestration.domain.entities import (
     IngestionRoute,
     SourceMigration,
     SourceScope,
+    SourceVersion,
 )
+from src.orchestration.domain.sync_mixer import content_hash
 from tests.unit.freshness_fakes import FakeDataSourceRepository, FakeExpiringCache
 from tests.unit.orchestration_fakes import FakeBagOfWordsEmbeddingModel
 from tests.unit.rag_fakes import FakeRetriever
@@ -40,9 +42,9 @@ async def _seed(
         source = DataSource(
             id=uuid.uuid5(uuid.NAMESPACE_OID, f"{TENANT}:{key}"), tenant_id=TENANT,
             user_id=user_id, source_key=key, scope=scope, expected_change_interval=interval,
-            route=route, content_hash=text, last_changed_at=at, last_ingested_at=at,
+            route=route, content_hash=content_hash(text), last_changed_at=at, last_ingested_at=at,
         )
-        await repository.save(source, changed_content=text)
+        await repository.save(source, SourceVersion(text))
     assert source is not None
     return source
 
@@ -97,3 +99,57 @@ async def test_a_source_with_no_migration_is_left_exactly_as_stored():
     assert await ReviewSourceFreshness(repository, cache, warmed).run(TENANT, T0) == []
     assert await repository.get(TENANT, "policy", None) == source
     assert cache.evict_calls == []
+
+
+class _ChangeBeforeMigrate(FakeDataSourceRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.change = None
+
+    async def migrate(self, tenant_id, source_id, expected_hash, route, interval, cached_until):
+        change, self.change = self.change, None
+        if change is not None:
+            await change()
+        return await super().migrate(
+            tenant_id, source_id, expected_hash, route, interval, cached_until
+        )
+
+
+async def test_a_source_that_changed_since_the_listing_is_left_for_the_next_review():
+    repository = _ChangeBeforeMigrate()
+    cache = FakeExpiringCache()
+    warmed = CacheWarmedRetrieve(FakeBagOfWordsEmbeddingModel(), cache, FakeRetriever(), 0.3)
+    start = T0 - 4 * HOUR
+    source = await _seed(
+        repository, "catalog", CAG, [(start + i * HOUR, f"v{i}") for i in range(4)]
+    )
+    cache.preload_until(TENANT, source.id, "v3", None)
+
+    async def land_change() -> None:
+        changed = DataSource(
+            **{
+                **source.__dict__,
+                "content_hash": content_hash("v4"),
+                "last_changed_at": T0,
+                "last_ingested_at": T0,
+            }
+        )
+        await repository.save(changed, SourceVersion("v4"))
+
+    repository.change = land_change
+
+    assert await ReviewSourceFreshness(repository, cache, warmed).run(TENANT, T0) == []
+    assert cache.evict_calls == []
+    stored = await repository.get(TENANT, "catalog", None)
+    assert stored is not None
+    assert stored.route is CAG
+
+
+async def test_a_source_with_a_pending_change_is_not_reviewed():
+    repository, cache, warmed = _fixtures()
+    start = T0 - 4 * HOUR
+    source = await _seed(
+        repository, "catalog", CAG, [(start + i * HOUR, f"v{i}") for i in range(4)]
+    )
+    await repository.mark_pending(TENANT, source.id, content_hash("v4"))
+    assert await ReviewSourceFreshness(repository, cache, warmed).run(TENANT, T0) == []

@@ -8,7 +8,9 @@ from src.orchestration.domain.entities import (
     FreshnessPolicy,
     IngestionRoute,
     SourceScope,
+    SourceVersion,
 )
+from src.orchestration.domain.sync_mixer import content_hash
 from tests.unit.freshness_fakes import FakeDataSourceRepository, FakeExpiringCache
 from tests.unit.orchestration_fakes import FakeBagOfWordsEmbeddingModel
 from tests.unit.rag_fakes import FakeRetriever
@@ -41,10 +43,10 @@ async def _seed(
         source = DataSource(
             id=uuid.uuid5(uuid.NAMESPACE_OID, f"{tenant_id}:{key}"), tenant_id=tenant_id,
             user_id=user_id, source_key=key, scope=scope, expected_change_interval=interval,
-            route=route, content_hash=text, last_changed_at=at,
+            route=route, content_hash=content_hash(text), last_changed_at=at,
             last_ingested_at=last_ingested_at or at,
         )
-        await repository.save(source, changed_content=text)
+        await repository.save(source, SourceVersion(text))
     assert source is not None
     return source
 
@@ -115,3 +117,70 @@ async def test_another_tenants_sources_are_untouched():
         tenant_id=uuid.uuid4(),
     )
     assert await RefreshCachedSources(repository, cache, warmed).run(TENANT, T0) == []
+
+
+class _ChangeDuringRead(FakeDataSourceRepository):
+    """Lands a new version while the refresh reads content: before the read returns
+    (the refresh sees the new text) or right after it (the refresh holds the old text)."""
+
+    def __init__(self, *, after_read: bool) -> None:
+        super().__init__()
+        self.after_read = after_read
+        self.change = None
+
+    async def current_content(self, tenant_id, source_id):
+        change, self.change = self.change, None
+        if change is not None and not self.after_read:
+            await change()
+        content = await super().current_content(tenant_id, source_id)
+        if change is not None and self.after_read:
+            await change()
+        return content
+
+
+async def _land_change(repository, source: DataSource, text: str, at: datetime) -> None:
+    changed = DataSource(
+        **{
+            **source.__dict__,
+            "content_hash": content_hash(text),
+            "last_changed_at": at,
+            "last_ingested_at": at,
+        }
+    )
+    await repository.save(changed, SourceVersion(text))
+
+
+async def test_a_change_landing_after_the_refresh_reads_content_is_not_left_cached():
+    repository = _ChangeDuringRead(after_read=True)
+    cache = FakeExpiringCache()
+    warmed = CacheWarmedRetrieve(FakeBagOfWordsEmbeddingModel(), cache, FakeRetriever(), 0.3)
+    source = await _seed(repository, "policy", IngestionRoute.CAG_WITH_RAG_BACKUP, [(T0, "v1")])
+    repository.change = lambda: _land_change(repository, source, "v2", T0 + timedelta(hours=1))
+
+    preloaded = await RefreshCachedSources(repository, cache, warmed).run(TENANT, T0 + DAY / 2)
+
+    assert preloaded == []
+    assert not cache.contains(TENANT, source.id)
+    assert warmed.best_warmed_match(TENANT, FakeBagOfWordsEmbeddingModel().embed("v1")) is None
+    stored = await repository.get(TENANT, "policy", None)
+    assert stored is not None
+    assert stored.content_hash == content_hash("v2")
+
+
+async def test_content_that_changed_since_the_listing_is_not_preloaded():
+    repository = _ChangeDuringRead(after_read=False)
+    cache = FakeExpiringCache()
+    warmed = CacheWarmedRetrieve(FakeBagOfWordsEmbeddingModel(), cache, FakeRetriever(), 0.3)
+    source = await _seed(repository, "policy", IngestionRoute.CAG_WITH_RAG_BACKUP, [(T0, "v1")])
+    repository.change = lambda: _land_change(repository, source, "v2", T0 + timedelta(hours=1))
+
+    assert await RefreshCachedSources(repository, cache, warmed).run(TENANT, T0 + DAY / 2) == []
+    assert cache.preload_calls == []
+
+
+async def test_a_source_with_a_pending_change_is_not_preloaded():
+    repository, cache, warmed = _fixtures()
+    source = await _seed(repository, "policy", IngestionRoute.CAG_WITH_RAG_BACKUP, [(T0, "v1")])
+    await repository.mark_pending(TENANT, source.id, content_hash("v2"))
+    assert await RefreshCachedSources(repository, cache, warmed).run(TENANT, T0) == []
+    assert cache.preload_calls == []

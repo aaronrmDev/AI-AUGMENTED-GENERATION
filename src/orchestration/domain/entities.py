@@ -238,6 +238,21 @@ class DataSource:
     last_changed_at: datetime
     last_ingested_at: datetime
     cached_until: datetime | None = None
+    # The hash of a change whose effects have started but whose save hasn't landed.
+    # While it is set, refresh and review leave the source alone, and the next ingestion
+    # re-applies the change even if the feed has reverted to the stored content.
+    pending_hash: str | None = None
+
+
+@dataclass(frozen=True)
+class SourceVersion:
+    """A changed version, recorded alongside the source that now points at it.
+
+    content is None for a MAG-routed source: its text lives in that user's MAG fact, and
+    the registry keeps no second copy of personal data.
+    """
+
+    content: str | None
 
 
 @dataclass(frozen=True)

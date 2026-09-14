@@ -55,6 +55,6 @@ async def test_a_user_scoped_source_becomes_one_updatable_fact_visible_only_in_i
         await graph.close()
 
     assert await _facts(db_session, tenant_id, user_id) == [
-        ("size-preference", "wears size 11", "freshness-router")
+        ("source:size-preference", "wears size 11", "freshness-router")
     ]
     assert await _facts(db_session, uuid.uuid4(), user_id) == []

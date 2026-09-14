@@ -14,14 +14,18 @@ from src.rag.infrastructure.qdrant_vector_store import QdrantVectorStore
 class ChunkedRagIndex(RagIndex):
     """Keeps one data source's current text in RAG as a single document.
 
-    replace deletes the previous version from both stores before writing the new one.
-    A superseded chunk left in Qdrant would still be retrieved by vector search, and
-    one left in Postgres by hybrid RAG's BM25KeywordSearch.
+    A superseded chunk left in Qdrant would still be retrieved by vector search, and one
+    left in Postgres by hybrid RAG's BM25KeywordSearch, so replace clears the previous
+    version from both stores:
+    - In Postgres, the delete and the new rows share one transaction, so readers see
+      one version or the other.
+    - In Qdrant, the new points are upserted first, then every other point of the
+      document is deleted, so the document is never missing from vector search. Until
+      that delete lands, both versions can be retrieved.
 
-    The Postgres half is one transaction, and the Qdrant half follows it. Between the
-    two, vector search can briefly return the old version. A replace that fails there
-    leaves the router's stored hash unchanged, so the router retries it. Embedding
-    runs on a worker thread, because this shares an event loop with the query path.
+    If the Qdrant half fails, the router's pending marker stays set and the change is
+    re-applied. Embedding runs on a worker thread, because this shares an event loop
+    with the query path.
     """
 
     def __init__(
@@ -61,6 +65,8 @@ class ChunkedRagIndex(RagIndex):
                 )
             )
             await documents.save_chunks(chunks, tenant_id)
-        await self._vector_store.delete_document(document_id, tenant_id)
         for chunk in chunks:
             await self._vector_store.upsert(chunk, tenant_id)
+        await self._vector_store.delete_document(
+            document_id, tenant_id, keep_chunk_ids=[chunk.id for chunk in chunks]
+        )

@@ -25,8 +25,13 @@ def upgrade() -> None:
         # ingestion replaces the same RAG document (freshness_router.source_id_for).
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False),
+        # Deleting a user removes their user-scoped sources, and those sources' versions
+        # cascade in turn.
         sa.Column(
-            "user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=True
+            "user_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=True,
         ),
         sa.Column("source_key", sa.String, nullable=False),
         sa.Column("scope", sa.String, nullable=False),
@@ -36,6 +41,9 @@ def upgrade() -> None:
         sa.Column("last_changed_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("last_ingested_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("cached_until", sa.DateTime(timezone=True), nullable=True),
+        # Set before a change's effects run, cleared by the save that records the change.
+        # Refresh and review skip a source while it is set.
+        sa.Column("pending_content_hash", sa.String, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -76,21 +84,24 @@ def upgrade() -> None:
             primary_key=True,
             server_default=sa.text("uuid_generate_v4()"),
         ),
+        # Insertion order, so two versions ingested under one timestamp still have a
+        # well-defined latest.
+        sa.Column("seq", sa.BigInteger, sa.Identity(always=True), nullable=False),
         sa.Column(
             "data_source_id",
             postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("data_sources.id"),
+            sa.ForeignKey("data_sources.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("content_hash", sa.String, nullable=False),
-        sa.Column("content", sa.Text, nullable=False),
+        # NULL for a MAG-routed source: its text lives in the user's MAG fact, and the
+        # registry keeps no second copy of personal data.
+        sa.Column("content", sa.Text, nullable=True),
         sa.Column("ingested_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index(
-        "ix_data_source_versions_source_ingested",
-        "data_source_versions",
-        ["data_source_id", "ingested_at"],
+        "ix_data_source_versions_source_seq", "data_source_versions", ["data_source_id", "seq"]
     )
     op.create_index("ix_data_source_versions_tenant_id", "data_source_versions", ["tenant_id"])
 

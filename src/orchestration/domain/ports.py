@@ -7,7 +7,9 @@ from src.orchestration.domain.entities import (
     BudgetAllocation,
     CacheHit,
     DataSource,
+    IngestionRoute,
     Paradigm,
+    SourceVersion,
     TierRequest,
     TierResult,
     WarmEntry,
@@ -186,9 +188,41 @@ class DataSourceRepository(ABC):
     ) -> DataSource | None: ...
 
     @abstractmethod
-    async def save(self, source: DataSource, changed_content: str | None = None) -> None:
-        """Insert or update the source by id. When changed_content is given, also record
-        it as a new version at source.last_changed_at, in the same transaction."""
+    async def save(self, source: DataSource, version: SourceVersion | None = None) -> None:
+        """Insert the source, or update an existing one's content fields: its hash,
+        change and ingestion times, cache expiry, and pending marker. An existing source's
+        route and interval are left alone; only migrate changes them. When version is
+        given, it is recorded at source.last_changed_at in the same transaction."""
+
+    @abstractmethod
+    async def mark_pending(
+        self, tenant_id: uuid.UUID, source_id: uuid.UUID, content_hash: str
+    ) -> None:
+        """Record that a change's effects are starting, before they run."""
+
+    @abstractmethod
+    async def record_cached_until(
+        self,
+        tenant_id: uuid.UUID,
+        source_id: uuid.UUID,
+        expected_hash: str,
+        cached_until: datetime | None,
+    ) -> bool:
+        """Set the cache expiry only if the stored hash is still expected_hash and no
+        change is pending. Returns False, writing nothing, otherwise."""
+
+    @abstractmethod
+    async def migrate(
+        self,
+        tenant_id: uuid.UUID,
+        source_id: uuid.UUID,
+        expected_hash: str,
+        route: IngestionRoute,
+        interval: timedelta,
+        cached_until: datetime | None,
+    ) -> bool:
+        """Change the route, interval, and cache expiry only if the stored hash is still
+        expected_hash and no change is pending. Returns False, writing nothing, otherwise."""
 
     @abstractmethod
     async def version_times(self, tenant_id: uuid.UUID, source_id: uuid.UUID) -> list[datetime]:

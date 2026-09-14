@@ -70,6 +70,21 @@ async def test_qdrant_delete_is_scoped_by_tenant(db_session, qdrant_url, embeddi
     assert [hit.chunk_id for hit in hits] == [foreign.id]
 
 
+async def test_qdrant_delete_keeps_the_named_chunks_of_the_document(qdrant_url, embedding_model):
+    vector_store = QdrantVectorStore(qdrant_url)
+    await vector_store.ensure_collection()
+    tenant_id, document_id = uuid.uuid4(), uuid.uuid4()
+    vector = embedding_model.embed("return window")
+    old, new = (Chunk(uuid.uuid4(), document_id, text, vector) for text in ("old", "new"))
+    for chunk in (old, new):
+        await vector_store.upsert(chunk, tenant_id)
+
+    await vector_store.delete_document(document_id, tenant_id, keep_chunk_ids=[new.id])
+
+    hits = await vector_store.search(vector, tenant_id, top_k=5)
+    assert [hit.chunk_id for hit in hits] == [new.id]
+
+
 async def test_postgres_delete_document_removes_chunks_then_the_row(db_session, embedding_model):
     tenant_id, document_id = uuid.uuid4(), uuid.uuid4()
     await set_tenant_context(db_session, tenant_id)

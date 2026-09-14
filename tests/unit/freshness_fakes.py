@@ -1,7 +1,13 @@
+import dataclasses
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from src.orchestration.domain.entities import CacheHit, DataSource
+from src.orchestration.domain.entities import (
+    CacheHit,
+    DataSource,
+    IngestionRoute,
+    SourceVersion,
+)
 from src.orchestration.domain.ports import (
     DataSourceRepository,
     ExpiringCache,
@@ -12,9 +18,13 @@ from src.orchestration.domain.sync_mixer import content_hash
 
 
 class FakeDataSourceRepository(DataSourceRepository):
+    """Mirrors PostgresDataSourceRepository's write semantics: a save never changes an
+    existing source's route or interval, and the conditional writes apply only while
+    the stored hash is the expected one and no change is pending."""
+
     def __init__(self) -> None:
         self.sources: dict[uuid.UUID, DataSource] = {}
-        self.versions: dict[uuid.UUID, list[tuple[datetime, str]]] = {}
+        self.versions: dict[uuid.UUID, list[tuple[datetime, str | None]]] = {}
 
     async def get(
         self, tenant_id: uuid.UUID, source_key: str, user_id: uuid.UUID | None
@@ -27,12 +37,64 @@ class FakeDataSourceRepository(DataSourceRepository):
             None,
         )
 
-    async def save(self, source: DataSource, changed_content: str | None = None) -> None:
-        self.sources[source.id] = source
-        if changed_content is not None:
-            self.versions.setdefault(source.id, []).append(
-                (source.last_changed_at, changed_content)
+    async def save(self, source: DataSource, version: SourceVersion | None = None) -> None:
+        stored = self.sources.get(source.id)
+        if stored is not None:
+            source = dataclasses.replace(
+                source, route=stored.route, expected_change_interval=stored.expected_change_interval
             )
+        self.sources[source.id] = source
+        if version is not None:
+            self.versions.setdefault(source.id, []).append(
+                (source.last_changed_at, version.content)
+            )
+
+    async def mark_pending(
+        self, tenant_id: uuid.UUID, source_id: uuid.UUID, content_hash: str
+    ) -> None:
+        if self._visible(tenant_id, source_id):
+            self.sources[source_id] = dataclasses.replace(
+                self.sources[source_id], pending_hash=content_hash
+            )
+
+    def _unchanged(self, tenant_id: uuid.UUID, source_id: uuid.UUID, expected_hash: str) -> bool:
+        if not self._visible(tenant_id, source_id):
+            return False
+        stored = self.sources[source_id]
+        return stored.content_hash == expected_hash and stored.pending_hash is None
+
+    async def record_cached_until(
+        self,
+        tenant_id: uuid.UUID,
+        source_id: uuid.UUID,
+        expected_hash: str,
+        cached_until: datetime | None,
+    ) -> bool:
+        if not self._unchanged(tenant_id, source_id, expected_hash):
+            return False
+        self.sources[source_id] = dataclasses.replace(
+            self.sources[source_id], cached_until=cached_until
+        )
+        return True
+
+    async def migrate(
+        self,
+        tenant_id: uuid.UUID,
+        source_id: uuid.UUID,
+        expected_hash: str,
+        route: IngestionRoute,
+        interval: timedelta,
+        cached_until: datetime | None,
+    ) -> bool:
+        if not self._unchanged(tenant_id, source_id, expected_hash):
+            return False
+        self.sources[source_id] = dataclasses.replace(
+            self.sources[source_id],
+            route=route,
+            expected_change_interval=interval,
+            cached_until=cached_until,
+        )
+        return True
 
     def _visible(self, tenant_id: uuid.UUID, source_id: uuid.UUID) -> bool:
         source = self.sources.get(source_id)
@@ -44,8 +106,10 @@ class FakeDataSourceRepository(DataSourceRepository):
         return sorted(at for at, _ in self.versions.get(source_id, []))
 
     async def current_content(self, tenant_id: uuid.UUID, source_id: uuid.UUID) -> str | None:
-        versions = self.versions.get(source_id) if self._visible(tenant_id, source_id) else None
-        return max(versions, key=lambda version: version[0])[1] if versions else None
+        if not self._visible(tenant_id, source_id):
+            return None
+        texts = [text for _, text in self.versions.get(source_id, []) if text is not None]
+        return texts[-1] if texts else None
 
     async def list_sources(self, tenant_id: uuid.UUID) -> list[DataSource]:
         return [s for s in self.sources.values() if s.tenant_id == tenant_id]
