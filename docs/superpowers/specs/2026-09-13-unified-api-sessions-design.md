@@ -112,7 +112,8 @@ The user delegated design authority for this session ("take full control over th
   - `AnswerResponse(answer, sources, routing, attempts, degraded, dropped)`, with `SourceSchema`, `RoutingSchema`, and `AttemptSchema`.
   - A pure `answer_response(unified_answer) -> AnswerResponse` mapping, unit tested on its own.
 - **`src/api/unified_pipeline.py`.** The process-wide composition in decision 7, behind a cached builder.
-- **`src/api/dependencies.py`.** Adds `get_caller(claims) -> Caller(tenant_id, user_id)`, `get_chat_session_repository()`, and `get_answer_in_session()`.
+- **`src/api/caller.py`.** `Caller(tenant_id, user_id)` and `caller_from_claims(claims)`, which reads the token's `tenant_id` and `sub` and treats claims this issuer would never mint as an invalid token. It lives apart from `dependencies.py`, which reads the environment and loads a model at import, so a unit test can check it.
+- **`src/api/dependencies.py`.** Adds `get_caller()`, `get_chat_session_repository()`, a cached `get_unified_pipeline()`, and `get_answer_in_session()`.
 - **`src/api/routers/sessions.py`.** The three routes. Each takes `Caller` from the token, applies its rate limit, and calls one use case.
 - **`src/api/routers/chat.py`.** Adds the shared per-user chat limit.
 - **`src/api/exception_handlers.py`.** `SessionNotFound` returns 404 with `{"detail": "Session not found"}`, and `QueryExceedsBudget` returns 422.
