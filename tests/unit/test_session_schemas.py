@@ -33,6 +33,20 @@ def test_a_question_of_4000_characters_is_accepted():
     assert len(AnswerRequest(question="x" * 4000).question) == 4000
 
 
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        (CreateSessionRequest, {"title": "t", "user_id": str(uuid.uuid4())}),
+        (AnswerRequest, {"question": "q", "tenant_id": str(uuid.uuid4())}),
+    ],
+)
+def test_unknown_fields_are_refused_rather_than_silently_ignored(model, payload):
+    # Identity never comes from a body, so an ignored user_id grants nothing today. A
+    # refused one fails closed, and keeps a client from believing it set something.
+    with pytest.raises(ValidationError):
+        model(**payload)
+
+
 def _answer(decision: RoutingDecision | None, fallback, degraded: bool) -> UnifiedAnswer:
     source_id = uuid.UUID(int=7)
     contributing = frozenset({Paradigm.MAG, Paradigm.RAG})

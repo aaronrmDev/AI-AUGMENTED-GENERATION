@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.identity.domain.entities import MAX_SESSION_TITLE_CHARS, ChatSession
 from src.orchestration.application.unified_answer_question import UnifiedAnswer
@@ -14,6 +14,10 @@ MAX_QUESTION_CHARS = 4000
 
 
 class CreateSessionRequest(BaseModel):
+    # Unknown fields are refused, not ignored: a body can't name its owner or tenant, and a
+    # client that tries learns so at once instead of believing the field took effect.
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = Field(default=None, max_length=MAX_SESSION_TITLE_CHARS)
 
 
@@ -39,6 +43,8 @@ class SessionListResponse(BaseModel):
 
 
 class AnswerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     # Bounded for the reason ChatRequest is: a question is embedded and forwarded to the
     # chat model at the caller's discretion.
     question: str = Field(..., min_length=1, max_length=MAX_QUESTION_CHARS)
