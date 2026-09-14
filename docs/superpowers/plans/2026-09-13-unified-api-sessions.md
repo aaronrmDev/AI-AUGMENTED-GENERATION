@@ -1839,3 +1839,64 @@ git commit -m "feat: answer through the unified path in the caller's own session
 ## Execution notes
 
 Where executing this plan changed what it says, the change is kept and recorded here rather than bent back to match the text above.
+
+- **Import order (Task 7).** Ruff's import sorting (I001) reordered the imports the plan's code added to `src/api/dependencies.py`. Behaviour is unchanged.
+- **Live check (Task 9 Step 1).**
+  - **Why not the compose stack.** `docker/docker-compose.yml` publishes Postgres on host port 5432 and the API on 8000, and other projects' containers already hold both. So the check ran against throwaway `pgvector/pgvector:pg16`, `redis:7`, and `qdrant/qdrant:v1.16.2` containers on local ports 15432, 56379, and 56333, migrated to 0007, with uvicorn on 18000 (`CHAT_PROVIDER=ollama`, `CHAT_MODEL=qwen3.5`).
+  - **A first attempt that didn't count.** Postgres came up without its host port published. The migration failed, and uvicorn started anyway because the launch piped the migration's output through `tail`, which masked its exit status. Registration then returned 500 on connection refused. The container was recreated, and the migration run on its own and confirmed (exit 0) before the server started.
+  - **The transcript.** It ran on the code after the security fixes.
+
+    | Request | Status | Details |
+    |---|---|---|
+    | Register owner | 201 | |
+    | Log in owner | 200 | |
+    | Upload document | 201 | |
+    | Create session | 201 | |
+    | Answer as owner | 200 | Routing across CAG, MAG, and RAG in PARALLEL mode, no fallback. MAG missed, RAG hit, and there was no CAG attempt. Sources were RAG only, and the answer named forty-five days. |
+    | List sessions | 200 | One session, with a recorded budget total of 128,000 |
+    | Register another user | 201 | |
+    | Log in another user | 200 | |
+    | Answer in the owner's session as the other user | 404 | `{"detail": "Session not found"}` |
+
+  - **What the refusal covers.** Registration gives every user a new tenant, so the refused answer crossed tenants. No API puts two users in one tenant yet, so the same-tenant, cross-user refusal is proven by `test_sessions_endpoints.py` rather than this transcript.
+- **Security review (Task 9 Step 2).** The `fullstack-e2e-security-engineer` skill reviewed `33e3533..95b9357` in audit mode, against `docs/security/SECURITY.md` and the OWASP API Security Top 10. It found three issues worth fixing in this branch, and each was fixed test-first:
+  - F1 in `7e4c986`: a Redis client and connection pool per request.
+  - F2 in `7e4c986`: a non-atomic rate-limit window.
+  - F3 in `b65e615`: unknown request fields accepted.
+
+  It recorded the rest with a reason, and filed #193 for the items that belong to the abuse-control and deployment layers.
+
+  | # | Severity | Finding | Location | ID | Resolution |
+  |---|---|---|---|---|---|
+  | F1 | Medium | `get_rate_limiter` and `get_refresh_token_store` built a new Redis client, and so a new connection pool, on every call, and nothing closed them. Every answer in a session passes through the limiter. | `src/api/dependencies.py` | API4, CWE-772 | Fixed: one client of each per process, closed on shutdown by `close_redis_clients`, which forgets both before closing so a failed close can't leave a dead client cached |
+  | F2 | Medium | The rate limiter counted a request and set the window's expiry in two calls. A process dying between them left a counter with no TTL, which never reset and locked its owner out once past the limit, now on the chat path too. | `src/identity/infrastructure/redis_rate_limiter.py` | API4, CWE-400 | Fixed: the count, `EXPIRE NX`, and the TTL read run in one MULTI/EXEC, which also repairs such a leftover counter |
+  | F4 | Medium | Registration creates an account and a new tenant behind only a 5-per-minute per-IP limit, and each account gets its own 100-per-minute chat budget backed by a paid model call. | `src/api/routers/auth.py`, `src/api/rate_limit.py` | API6, API4 | Recorded in #193: needs the CAPTCHA `SECURITY.md` plans, and a per-tenant or global quota |
+  | F10 | Medium | No route bounds the request body before it is parsed. | `src/api/main.py` | API4, CWE-770 | Recorded in #193: belongs at the ingress, which doesn't exist yet |
+  | F3 | Low | The session request models silently ignored undeclared fields such as `user_id`. Not exploitable, because identity comes only from the token. | `src/api/schemas/sessions.py` | API3, CWE-915 | Fixed: `extra="forbid"`, so they're refused with 422 |
+  | F6 | Low | The process-wide embedding cache is shared across tenants, so a question some tenant asked recently embeds in a lookup rather than about 9ms of CPU. | `src/api/unified_pipeline.py`, `CachingEmbeddingModel` | CWE-208 | Accepted: stage timings aren't returned, the per-tier `elapsed_ms` doesn't include the question's embedding, and generation adds seconds of variance to the total response time. Revisit if streaming exposes time to first token. |
+  | F7 | Low | The auth rate limits key on `request.client.host`, so behind a reverse proxy every client shares one key. | `src/api/routers/auth.py` | API8 | Recorded in #193 |
+  | F8 | Low | Migration 0007 builds its index without `CONCURRENTLY`, which blocks writes to `sessions` while it builds. | `alembic/versions/0007_sessions_user_index.py` | ops | Accepted: the table is small today, and Alembic runs migrations in a transaction. A large production table would need `postgresql_concurrently` in an autocommit block. |
+  | F11 | Low | No response carries HSTS, `X-Content-Type-Options`, frame options, or `Referrer-Policy`. | `src/api/main.py` | API8, A05 | Recorded in #193 |
+  | F12 | Low | Authorization denials and 429s aren't logged as structured security events. | `src/api/exception_handlers.py` | A09 | Recorded in #193 |
+  | F5 | Info | Text in a tenant's documents or a user's facts reaches the model's context, so it could carry a stored prompt injection. | the unified path | LLM01 | Recorded: every registered user is their own tenant today, so only a user's own documents reach their context. Revisit when tenants gain several users. |
+  | F9 | Info | Nothing caps how many sessions a user keeps; creation is limited to 20 a minute. | `src/api/routers/sessions.py` | API4 | Accepted for now |
+
+  Checked and clean:
+  - Object-level authorization on every parameterized route (API1): `AnswerInSession` checks ownership before retrieval, and the budget recorder checks again.
+  - Identity only from verified claims (API2).
+  - Fully parameterized SQL (A03): the only f-strings interpolate the fixed column list.
+  - Response DTOs without scores, timings, or other tenants' data (API3).
+  - No CORS middleware, so cross-origin browser calls are refused (API8).
+
+  The fixes needed no new migration or seeder; the integration tests seed their own users and sessions.
+
+  | Endpoint | Auth level | DB action | OWASP mitigation | Test status |
+  |---|---|---|---|---|
+  | `POST /sessions` | Access token | INSERT under RLS | API1 owner from the token; API3 unknown fields refused; API4 20 a minute per user | `test_sessions_endpoints.py`: 401, 201, 429, 422 pass |
+  | `GET /sessions` | Access token | SELECT own rows under RLS | API1 owner and tenant filter; API4 limit 1 to 100 | 401, newest first, isolation, 422 pass |
+  | `POST /sessions/{session_id}/answers` | Access token | SELECT ownership, UPDATE `context_budget` | API1 identical 404 before retrieval; API4 100 a minute shared with `/chat` | 401, 200, cross-user 404, cross-tenant 404, 429, 422 pass |
+  | `POST /chat` | Access token | none | API4 the shared chat limit | 401, 429 pass |
+  | Rate limiter | n/a | Redis MULTI/EXEC | API4 atomic window | `test_redis_rate_limiter.py`, including the leftover-counter repair, passes |
+
+  A session the caller may not use gets 404, not 403, so its existence isn't confirmed (spec decision 4).
+- **Test teardown for shared Redis clients (Task 9 Step 2).** The first F1 fix closed the shared clients in the integration conftest after each test. That errored in 24 teardowns: pytest-asyncio 1.4 runs that function-scoped fixture on its own event loop, and closing a redis-py 8.1 client awaits the loop that opened its connections, which for a `loop_scope="module"` test is a different one. The engine disposal beside it survives because asyncpg's terminate is synchronous. The conftest now forgets the clients instead of closing them, so each test builds its own. The app runs on one loop and closes them on shutdown.
