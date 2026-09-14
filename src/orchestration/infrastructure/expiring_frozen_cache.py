@@ -22,8 +22,11 @@ class ExpiringFrozenCache(ExpiringCache):
     cascade falls through to RAG with no sweep to wait for. Entries preloaded
     without an expiry never expire.
 
-    The expiry map is lock-guarded, because CagTier reaches lookup from worker
-    threads.
+    CagTier reaches lookup from worker threads, so the expiry check and the eviction
+    it triggers happen together under one lock, as do evict and renew. preload_until
+    records the new expiry before the slow preload runs. A concurrent expiry check
+    therefore sees the entry being written, never its expired predecessor, and can't
+    evict the new copy.
     """
 
     def __init__(self, inner: FrozenCache, clock: Callable[[], datetime] = _utc_now) -> None:
@@ -42,38 +45,44 @@ class ExpiringFrozenCache(ExpiringCache):
         content: str,
         expires_at: datetime | None,
     ) -> None:
-        self._inner.preload(tenant_id, document_id, content)
         with self._lock:
             self._expiry[(tenant_id, document_id)] = expires_at
+        self._inner.preload(tenant_id, document_id, content)
 
     def renew(
         self, tenant_id: uuid.UUID, document_id: uuid.UUID, expires_at: datetime | None
     ) -> bool:
-        if not self.contains(tenant_id, document_id):
-            return False
         with self._lock:
+            if self._expire_if_due(tenant_id, document_id):
+                return False
+            if not self._inner.contains(tenant_id, document_id):
+                return False
             self._expiry[(tenant_id, document_id)] = expires_at
-        return True
+            return True
 
     def lookup(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> CacheHit | None:
-        if self._expired(tenant_id, document_id):
-            return None
+        with self._lock:
+            if self._expire_if_due(tenant_id, document_id):
+                return None
         return self._inner.lookup(tenant_id, document_id)
 
     def evict(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> None:
         with self._lock:
             self._expiry.pop((tenant_id, document_id), None)
-        self._inner.evict(tenant_id, document_id)
+            self._inner.evict(tenant_id, document_id)
 
     def contains(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> bool:
-        if self._expired(tenant_id, document_id):
-            return False
+        with self._lock:
+            if self._expire_if_due(tenant_id, document_id):
+                return False
         return self._inner.contains(tenant_id, document_id)
 
-    def _expired(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> bool:
-        with self._lock:
-            expires_at = self._expiry.get((tenant_id, document_id))
+    def _expire_if_due(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> bool:
+        """Must be called holding the lock."""
+        key = (tenant_id, document_id)
+        expires_at = self._expiry.get(key)
         if expires_at is None or self._clock() < expires_at:
             return False
-        self.evict(tenant_id, document_id)
+        del self._expiry[key]
+        self._inner.evict(tenant_id, document_id)
         return True

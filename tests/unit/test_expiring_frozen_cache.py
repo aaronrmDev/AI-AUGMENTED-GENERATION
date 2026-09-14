@@ -87,3 +87,29 @@ def test_expiry_is_scoped_by_tenant():
     clock.now = T0 + HOUR
     assert not cache.contains(TENANT, DOC)
     assert cache.contains(OTHER_TENANT, DOC)
+
+
+class _PreloadHookCache(FakeFrozenCache):
+    """Runs a callback after storing a preload, to interleave another caller mid-preload."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.during_preload = lambda: None
+
+    def preload(self, tenant_id: uuid.UUID, document_id: uuid.UUID, content: str) -> None:
+        super().preload(tenant_id, document_id, content)
+        self.during_preload()
+
+
+def test_an_expiry_check_during_a_re_preload_does_not_evict_the_new_entry():
+    inner, clock = _PreloadHookCache(), _Clock(T0)
+    cache = ExpiringFrozenCache(inner, clock)
+    cache.preload_until(TENANT, DOC, "v1", T0 + HOUR)
+    clock.now = T0 + 2 * HOUR  # v1 has expired, but nobody has looked at it yet
+    seen_mid_preload: list[bool] = []
+    inner.during_preload = lambda: seen_mid_preload.append(cache.contains(TENANT, DOC))
+
+    cache.preload_until(TENANT, DOC, "v2", T0 + 5 * HOUR)
+
+    assert seen_mid_preload == [True]
+    assert cache.contains(TENANT, DOC)
