@@ -1,7 +1,10 @@
+import threading
 import uuid
 
+from src.rag.application.search_documents import SearchDocuments
 from src.rag.domain.entities import SearchResult
 from src.rag.infrastructure.hyde_retriever import HyDERetriever
+from tests.unit.rag_fakes import FakeVectorStore, ThreadRecordingEmbeddingModel
 
 _TENANT = uuid.uuid4()
 
@@ -87,3 +90,18 @@ async def test_generates_the_hypothetical_answer_via_complete_not_generate():
 
     assert chat.generate_calls == 0
     assert len(chat.prompts) == 1
+
+
+async def test_the_generated_passage_is_embedded_off_the_event_loop():
+    # The passage is new text, so no cache shared with the pipeline can turn its
+    # embedding into a lookup: that CPU work has to leave the loop.
+    embedder = ThreadRecordingEmbeddingModel()
+    retriever = HyDERetriever(
+        inner=SearchDocuments(embedding_model=embedder, vector_store=FakeVectorStore()),
+        chat_model=_FakeChatModel("a hypothetical passage"),
+    )
+
+    await retriever.execute(tenant_id=_TENANT, query="q", top_k=5)
+
+    assert embedder.thread_ids
+    assert threading.get_ident() not in embedder.thread_ids

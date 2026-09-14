@@ -1,3 +1,4 @@
+import threading
 import uuid
 
 from src.rag.domain.entities import Chunk, Document, SearchResult
@@ -27,6 +28,19 @@ class FakeEmbeddingModel(EmbeddingModel):
     def embed(self, text: str) -> list[float]:
         # Deterministic, cheap stand-in: length-derived vector, not a real embedding.
         return [float(len(text) % 7)] * 384
+
+
+class ThreadRecordingEmbeddingModel(EmbeddingModel):
+    """Records the thread each embed runs on, so a test can prove embedding left the
+    event loop: CPU work there starves the other cascade tiers in a PARALLEL route."""
+
+    def __init__(self, inner: EmbeddingModel | None = None) -> None:
+        self._inner = inner or FakeEmbeddingModel()
+        self.thread_ids: list[int] = []
+
+    def embed(self, text: str) -> list[float]:
+        self.thread_ids.append(threading.get_ident())
+        return self._inner.embed(text)
 
 
 class FakeVectorStore(VectorStore):

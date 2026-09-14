@@ -41,7 +41,7 @@ Every tier met its budget on every attempt, with four qualifications:
 - **Embedding comes first.** Query embedding (MiniLM on CPU) costs p50 9.20ms, max 11.46ms, before any tier runs. Every tier depends on that embedding, so the medians put the whole CAG path at about 11ms — just over the 10ms the source budgets for checking the cache — even though the lookup itself takes 2ms.
 - **No MAG hit was timed.** Every MAG attempt in this run was a miss. A miss still runs the full similarity query, but a MAG hit's latency was never measured under the budget.
 - **The scale is small.** This is a six-document corpus with loopback Postgres and Qdrant on one machine.
-- **One request at a time, one retriever.** Requests ran sequentially, with `SearchDocuments` as the RAG retriever. Concurrent requests sharing an event loop are unmeasured. So are the retrievers that embed text other than the question on the loop — `CompressingRetriever`, `BiEncoderRerankReranker`, and `HyDERetriever`, tracked in #168.
+- **One request at a time, one retriever.** Requests ran sequentially, with `SearchDocuments` as the RAG retriever. Concurrent requests sharing an event loop are unmeasured. The retrievers that embed text other than the question were measured later, by follow-up #168 (see below).
 
 The number that matters most is from the first run of this measurement, recorded in the plan's execution notes rather than in a committed report. That run put CAG within budget in only 29% of attempts (p50 10.76ms, 32 of 45 timed out), yet a CAG attempt measured alone took p50 0.40ms. Two hypotheses were tested with one-off probe scripts against the real cascade and MiniLM:
 
@@ -149,10 +149,25 @@ A follow-up review confirmed all seven fixes and raised a further round, also fi
 
 A final review of the measurement pass found no critical issues and four important ones:
 
-- **The starvation fix covered one request.** `UnifiedAnswerQuestion` still embedded on the event loop. It now embeds on a worker thread, and #168 tracks the retrievers that still embed other text on the loop.
+- **The starvation fix covered one request.** `UnifiedAnswerQuestion` still embedded on the event loop. It now embeds on a worker thread, and follow-up #168 did the same for the retrievers that embedded other text on the loop.
 - **The embedding cache is shared across tenants.** The spec said the batch added no shared state. The cache now keys by digest, and the spec names the remaining timing signal.
 - **The success checks counted non-answers.** The checks were fixed, unit-tested, and the comparisons rerun, as described above.
 - **This report overclaimed.** It asserted savings from classification that were never measured, gave a cause for a latency difference smaller than the baselines' own spread, and understated run-to-run noise. The sections above state only what the data supports.
+
+## Follow-up: RAG retrievers in a PARALLEL route (#168)
+
+Claim 2's measurement used `SearchDocuments`, whose embedding of the question is a lookup in the pipeline's shared cache. Three other retrievers embed text the pipeline never embedded: `CompressingRetriever` every candidate sentence, `BiEncoderRerankReranker` every candidate, and `HyDERetriever` its generated passage. Follow-up #168 measured each behind `RagTier`, with every question forced into a PARALLEL route. It then moved that embedding to worker threads and measured again. Both tables are generated, in `orchestration-meta-layer-retrievers-before-fix.md` and `orchestration-meta-layer-retrievers.md`.
+
+| RAG composition | CAG within budget, before → after | MAG within budget, before → after |
+|---|---|---|
+| `SearchDocuments` | 100% → 100% | 100% → 100% |
+| `CompressingRetriever` | 100% → 100% | 0% → 100% |
+| `RerankingRetriever` with `BiEncoderRerankReranker` | 100% → 100% | 0% → 100% |
+| `HyDERetriever` | 0% → 100% | 0% → 100% |
+
+Before the fix, every MAG attempt behind compression or reranking timed out, with a p50 of 100ms to 121ms against a 50ms budget, because its timeout couldn't fire while the loop was busy. HyDE's single passage embedding took CAG (p50 14.98ms) and MAG (p50 59.34ms) past their budgets. After the fix, every tier stayed within budget for every composition. The RAG tier held its 2,000ms budget throughout.
+
+Worker threads don't make that CPU work free. Behind compression and reranking, MAG's p95 was 13.37ms and 14.40ms, against 8.32ms behind `SearchDocuments` in the same run. Worker threads still compete with the loop for CPU and for Python's interpreter lock, although the run doesn't isolate which. That is well inside 50ms here, on a six-document corpus and one request at a time. HyDE's generator was a stub that returns at once, so these numbers cover the passage embedding, not generation. Three more components still do CPU work on the loop, and #181 tracks them: `BM25KeywordSearch` (and so `HybridSearchDocuments`), `CrossEncoderReranker`, and `CacheWarmedRetrieve.execute`. The follow-up added 8 unit tests, including the first unit tests for `BiEncoderRerankReranker`.
 
 ## What these measurements cannot show
 

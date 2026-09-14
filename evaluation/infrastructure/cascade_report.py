@@ -13,6 +13,15 @@ def _pct(value: float) -> str:
     return "n/a" if math.isnan(value) else f"{value:.0%}"
 
 
+def _tier_row(s: TierLatencySummary) -> str:
+    """A tier's columns from Tier through Within budget, closing pipe included."""
+    outcomes = ", ".join(f"{outcome.value} {n}" for outcome, n in s.outcomes.items())
+    return (
+        f"{s.paradigm.value.upper()} | {s.attempts} | {outcomes} | {s.p50_ms:.2f} "
+        f"| {s.p95_ms:.2f} | {s.budget_ms:.0f} | {_pct(s.within_budget_rate)} |"
+    )
+
+
 def render_cascade_measurements(
     tiers: list[TierLatencySummary],
     tallies: list[StaleAnswerTally],
@@ -29,12 +38,7 @@ def render_cascade_measurements(
         "| Tier | Attempts | Outcomes | p50 ms | p95 ms | Budget ms | Within budget |",
         "|---|---|---|---|---|---|---|",
     ]
-    for s in tiers:
-        outcomes = ", ".join(f"{outcome.value} {n}" for outcome, n in s.outcomes.items())
-        lines.append(
-            f"| {s.paradigm.value.upper()} | {s.attempts} | {outcomes} | {s.p50_ms:.2f} "
-            f"| {s.p95_ms:.2f} | {s.budget_ms:.0f} | {_pct(s.within_budget_rate)} |"
-        )
+    lines += [f"| {_tier_row(s)}" for s in tiers]
     lines += [
         "",
         "## Superseded frozen-cache text reaching the model, router off vs. on",
@@ -59,4 +63,22 @@ def render_cascade_measurements(
         f"| {a.dynamic_tokens} | {a.static_tokens} |"
         for a in allocators
     ]
+    return "\n".join(lines) + "\n"
+
+
+def render_retriever_measurements(
+    retrievers: list[tuple[str, list[TierLatencySummary]]], notes: str
+) -> str:
+    """One row per tier under each RAG retriever composed behind RagTier."""
+    lines = [
+        "# Orchestration Meta-Layer — RAG Retrievers in a PARALLEL Route",
+        "",
+        notes,
+        "",
+        "## Tier latency against Concept 5's budgets, per RAG retriever",
+        "",
+        "| Retriever | Tier | Attempts | Outcomes | p50 ms | p95 ms | Budget ms | Within budget |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    lines += [f"| {name} | {_tier_row(s)}" for name, tiers in retrievers for s in tiers]
     return "\n".join(lines) + "\n"

@@ -3,6 +3,10 @@
 - cascade: tier latency against Concept 5's 10/50/2000ms budgets, the
   router-off vs. router-on stale-text ablation, and dynamic vs. static budget
   slices across a sweep of context windows. No LLM, a few minutes.
+- retrievers: the same tier latency with every question forced into a PARALLEL
+  route, once per RAG composition behind RagTier (SearchDocuments, compression,
+  bi-encoder reranking, HyDE), which shows whether a retriever's own CPU work
+  starves the other tiers. No LLM: HyDE's passage comes from a stub.
 - comparison: a self-versus-self RunComparison on qwen3.5, RAG-only
   AnswerQuestion vs. UnifiedAnswerQuestion routed by the MiniLM prototype
   classifier.
@@ -48,11 +52,15 @@ from evaluation.application.run_comparison import RunComparison
 from evaluation.domain.cascade_metrics import (
     AllocatorTally,
     StaleAnswerTally,
+    TierLatencySummary,
     summarize_tier_latency,
     tally_staleness,
 )
 from evaluation.domain.entities import Answer
-from evaluation.infrastructure.cascade_report import render_cascade_measurements
+from evaluation.infrastructure.cascade_report import (
+    render_cascade_measurements,
+    render_retriever_measurements,
+)
 from evaluation.infrastructure.markdown_report import render
 from evaluation.infrastructure.ollama_judge import OllamaJudge
 from evaluation.scenarios.loader import load_scenario
@@ -79,6 +87,7 @@ from src.orchestration.domain.entities import (
     CascadeResult,
     Paradigm,
     RoutingDecision,
+    RoutingMode,
     TierAttempt,
     TierRequest,
 )
@@ -98,16 +107,22 @@ from src.orchestration.infrastructure.session_scoped_semantic_fact_search import
 from src.rag.application.answer_question import AnswerQuestion
 from src.rag.application.search_documents import SearchDocuments
 from src.rag.domain.entities import Chunk
+from src.rag.domain.ports import ChatModel, Retriever
+from src.rag.infrastructure.bi_encoder_rerank_reranker import BiEncoderRerankReranker
 from src.rag.infrastructure.caching_embedding_model import CachingEmbeddingModel
+from src.rag.infrastructure.compressing_retriever import CompressingRetriever
+from src.rag.infrastructure.hyde_retriever import HyDERetriever
 from src.rag.infrastructure.ollama_chat_model import OllamaChatModel
 from src.rag.infrastructure.qdrant_vector_store import QdrantVectorStore
+from src.rag.infrastructure.reranking_retriever import RerankingRetriever
 from src.rag.infrastructure.sentence_transformers_embedder import SentenceTransformersEmbedder
 
 _SCENARIO_DIR = Path(__file__).parent
 _CASCADE_REPORT = Path("evaluation/reports/orchestration-meta-layer-cascade.md")
+_RETRIEVERS_REPORT = Path("evaluation/reports/orchestration-meta-layer-retrievers.md")
 _COMPARISON_REPORT = Path("evaluation/reports/orchestration-meta-layer-comparison.md")
 _ORACLE_REPORT = Path("evaluation/reports/orchestration-meta-layer-comparison-oracle.md")
-_PARTS = ("cascade", "comparison", "oracle")
+_PARTS = ("cascade", "retrievers", "comparison", "oracle")
 _MODEL_ID = "qwen3.5"
 _APP_DB_PASSWORD = "evaluation-only-app-user-password"
 # A syntactically valid Argon2id hash for seeded users; nobody logs in here.
@@ -187,6 +202,26 @@ class _OracleClassifier(QueryClassifier):
         return {paradigm: 1.0 if paradigm in expected else 0.0 for paradigm in PARADIGM_ORDER}
 
 
+class _FreshPassageChatModel(ChatModel):
+    """Stands in for HyDE's generator: returns at once, with a new passage every call.
+
+    Generation is awaited network I/O that yields the event loop, so it isn't what
+    this measurement is after. A passage that differs on every call means no cache can
+    turn its embedding into a lookup, so every attempt pays that CPU cost.
+    """
+
+    def __init__(self) -> None:
+        self._calls = 0
+
+    async def complete(self, prompt: str) -> str:
+        self._calls += 1
+        question = prompt.rsplit("Question: ", 1)[-1]
+        return f"A confident hypothetical answer to {question!r}, draft {self._calls}."
+
+    async def generate(self, question: str, context: str) -> str:
+        return await self.complete(question)
+
+
 def _ms(started: float) -> float:
     return (time.perf_counter() - started) * 1000
 
@@ -221,7 +256,13 @@ async def _create_user_and_session(
     return user_id, session_id
 
 
-async def _measure(app_url: str, qdrant_url: str, parts: frozenset[str]) -> None:
+async def _measure(
+    app_url: str,
+    qdrant_url: str,
+    parts: frozenset[str],
+    retrievers_report: Path,
+    retrievers_note: str,
+) -> None:
     scenario = load_scenario(_SCENARIO_DIR)
     questions = [q.question for q in scenario.questions]
     checks = dict(zip(questions, SUCCESS_CHECKS, strict=True))
@@ -284,7 +325,7 @@ async def _measure(app_url: str, qdrant_url: str, parts: frozenset[str]) -> None
             )
             await repository.save(fact, tenant_id)
 
-    def cascade(timeouts: TierTimeouts) -> LatencyCascade:
+    def cascade(timeouts: TierTimeouts, rag: Retriever = search) -> LatencyCascade:
         return LatencyCascade(
             [
                 CagTier(warmed, hit_threshold=CAG_HIT, partial_threshold=CAG_PARTIAL),
@@ -293,7 +334,7 @@ async def _measure(app_url: str, qdrant_url: str, parts: frozenset[str]) -> None
                     hit_threshold=MAG_HIT,
                     partial_threshold=MAG_PARTIAL,
                 ),
-                RagTier(search, top_k=3),
+                RagTier(rag, top_k=3),
             ],
             timeouts,
         )
@@ -399,6 +440,58 @@ async def _measure(app_url: str, qdrant_url: str, parts: frozenset[str]) -> None
         )
         print(_CASCADE_REPORT.read_text(encoding="utf-8"))
 
+    if "retrievers" in parts:
+        # Every tier runs at once, so CPU work any RAG composition does on the event
+        # loop shows up as CAG and MAG attempts overrunning their budgets. The
+        # compositions' own extra embeds go through the uncached model, so every
+        # repeat pays them; the question's embedding stays a shared-cache lookup.
+        uncached_search = SearchDocuments(raw_embedder, vector_store)
+        compositions: dict[str, Retriever] = {
+            "SearchDocuments": search,
+            "CompressingRetriever": CompressingRetriever(search, raw_embedder),
+            "RerankingRetriever + BiEncoderRerankReranker": RerankingRetriever(
+                search, BiEncoderRerankReranker(raw_embedder)
+            ),
+            "HyDERetriever": HyDERetriever(uncached_search, _FreshPassageChatModel()),
+        }
+        every_tier = RoutingDecision(
+            frozenset(PARADIGM_ORDER),
+            RoutingMode.PARALLEL,
+            {paradigm: 1.0 for paradigm in PARADIGM_ORDER},
+        )
+        rows: list[tuple[str, list[TierLatencySummary]]] = []
+        for name, composition in compositions.items():
+            parallel = cascade(TierTimeouts(), composition)
+            await parallel.run(request("warm up", embedder.embed("warm up")), every_tier)
+            composition_attempts: list[TierAttempt] = []
+            for _ in range(_LATENCY_REPEATS):
+                for question in questions:
+                    embedding = embedder.embed(question)
+                    result = await parallel.run(request(question, embedding), every_tier)
+                    composition_attempts.extend(result.attempts)
+            await parallel.drain()
+            rows.append((name, summarize_tier_latency(composition_attempts, _BUDGETS_MS)))
+        retrievers_notes = (
+            f"Every question is forced into a PARALLEL route across CAG, MAG, and RAG, once "
+            f"per RAG composition behind RagTier: {len(questions)} questions x "
+            f"{_LATENCY_REPEATS} repeats each, default TierTimeouts, after one untimed "
+            f"warm-up, on the corpus and thresholds of orchestration-meta-layer-cascade.md. "
+            f"The pipeline's shared CachingEmbeddingModel serves the question's embedding to "
+            f"every tier and to SearchDocuments, so SearchDocuments alone embeds nothing new. "
+            f"The other compositions embed through the uncached MiniLM model on every "
+            f"attempt: CompressingRetriever its query and every candidate sentence, "
+            f"BiEncoderRerankReranker its query and every candidate, and HyDERetriever's "
+            f"search its generated passage. That passage comes from a stub chat model that "
+            f"returns a new passage at once: generation is awaited network I/O that yields "
+            f"the loop, so the stub isolates the embedding. A timed-out CAG match keeps its "
+            f"worker thread running to completion, so an attempt measured right after a CAG "
+            f"timeout can include that overlap. {retrievers_note}"
+        ).strip()
+        retrievers_report.write_text(
+            render_retriever_measurements(rows, retrievers_notes), encoding="utf-8"
+        )
+        print(retrievers_report.read_text(encoding="utf-8"))
+
     baseline_answerer = AnswerQuestion(search_documents=search, chat_model=chat_model, top_k=3)
 
     async def compare(
@@ -501,9 +594,19 @@ def main() -> None:
         default=",".join(_PARTS),
         help="comma-separated subset of: " + ", ".join(_PARTS),
     )
-    parts = frozenset(
-        part.strip() for part in parser.parse_args().parts.split(",") if part.strip()
+    parser.add_argument(
+        "--retrievers-report",
+        type=Path,
+        default=_RETRIEVERS_REPORT,
+        help="where the retrievers part writes its report",
     )
+    parser.add_argument(
+        "--retrievers-note",
+        default="",
+        help="text appended to the retrievers report's notes, such as the commit measured",
+    )
+    args = parser.parse_args()
+    parts = frozenset(part.strip() for part in args.parts.split(",") if part.strip())
     unknown = parts - set(_PARTS)
     if unknown:
         parser.error(f"unknown parts: {sorted(unknown)}")
@@ -535,7 +638,13 @@ def main() -> None:
             .render_as_string(hide_password=False)
         )
         asyncio.run(
-            _measure(app_url, f"http://127.0.0.1:{qdrant.get_exposed_port(6333)}", parts)
+            _measure(
+                app_url,
+                f"http://127.0.0.1:{qdrant.get_exposed_port(6333)}",
+                parts,
+                args.retrievers_report,
+                args.retrievers_note,
+            )
         )
 
 

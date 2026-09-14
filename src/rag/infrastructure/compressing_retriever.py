@@ -1,3 +1,4 @@
+import asyncio
 import math
 import uuid
 
@@ -28,7 +29,12 @@ class CompressingRetriever(Retriever):
         results = await self._inner.execute(tenant_id=tenant_id, query=query, top_k=top_k)
         if not results:
             return []
+        # Every embedding and the token budgeting are CPU work, so they run together on
+        # one worker thread. On the event loop they would stall every other coroutine,
+        # which in a PARALLEL cascade route means the CAG and MAG tiers' budgets.
+        return await asyncio.to_thread(self._compress, query, results)
 
+    def _compress(self, query: str, results: list[SearchResult]) -> list[SearchResult]:
         query_embedding = self._embedder.embed(query)
 
         # Pool every result's sentences together (not per-result) so
