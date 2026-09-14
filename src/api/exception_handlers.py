@@ -8,6 +8,7 @@ from src.identity.domain.errors import (
     TokenAlreadyUsed,
     TokenExpired,
 )
+from src.orchestration.domain.errors import QueryExceedsBudget, SessionNotFound
 from src.rag.domain.errors import UnsupportedFileType
 
 
@@ -46,6 +47,16 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
     return response
 
 
+async def session_not_found_handler(request: Request, exc: SessionNotFound) -> JSONResponse:
+    # One status and body whether the session is missing, another user's, or another
+    # tenant's, so a caller can't learn which session ids exist.
+    return JSONResponse(status_code=404, content={"detail": "Session not found"})
+
+
+async def query_exceeds_budget_handler(request: Request, exc: QueryExceedsBudget) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(InvalidCredentials, invalid_credentials_handler)  # type: ignore[arg-type]
     app.add_exception_handler(EmailAlreadyRegistered, email_already_registered_handler)  # type: ignore[arg-type]
@@ -53,3 +64,5 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(TokenAlreadyUsed, token_already_used_handler)  # type: ignore[arg-type]
     app.add_exception_handler(UnsupportedFileType, unsupported_file_type_handler)  # type: ignore[arg-type]
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(SessionNotFound, session_not_found_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(QueryExceedsBudget, query_exceeds_budget_handler)  # type: ignore[arg-type]
