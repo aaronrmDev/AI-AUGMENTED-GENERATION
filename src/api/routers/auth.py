@@ -1,11 +1,8 @@
 import os
 import uuid
-from collections.abc import Awaitable, Callable
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.api.dependencies import (
     get_rate_limiter,
@@ -13,6 +10,7 @@ from src.api.dependencies import (
     get_refresh_token_store,
     get_token_issuer,
 )
+from src.api.rate_limit import AUTH_LIMIT, enforce_rate_limit
 from src.api.schemas.auth import LoginRequest, RegisterRequest, RegisterResponse, TokenResponse
 from src.identity.application.authenticate_user import AuthenticateUser
 from src.identity.application.refresh_access_token import RefreshAccessToken
@@ -24,8 +22,6 @@ from src.identity.infrastructure.postgres_user_repository import PostgresUserRep
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_RATE_LIMIT = 5
-_RATE_LIMIT_WINDOW_SECONDS = 60
 _REFRESH_COOKIE_NAME = "refresh_token"
 _REFRESH_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 # Scoped to /auth rather than "/": the refresh cookie is only ever read by
@@ -80,68 +76,15 @@ def _parse_refresh_cookie(token_id_str: str) -> uuid.UUID:
         raise TokenAlreadyUsed() from exc
 
 
-class _RateLimitExceeded(Exception):
-    def __init__(self, limit: int, remaining: int, reset_at: datetime) -> None:
-        self.limit = limit
-        self.remaining = remaining
-        self.reset_at = reset_at
-
-
-class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
-    """Reapplies the X-RateLimit-* headers onto whatever response the app ends up returning.
-
-    `_enforce_rate_limit` below sets these same headers directly on its injected
-    `response` for the common case, but that only reaches the client when the route
-    returns normally. When the rate limiter allows the request and the route then
-    raises a domain exception anyway (e.g. login's `AuthenticateUser.execute()`
-    raising `InvalidCredentials` for a wrong password), FastAPI's exception-handling
-    path builds an entirely new Response from the registered handler — one that never
-    saw the injected `response` and so never inherits headers written to it. Starlette
-    dispatches registered exception handlers inside `ExceptionMiddleware`, which sits
-    *below* any middleware added via `add_middleware`, so `call_next` here always
-    hands back the final response — success or handled-exception alike — letting this
-    middleware attach the headers stashed on `request.state` regardless of which path
-    produced that response.
-    """
-
-    async def dispatch(
-        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
-        response = await call_next(request)
-        headers = getattr(request.state, "rate_limit_headers", None)
-        if headers is not None:
-            response.headers.update(headers)
-        return response
-
-
 async def _enforce_rate_limit(request: Request, response: Response, route_name: str) -> None:
-    limiter = get_rate_limiter()
     client_ip = request.client.host if request.client else "unknown"
-    allowed, remaining, reset_at = await limiter.check(
+    await enforce_rate_limit(
+        request,
+        response,
+        limiter=get_rate_limiter(),
         key=f"{route_name}:{client_ip}",
-        limit=_RATE_LIMIT,
-        window_seconds=_RATE_LIMIT_WINDOW_SECONDS,
+        limit=AUTH_LIMIT,
     )
-    if not allowed:
-        # Raising here means the route's own successful-response path never
-        # runs, so headers set on the injected `response` below would never
-        # reach the client — FastAPI's exception handler builds an entirely
-        # new JSONResponse for the 429 and does not inherit them. Carry the
-        # values on the exception itself instead, and let the handler set
-        # them on the response it actually returns.
-        raise _RateLimitExceeded(limit=_RATE_LIMIT, remaining=0, reset_at=reset_at)
-
-    headers = {
-        "X-RateLimit-Limit": str(_RATE_LIMIT),
-        "X-RateLimit-Remaining": str(remaining),
-        "X-RateLimit-Reset": reset_at.isoformat(),
-    }
-    # Written to both places: directly on `response` covers the normal
-    # successful-response path with no extra hop through the middleware, and
-    # stashed on `request.state` is what lets RateLimitHeadersMiddleware recover
-    # these same values if the route raises a domain exception afterward.
-    response.headers.update(headers)
-    request.state.rate_limit_headers = headers
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=201)

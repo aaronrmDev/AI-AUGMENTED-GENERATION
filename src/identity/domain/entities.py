@@ -4,6 +4,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 _ARGON2ID_PATTERN = re.compile(r"^\$argon2id\$")
 
@@ -68,3 +69,23 @@ class RefreshToken:
 class TokenPair:
     access_token: AccessToken
     refresh_token: RefreshToken
+
+
+MAX_SESSION_TITLE_CHARS = 200
+
+
+@dataclass(frozen=True)
+class ChatSession:
+    """A conversation its owner answers questions in. context_budget is the latest
+    turn's context-slice record, which PostgresSessionBudgetRecorder writes."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    user_id: uuid.UUID
+    title: str | None
+    context_budget: dict[str, Any] | None
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.title is not None and len(self.title) > MAX_SESSION_TITLE_CHARS:
+            raise ValueError(f"a session title is at most {MAX_SESSION_TITLE_CHARS} characters")

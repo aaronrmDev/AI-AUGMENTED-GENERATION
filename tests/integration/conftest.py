@@ -104,6 +104,13 @@ async def _dispose_api_engine_after_each_test():
 
     deps = sys.modules.get("src.api.dependencies")
     if deps is not None:
+        # The shared Redis clients are bound to the loop that opened their connections too,
+        # but unlike asyncpg's terminate, closing one awaits that loop, and this fixture's
+        # loop isn't the loop a loop_scope="module" test ran on. So they're forgotten rather
+        # than closed, and the next test builds fresh ones under its own loop. The app itself
+        # runs on one loop and closes them on shutdown.
+        deps.get_rate_limiter.cache_clear()
+        deps.get_refresh_token_store.cache_clear()
         await deps._engine.dispose()
 
 
