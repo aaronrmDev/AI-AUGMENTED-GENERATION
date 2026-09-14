@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from src.api.exception_handlers import register_exception_handlers
-from src.api.routers.auth import RateLimitHeadersMiddleware
+from src.api.rate_limit import RateLimitHeadersMiddleware
 from src.api.routers.auth import router as auth_router
 from src.api.routers.chat import router as chat_router
 from src.api.routers.documents import router as documents_router
