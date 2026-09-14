@@ -1,6 +1,7 @@
 import math
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -175,3 +176,86 @@ class BudgetAllocation:
 
     def for_paradigm(self, paradigm: Paradigm) -> int:
         return {Paradigm.CAG: self.cag, Paradigm.MAG: self.mag, Paradigm.RAG: self.rag}[paradigm]
+
+
+class SourceScope(Enum):
+    TENANT = "tenant"
+    USER = "user"
+
+
+class IngestionRoute(Enum):
+    RAG_ONLY = "rag_only"
+    CAG_WITH_RAG_BACKUP = "cag_with_rag_backup"
+    MAG = "mag"
+
+
+@dataclass(frozen=True)
+class DataSourceProfile:
+    """What a caller declares about a source the first time it is ingested."""
+
+    source_key: str
+    scope: SourceScope
+    expected_change_interval: timedelta
+
+    def __post_init__(self) -> None:
+        if not self.source_key.strip():
+            raise ValueError("source_key must not be blank")
+        if self.expected_change_interval <= timedelta(0):
+            raise ValueError("expected_change_interval must be positive")
+
+
+@dataclass(frozen=True)
+class FreshnessPolicy:
+    """The freshness router's disclosed defaults (spec decisions 3, 6, and 7)."""
+
+    volatile_below: timedelta = timedelta(days=1)
+    demote_after_changes: int = 3
+    promote_after_quiet_multiple: int = 7
+    ttl_factor: float | None = 0.5
+
+    def __post_init__(self) -> None:
+        if self.volatile_below <= timedelta(0):
+            raise ValueError("volatile_below must be positive")
+        if self.demote_after_changes < 1:
+            raise ValueError("demote_after_changes must be at least 1")
+        if self.promote_after_quiet_multiple <= self.demote_after_changes:
+            # Otherwise one version on the window's edge could satisfy both rules.
+            raise ValueError("promote_after_quiet_multiple must exceed demote_after_changes")
+        if self.ttl_factor is not None and self.ttl_factor <= 0:
+            raise ValueError("ttl_factor must be positive, or None for no expiry")
+
+
+@dataclass(frozen=True)
+class DataSource:
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    user_id: uuid.UUID | None
+    source_key: str
+    scope: SourceScope
+    expected_change_interval: timedelta
+    route: IngestionRoute
+    content_hash: str
+    last_changed_at: datetime
+    last_ingested_at: datetime
+    cached_until: datetime | None = None
+
+
+@dataclass(frozen=True)
+class IngestionResult:
+    source_id: uuid.UUID
+    route: IngestionRoute
+    changed: bool
+
+
+@dataclass(frozen=True)
+class MigrationDecision:
+    to_route: IngestionRoute
+    interval: timedelta
+
+
+@dataclass(frozen=True)
+class SourceMigration:
+    source_key: str
+    from_route: IngestionRoute
+    to_route: IngestionRoute
+    observed_interval: timedelta
