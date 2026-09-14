@@ -20,3 +20,14 @@ class QueryExceedsBudget(Exception):
         )
         self.query_tokens = query_tokens
         self.query_slice = query_slice
+
+
+class ScopeMismatch(Exception):
+    """A user-scoped source was ingested without a user_id, or a tenant-scoped one with one."""
+
+    def __init__(self, source_key: str, scope_name: str, has_user: bool) -> None:
+        super().__init__(
+            f"source {source_key!r} is {scope_name}-scoped but was ingested "
+            f"{'with' if has_user else 'without'} a user_id"
+        )
+        self.source_key = source_key

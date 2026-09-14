@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Collection
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qmodels
@@ -39,6 +40,37 @@ class QdrantVectorStore(VectorStore):
                     },
                 )
             ],
+        )
+
+    async def delete_document(
+        self,
+        document_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        keep_chunk_ids: Collection[uuid.UUID] = (),
+    ) -> None:
+        """Delete one document's points, except keep_chunk_ids. Filtered by tenant as well
+        as document, so one tenant can never delete another's points. Keeping the new
+        chunks lets a caller upsert a replacement first, and delete the old version
+        after, so the document is never absent from search."""
+        must_not: list[qmodels.Condition] = []
+        if keep_chunk_ids:
+            must_not.append(qmodels.HasIdCondition(has_id=[str(c) for c in keep_chunk_ids]))
+        await self._client.delete(
+            collection_name=_COLLECTION_NAME,
+            points_selector=qmodels.FilterSelector(
+                filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="tenant_id", match=qmodels.MatchValue(value=str(tenant_id))
+                        ),
+                        qmodels.FieldCondition(
+                            key="document_id", match=qmodels.MatchValue(value=str(document_id))
+                        ),
+                    ],
+                    must_not=must_not or None,
+                )
+            ),
+            wait=True,
         )
 
     async def search(

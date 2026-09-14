@@ -69,6 +69,13 @@ class CacheWarmedRetrieve(Retriever):
         embedding = self._embedder.embed(content)
         self._warmed.setdefault(tenant_id, {})[document_id] = (content, embedding)
 
+    def forget(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> None:
+        """Drop a document's warmed memo once its cache entry is gone, so a later
+        re-preload of the same text isn't matched until note_warmed records it again."""
+        entries = self._warmed.get(tenant_id)
+        if entries is not None:
+            entries.pop(document_id, None)
+
     def stats(self) -> tuple[int, int]:
         """(hits, misses) recorded so far, across all tenants."""
         return self._hits, self._misses
@@ -89,24 +96,29 @@ class CacheWarmedRetrieve(Retriever):
     def best_warmed_match(
         self, tenant_id: uuid.UUID, query_embedding: list[float]
     ) -> SearchResult | None:
-        """The closest warmed document for this tenant, scored by similarity
-        and confirmed against FrozenCache's real content_hash, with no
-        threshold applied -- the caller decides what score counts."""
+        """The closest warmed document for this tenant whose FrozenCache entry still
+        confirms, scored by similarity, with no threshold applied -- the caller decides
+        what score counts.
+
+        Candidates are tried best first. One whose entry was evicted, expired, or
+        re-preloaded with different content is skipped rather than ending the search, so
+        a stale memo can never shadow a confirmed document that scores below it.
+        """
         entries = self._warmed.get(tenant_id)
         if not entries:
             return None
-        best: tuple[uuid.UUID, str, float] | None = None
-        for document_id, (content, embedding) in entries.copy().items():
-            score = cosine_similarity(query_embedding, embedding)
-            if best is None or score > best[2]:
-                best = (document_id, content, score)
-        if best is None:
-            return None
-
-        document_id, content, score = best
-        cached_hit = self._frozen_cache.lookup(tenant_id, document_id)
-        if cached_hit is None or cached_hit.content_hash != content_hash(content):
-            return None
-        return SearchResult(
-            document_id=document_id, chunk_id=document_id, content=content, score=score
+        candidates = sorted(
+            (
+                (cosine_similarity(query_embedding, embedding), document_id, content)
+                for document_id, (content, embedding) in entries.copy().items()
+            ),
+            key=lambda candidate: candidate[0],
+            reverse=True,
         )
+        for score, document_id, content in candidates:
+            cached_hit = self._frozen_cache.lookup(tenant_id, document_id)
+            if cached_hit is not None and cached_hit.content_hash == content_hash(content):
+                return SearchResult(
+                    document_id=document_id, chunk_id=document_id, content=content, score=score
+                )
+        return None

@@ -173,3 +173,24 @@ async def test_tenant_isolation_policy_exists_on_semantic_memory_history(db_sess
     )
     tables = {row.tablename for row in result}
     assert tables == {"semantic_memory_history"}
+
+
+async def test_data_source_tables_exist_with_rls_enabled_and_forced(db_session):
+    result = await db_session.execute(
+        text(
+            "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class "
+            "WHERE relname IN ('data_sources', 'data_source_versions')"
+        )
+    )
+    flags = {row.relname: (row.relrowsecurity, row.relforcerowsecurity) for row in result}
+    assert flags == {"data_sources": (True, True), "data_source_versions": (True, True)}
+
+
+async def test_tenant_isolation_policy_exists_on_both_data_source_tables(db_session):
+    result = await db_session.execute(
+        text(
+            "SELECT tablename FROM pg_policies WHERE policyname = 'tenant_isolation' "
+            "AND tablename IN ('data_sources', 'data_source_versions')"
+        )
+    )
+    assert {row.tablename for row in result} == {"data_sources", "data_source_versions"}
