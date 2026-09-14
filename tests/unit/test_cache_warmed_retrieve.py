@@ -1,3 +1,4 @@
+import threading
 import uuid
 
 import pytest
@@ -6,7 +7,7 @@ from src.orchestration.application.cache_warmed_retrieve import CacheWarmedRetri
 from src.orchestration.domain.similarity import cosine_similarity
 from src.rag.domain.entities import SearchResult
 from tests.unit.orchestration_fakes import FakeBagOfWordsEmbeddingModel, FakeFrozenCache
-from tests.unit.rag_fakes import FakeRetriever
+from tests.unit.rag_fakes import FakeRetriever, ThreadRecordingEmbeddingModel
 
 _THRESHOLD = 0.3
 _TENANT = uuid.uuid4()
@@ -260,3 +261,31 @@ def test_forgetting_something_never_warmed_is_a_no_op():
     retriever, _, _ = _build()
     retriever.forget(_TENANT, uuid.uuid4())
     retriever.forget(uuid.uuid4(), uuid.uuid4())
+
+
+async def test_embedding_the_query_and_matching_it_run_off_the_event_loop():
+    # Both are CPU work. Behind RagTier they would otherwise stall the other cascade
+    # tiers sharing the loop in a PARALLEL route.
+    embedder = ThreadRecordingEmbeddingModel(FakeBagOfWordsEmbeddingModel())
+    cache = FakeFrozenCache()
+    retriever = CacheWarmedRetrieve(embedder, cache, FakeRetriever(), _THRESHOLD)
+    document_id = uuid.uuid4()
+    cache.preload(_TENANT, document_id, _WARMED_CONTENT)
+    retriever.note_warmed(_TENANT, document_id, _WARMED_CONTENT)
+    embedded_before_query = len(embedder.thread_ids)
+    matched_on: list[int] = []
+    best_warmed_match = retriever.best_warmed_match
+
+    def recording_match(tenant_id, query_embedding):
+        matched_on.append(threading.get_ident())
+        return best_warmed_match(tenant_id, query_embedding)
+
+    retriever.best_warmed_match = recording_match
+
+    results = await retriever.execute(_TENANT, _MATCHING_QUERY, top_k=5)
+
+    assert results[0].document_id == document_id
+    query_embeds = embedder.thread_ids[embedded_before_query:]
+    assert len(query_embeds) == 1
+    assert len(matched_on) == 1
+    assert threading.get_ident() not in query_embeds + matched_on

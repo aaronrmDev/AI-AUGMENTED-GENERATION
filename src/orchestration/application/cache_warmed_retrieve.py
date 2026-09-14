@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 
 from src.orchestration.domain.ports import FrozenCache
@@ -43,8 +44,8 @@ class CacheWarmedRetrieve(Retriever):
 
     best_warmed_match is public so the orchestration cascade's CagTier can
     reuse the same confirmed matching with its own hit/partial thresholds
-    and a query embedding computed once upstream. CagTier calls it on a
-    worker thread, so it scans a copy of the tenant's entries: dict.copy()
+    and a query embedding computed once upstream. CagTier and execute both
+    call it on a worker thread, so it scans a copy of the tenant's entries: dict.copy()
     is atomic, whereas iterating the live dict raises if note_warmed runs on
     the event loop mid-scan. Entries are indexed by tenant, so a query never
     scans another tenant's warmed set.
@@ -85,13 +86,19 @@ class CacheWarmedRetrieve(Retriever):
         # keeps a cold tenant's queries from paying for a lookup that
         # cannot succeed.
         if tenant_id in self._warmed:
-            result = self.best_warmed_match(tenant_id, self._embedder.embed(query))
+            # Embedding the query and scanning the warmed set are CPU work, so they run
+            # together on a worker thread. Behind RagTier, on the event loop, they would
+            # stall the other cascade tiers in a PARALLEL route.
+            result = await asyncio.to_thread(self._match_query, tenant_id, query)
             if result is not None and result.score >= self._threshold:
                 self._hits += 1
                 return [result]
 
         self._misses += 1
         return await self._fallback.execute(tenant_id, query, top_k)
+
+    def _match_query(self, tenant_id: uuid.UUID, query: str) -> SearchResult | None:
+        return self.best_warmed_match(tenant_id, self._embedder.embed(query))
 
     def best_warmed_match(
         self, tenant_id: uuid.UUID, query_embedding: list[float]
