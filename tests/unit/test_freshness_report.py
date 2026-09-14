@@ -12,7 +12,8 @@ def test_the_report_renders_every_section_with_its_numbers():
         preloads={("freshness-aware", "prices"): (0, 0)},
         migrations=[
             MigrationObservation(
-                "catalog", "cag_with_rag_backup", "rag_only", shift, shift + timedelta(hours=21)
+                "catalog", "cag_with_rag_backup", "rag_only", shift, shift + timedelta(hours=21),
+                preloads_before=10, preloads_after=0,
             )
         ],
         ttl_tallies=[PlacementTally("ttl 0.5", "warranty", 240, 20, 0, 200, 20, 20, 20, 0)],
@@ -24,6 +25,6 @@ def test_the_report_renders_every_section_with_its_numbers():
     assert "| freshness-aware | prices | 8 | 0 | 0 | 8 | 0 | 0% | 0% | 0 | 0 | 0 |" in report
     assert (
         "| catalog | cag_with_rag_backup → rag_only | 2026-01-11 00:00 | 2026-01-11 21:00 "
-        "| 21.0 h |"
+        "| 21.0 h | 10 | 0 |"
     ) in report
     assert "| ttl 0.5 | warranty | 240 | 20 |" in report

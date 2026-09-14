@@ -51,13 +51,14 @@ def render_freshness_measurements(
         "",
         "## Migration lag",
         "",
-        "| Source | Migration | Pattern shift | Migrated | Lag |",
-        "|---|---|---|---|---|",
+        "| Source | Migration | Pattern shift | Migrated | Lag | Pre-loads before "
+        "| Pre-loads after |",
+        "|---|---|---|---|---|---|---|",
     ]
     lines += [
         f"| {m.source_key} | {m.from_route} → {m.to_route} "
         f"| {m.shift_at:%Y-%m-%d %H:%M} | {m.migrated_at:%Y-%m-%d %H:%M} "
-        f"| {m.lag.total_seconds() / 3600:.1f} h |"
+        f"| {m.lag.total_seconds() / 3600:.1f} h | {m.preloads_before} | {m.preloads_after} |"
         for m in migrations
     ]
     lines += [

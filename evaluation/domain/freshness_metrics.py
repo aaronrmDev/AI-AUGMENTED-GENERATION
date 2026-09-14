@@ -78,13 +78,16 @@ def tally_probes(observations: Sequence[ProbeObservation]) -> list[PlacementTall
 
 
 class PreloadTracker:
-    """Counts pre-loads per (arm, source), and how many were never served from."""
+    """Counts pre-loads per (arm, source), how many were never served from, and how
+    many fell on either side of an instant."""
 
     def __init__(self) -> None:
         self._generations: dict[tuple[str, str], list[bool]] = {}
+        self._times: dict[tuple[str, str], list[datetime]] = {}
 
-    def preloaded(self, arm: str, source_key: str) -> None:
+    def preloaded(self, arm: str, source_key: str, at: datetime) -> None:
         self._generations.setdefault((arm, source_key), []).append(False)
+        self._times.setdefault((arm, source_key), []).append(at)
 
     def served(self, arm: str, source_key: str) -> None:
         generations = self._generations.get((arm, source_key))
@@ -95,6 +98,12 @@ class PreloadTracker:
         generations = self._generations.get((arm, source_key), [])
         return len(generations), generations.count(False)
 
+    def split(self, arm: str, source_key: str, instant: datetime) -> tuple[int, int]:
+        """Pre-loads before instant, and from instant on."""
+        times = self._times.get((arm, source_key), [])
+        before = sum(at < instant for at in times)
+        return before, len(times) - before
+
 
 @dataclass(frozen=True)
 class MigrationObservation:
@@ -103,6 +112,8 @@ class MigrationObservation:
     to_route: str
     shift_at: datetime
     migrated_at: datetime
+    preloads_before: int = 0
+    preloads_after: int = 0
 
     @property
     def lag(self) -> timedelta:

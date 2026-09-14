@@ -24,7 +24,7 @@ import os
 import sys
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -385,6 +385,7 @@ async def _run_ablation_arm(
     size_markers = (SIZE_FEED.marker(0), SIZE_FEED.marker(1))
     owner_row, other_row = _probe_rows(SIZE_FEED.profile.source_key)
     observations: list[ProbeObservation] = []
+    first_migration = len(migrations)
     for tick in range(HORIZON_HOURS + 1):
         now = T0 + tick * HOUR
         rig.clock.now = now
@@ -413,7 +414,7 @@ async def _run_ablation_arm(
                 keys = await rig.refresh.run(rig.tenant_id, now)
             for key in keys:
                 for row in _probe_rows(key):
-                    tracker.preloaded(name, row)
+                    tracker.preloaded(name, row, now)
         if tick % PROBE_EVERY_HOURS == 0:
             probes: list[ProbeObservation] = []
             for feed in FEEDS:
@@ -429,6 +430,10 @@ async def _run_ablation_arm(
                     tracker.served(name, observation.source_key)
             observations.extend(probes)
     await rig.cascade.drain()
+    for index in range(first_migration, len(migrations)):
+        m = migrations[index]
+        before, after = tracker.split(name, m.source_key, m.migrated_at)
+        migrations[index] = replace(m, preloads_before=before, preloads_after=after)
     return observations
 
 

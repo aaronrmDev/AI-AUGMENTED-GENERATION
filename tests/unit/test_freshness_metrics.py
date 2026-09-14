@@ -49,13 +49,24 @@ def test_rates_are_nan_over_zero_probes():
 
 def test_a_preload_counts_as_used_once_any_probe_is_served_from_it():
     tracker = PreloadTracker()
-    tracker.preloaded("a", "k")
+    at = datetime(2026, 1, 1, tzinfo=UTC)
+    tracker.preloaded("a", "k", at)
     tracker.served("a", "k")
     tracker.served("a", "k")
-    tracker.preloaded("a", "k")  # replaced before serving anything
+    tracker.preloaded("a", "k", at)  # replaced before serving anything
     tracker.served("b", "k")  # no preload for this arm: ignored
     assert tracker.counts("a", "k") == (2, 1)
     assert tracker.counts("b", "k") == (0, 0)
+
+
+def test_preloads_split_into_those_before_an_instant_and_those_from_it_on():
+    tracker = PreloadTracker()
+    day = datetime(2026, 1, 1, tzinfo=UTC)
+    for offset in (0, 1, 2):
+        tracker.preloaded("a", "k", day + timedelta(days=offset))
+    # A refresh at the migration instant runs after the review, so it counts as after.
+    assert tracker.split("a", "k", day + timedelta(days=1)) == (1, 2)
+    assert tracker.split("b", "k", day) == (0, 0)
 
 
 def test_migration_lag_is_migration_time_minus_shift_time():
@@ -64,3 +75,4 @@ def test_migration_lag_is_migration_time_minus_shift_time():
         "catalog", "cag_with_rag_backup", "rag_only", shift, shift + timedelta(hours=21)
     )
     assert observation.lag == timedelta(hours=21)
+    assert (observation.preloads_before, observation.preloads_after) == (0, 0)
