@@ -60,18 +60,18 @@ The user delegated design authority for this session ("take full control over th
    - The TTL is enforced at lookup, so an expired entry is a cache miss and the cascade falls through to RAG without waiting for any sweep.
 7. **Migration re-learns the profile, with hysteresis.**
    - `ReviewSourceFreshness` estimates each tenant-scoped source's observed change interval from its version history.
-   - A cached source is demoted to `RAG_ONLY` when at least 3 changes fall within the 3 volatile boundaries before the review: change that is both sustained and recent, at least as fast as the boundary. Fast changes that ended before that window don't count, so a source that once changed quickly and has since gone quiet is left alone.
+   - A cached source is demoted to `RAG_ONLY` when its last 3 changes, and the version before them, all fall strictly inside the 3 volatile boundaries before the review. Their mean gap is then under the boundary, so the re-learned interval routes `RAG_ONLY` too. Fast changes that ended before that window don't count, so a source that once changed quickly and has since gone quiet is left alone.
    - A `RAG_ONLY` source is promoted to `CAG_WITH_RAG_BACKUP` once it has gone 7 volatile boundaries without a change.
    - On migration, the observed interval replaces the declared one, so routing and TTL stay consistent with the source's real behaviour.
    - The gap between "3 changes within 3 days" and "7 quiet days" keeps a source from flapping, and the two conditions can never hold at once. Both numbers are defaults.
 8. **The declared profile seeds a source; it doesn't overrule what was observed.**
    - The profile passed to the first ingestion creates the source.
    - Later ingestions keep the stored, possibly re-learned, interval.
-   - Re-declaring a source with a different scope is refused, because moving data between tenant and user scope is a migration of ownership, which no batch here performs.
+   - Scope is part of a source's identity: the same key declared tenant-wide, or by a different user, is a different source. Moving data between tenant and user scope would be a migration of ownership, which no batch here performs.
 9. **The widely implemented RAG ports stay unchanged.**
    - Replacing a changed source's RAG text needs to delete its previous chunks from Qdrant and from Postgres; neither port can.
    - Six evaluation runners implement `DocumentRepository` in memory, so adding abstract methods would break all six for a capability only this batch needs.
-   - `delete_document` is added as a concrete method on `QdrantVectorStore` and `PostgresDocumentRepository`. A new orchestration port, `RagIndex`, owns replace and remove, and its infrastructure adapter composes the concrete stores.
+   - `delete_document` is added as a concrete method on `QdrantVectorStore` and `PostgresDocumentRepository`. A new orchestration port, `RagIndex`, owns replacement, and its infrastructure adapter composes the concrete stores.
    - A stale chunk left in Postgres would still be served by hybrid RAG's `BM25KeywordSearch`, so both stores are cleared on every replace.
 10. **No HTTP endpoint and no scheduler.**
     - The three use cases are driven by a caller on whatever cadence it chooses, the same shape as the existing `SyncCycle`.
@@ -96,17 +96,17 @@ The user delegated design authority for this session ("take full control over th
 - `route_for(profile, policy) -> IngestionRoute`: user scope goes to `MAG`; an interval below `policy.volatile_below` goes to `RAG_ONLY`; everything else goes to `CAG_WITH_RAG_BACKUP`.
 - `cache_ttl(interval, policy) -> timedelta | None`: `interval × ttl_factor`, or `None` when `ttl_factor` is `None`.
 - `observed_change_interval(times: Sequence[datetime]) -> timedelta | None`: the mean gap between consecutive timestamps; `None` with fewer than two.
+- `source_id_for(tenant_id, source_key, user_id) -> UUID`: a deterministic id, so a retried ingestion replaces the same RAG document and cache entry.
 - `decide_migration(source, version_times, now, policy) -> MigrationDecision | None`: the new route with its re-learned interval, or `None` for no migration. `MAG` sources always return `None`. The demote and promote rules follow decision 7. A demotion's interval is the mean gap between the changes inside the review window (measured from the version before the first of them); a promotion's is the time since the last change.
 
 **`errors.py` additions:**
 
 - `ScopeMismatch`: user scope without a `user_id`, or tenant scope with one.
-- `ProfileConflict`: re-declaring an existing source with a different scope.
 
 **`ports.py` additions:**
 
-- `DataSourceRepository`: `get`, `save`, `append_version`, `version_times`, `current_content`, and `list_sources`, every method tenant-scoped. `get` also takes the optional `user_id`.
-- `RagIndex`: `replace(tenant_id, document_id, title, text)` and `remove(tenant_id, document_id)`.
+- `DataSourceRepository`: `get`, `save` (which records a changed version in the same transaction), `version_times`, `current_content`, and `list_sources`, every method tenant-scoped. `get` also takes the optional `user_id`.
+- `RagIndex`: `replace(tenant_id, document_id, title, text)`.
 - `ExpiringCache(FrozenCache)`: adds `preload_until(tenant_id, document_id, content, expires_at: datetime | None)` and `renew(tenant_id, document_id, expires_at: datetime | None) -> bool`. `lookup` and `contains` report an expired entry as absent.
 - `SessionFactWriter`: `record(tenant_id, user_id, fact_key, fact_value)`.
 
@@ -116,14 +116,12 @@ The user delegated design authority for this session ("take full control over th
 
 1. Validate scope against `user_id`.
 2. Load the existing source, or create one routed by `route_policy(profile, policy)`.
-3. Refuse a scope conflict.
-4. Hash the content and decide whether it changed.
-5. On a change, append a version.
-6. Act on the route:
+3. Hash the content and decide whether it changed.
+4. Act on the route, before anything is saved:
    - `RAG_ONLY`: on a change, `rag_index.replace`.
    - `CAG_WITH_RAG_BACKUP`: on a change, `rag_index.replace`, then `cache.evict` and `warmed.forget`. On a confirmation, `cache.renew` to the new TTL expiry.
    - `MAG`: on a change, `fact_writer.record`, with `fact_key` set to the source key.
-7. Save the source with its hash, `last_changed_at`, `last_ingested_at`, and `cached_until`.
+5. Save the source with its hash, `last_changed_at`, `last_ingested_at`, and `cached_until`, recording a changed version in the same transaction. Saving last means a failure part-way leaves the stored hash on the previous version, so the retry is a change again, and deterministic ids make it replace the same RAG document.
 
 `route_policy` is injectable so the measurement's baselines can place every source on one route through the same code path. This is Batch A's ablation shape: a classifier of `None` gave the unrouted baseline.
 
@@ -146,7 +144,7 @@ It returns the keys it pre-loaded.
 ## Infrastructure
 
 - **`alembic/versions/0006_data_sources.py`.**
-  - `data_sources` holds every column above, with `expected_change_seconds` as a positive `bigint`, and `route` and `scope` as `CHECK`-constrained text.
+  - `data_sources` holds every column above, with `expected_change_interval` as a positive PostgreSQL `interval`, and `route` and `scope` as `CHECK`-constrained text.
   - A `CHECK` requires `user_id IS NOT NULL` exactly when `scope = 'user'`.
   - Uniqueness is on `(tenant_id, user_id, source_key)` `NULLS NOT DISTINCT` (PostgreSQL 15+; the stack runs 16).
   - `data_source_versions` holds `id`, `data_source_id` (FK), `tenant_id`, `content_hash`, `content`, and `ingested_at`, indexed on `(data_source_id, ingested_at)`.
@@ -188,7 +186,7 @@ Unit tests use fakes and an injected clock, and never assert on wall-clock time.
   - a confirmation versus a change on each route;
   - eviction and forgetting on a change to a cached source;
   - TTL renewal on a confirmation;
-  - scope validation and profile conflicts;
+  - scope validation;
   - an injected `route_policy`.
 - **`RefreshCachedSources`** is tested for:
   - pre-loading only uncached, confirmed-within-TTL sources;
