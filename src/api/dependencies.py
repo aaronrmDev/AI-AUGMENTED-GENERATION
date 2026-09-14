@@ -1,3 +1,4 @@
+import functools
 import os
 import uuid
 from collections.abc import AsyncGenerator
@@ -6,12 +7,18 @@ from typing import Any
 from fastapi import Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.caller import Caller, caller_from_claims
+from src.api.unified_pipeline import UnifiedPipeline, build_unified_pipeline
 from src.identity.domain.errors import TokenExpired
 from src.identity.infrastructure.db import get_engine, get_sessionmaker, set_tenant_context
 from src.identity.infrastructure.jwt_token_issuer import JWTTokenIssuer
+from src.identity.infrastructure.postgres_chat_session_repository import (
+    PostgresChatSessionRepository,
+)
 from src.identity.infrastructure.postgres_user_repository import PostgresUserRepository
 from src.identity.infrastructure.redis_rate_limiter import RedisRateLimiter
 from src.identity.infrastructure.redis_refresh_token_store import RedisRefreshTokenStore
+from src.orchestration.application.answer_in_session import AnswerInSession
 from src.rag.domain.ports import ChatModel
 from src.rag.infrastructure.claude_chat_model import ClaudeChatModel
 from src.rag.infrastructure.fixed_size_chunker import FixedSizeChunker
@@ -137,3 +144,28 @@ def get_chat_model() -> ChatModel:
     return ClaudeChatModel(
         client=anthropic_client, model_id=os.environ.get("CHAT_MODEL", "claude-opus-5")
     )
+
+
+async def get_caller(claims: dict[str, Any] = Depends(get_current_user_claims)) -> Caller:
+    return caller_from_claims(claims)
+
+
+def get_chat_session_repository() -> PostgresChatSessionRepository:
+    return PostgresChatSessionRepository(_sessionmaker)
+
+
+@functools.cache
+def get_unified_pipeline() -> UnifiedPipeline:
+    # Built on first use, not at import, so importing the app doesn't embed every routing
+    # exemplar or open a chat-model client.
+    return build_unified_pipeline(
+        sessionmaker=_sessionmaker,
+        sessions=get_chat_session_repository(),
+        embedding_model=_embedding_model,
+        vector_store=_vector_store,
+        chat_model=get_chat_model(),
+    )
+
+
+def get_answer_in_session() -> AnswerInSession:
+    return get_unified_pipeline().answer_in_session
