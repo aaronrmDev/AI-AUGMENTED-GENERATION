@@ -69,6 +69,17 @@ class CacheWarmedRetrieve(Retriever):
         embedding = self._embedder.embed(content)
         self._warmed.setdefault(tenant_id, {})[document_id] = (content, embedding)
 
+    def forget(self, tenant_id: uuid.UUID, document_id: uuid.UUID) -> None:
+        """Drop a document's warmed memo once its cache entry is gone.
+
+        best_warmed_match confirms only its single best candidate, so an evicted
+        document left here would keep shadowing every valid warmed document it
+        outscores.
+        """
+        entries = self._warmed.get(tenant_id)
+        if entries is not None:
+            entries.pop(document_id, None)
+
     def stats(self) -> tuple[int, int]:
         """(hits, misses) recorded so far, across all tenants."""
         return self._hits, self._misses

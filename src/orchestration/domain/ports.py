@@ -6,6 +6,7 @@ from src.mag.domain.entities import ScoredFact
 from src.orchestration.domain.entities import (
     BudgetAllocation,
     CacheHit,
+    DataSource,
     Paradigm,
     TierRequest,
     TierResult,
@@ -172,4 +173,70 @@ class SessionBudgetRecorder(ABC):
         session_id: uuid.UUID,
         allocation: BudgetAllocation,
         contributing: frozenset[Paradigm],
+    ) -> None: ...
+
+
+class DataSourceRepository(ABC):
+    """The durable record of every freshness-routed data source and its versions.
+    Every method is tenant-scoped; user-scoped sources are also keyed by user_id."""
+
+    @abstractmethod
+    async def get(
+        self, tenant_id: uuid.UUID, source_key: str, user_id: uuid.UUID | None
+    ) -> DataSource | None: ...
+
+    @abstractmethod
+    async def save(self, source: DataSource, changed_content: str | None = None) -> None:
+        """Insert or update the source by id. When changed_content is given, also record
+        it as a new version at source.last_changed_at, in the same transaction."""
+
+    @abstractmethod
+    async def version_times(self, tenant_id: uuid.UUID, source_id: uuid.UUID) -> list[datetime]:
+        """Every version's ingestion time, oldest first."""
+
+    @abstractmethod
+    async def current_content(self, tenant_id: uuid.UUID, source_id: uuid.UUID) -> str | None: ...
+
+    @abstractmethod
+    async def list_sources(self, tenant_id: uuid.UUID) -> list[DataSource]: ...
+
+
+class RagIndex(ABC):
+    """Holds one data source's current text in RAG's stores, as one document."""
+
+    @abstractmethod
+    async def replace(
+        self, tenant_id: uuid.UUID, document_id: uuid.UUID, title: str, text: str
+    ) -> None:
+        """Make text the document's only content: no chunk of an earlier version may
+        remain retrievable afterwards."""
+
+
+class ExpiringCache(FrozenCache):
+    """A FrozenCache whose entries can expire. lookup and contains report an expired
+    entry as absent, so a cascade falls through to RAG without any sweep."""
+
+    @abstractmethod
+    def preload_until(
+        self,
+        tenant_id: uuid.UUID,
+        document_id: uuid.UUID,
+        content: str,
+        expires_at: datetime | None,
+    ) -> None: ...
+
+    @abstractmethod
+    def renew(
+        self, tenant_id: uuid.UUID, document_id: uuid.UUID, expires_at: datetime | None
+    ) -> bool:
+        """Move a live entry's expiry. Returns False, changing nothing, when there is
+        no live entry to renew."""
+
+
+class SessionFactWriter(ABC):
+    """Writes a user-scoped data source's text into MAG as that user's fact."""
+
+    @abstractmethod
+    async def record(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID, fact_key: str, fact_value: str
     ) -> None: ...

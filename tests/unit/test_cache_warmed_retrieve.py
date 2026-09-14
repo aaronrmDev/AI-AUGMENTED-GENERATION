@@ -219,3 +219,35 @@ async def test_execute_does_not_embed_the_query_when_nothing_is_warmed_for_the_t
     retriever = CacheWarmedRetrieve(embedder, FakeFrozenCache(), FakeRetriever(), _THRESHOLD)
     await retriever.execute(_TENANT, _MATCHING_QUERY, top_k=5)
     assert embedder.calls == 0
+
+
+def test_forgetting_an_evicted_document_stops_it_shadowing_a_valid_one():
+    retriever, cache, _ = _build()
+    embedder = FakeBagOfWordsEmbeddingModel()
+    query = embedder.embed(_MATCHING_QUERY)
+    evicted, valid = uuid.uuid4(), uuid.uuid4()
+    other = "the policy desk opens at nine"
+    # Precondition, checked rather than assumed: the evicted document is the best candidate.
+    assert cosine_similarity(query, embedder.embed(_WARMED_CONTENT)) > cosine_similarity(
+        query, embedder.embed(other)
+    )
+    for document_id, content in ((evicted, _WARMED_CONTENT), (valid, other)):
+        cache.preload(_TENANT, document_id, content)
+        retriever.note_warmed(_TENANT, document_id, content)
+    cache.evict(_TENANT, evicted)
+
+    # The best candidate fails its FrozenCache confirmation, so nothing is returned...
+    assert retriever.best_warmed_match(_TENANT, query) is None
+
+    retriever.forget(_TENANT, evicted)
+
+    # ...until it is forgotten, and the valid document is matched instead.
+    result = retriever.best_warmed_match(_TENANT, query)
+    assert result is not None
+    assert result.document_id == valid
+
+
+def test_forgetting_something_never_warmed_is_a_no_op():
+    retriever, _, _ = _build()
+    retriever.forget(_TENANT, uuid.uuid4())
+    retriever.forget(uuid.uuid4(), uuid.uuid4())
