@@ -1,6 +1,6 @@
 # Orchestration Meta-Layer Batch B: Freshness-Aware Data Router — Design Spec
 
-**Scope:** the fifth and last component of the orchestration meta-layer, in `docs/architecture/OVERVIEW.md`'s "Freshness-Aware Data Router" section. It is sourced from `docs/inputs/concepts/unified_rag_cag_mag_architecture.md` Concept 9, "Freshness-Aware Data Routing", and sits at the top of that document's §3.4 Pattern 4 ("Data Sources → Freshness-Aware Routing → …"). Issues: Story #155 under Epic #150. This batch's Tasks are filed with its plan.
+**Scope:** the fifth and last component of the orchestration meta-layer, in `docs/architecture/OVERVIEW.md`'s "Freshness-Aware Data Router" section. It is sourced from `docs/inputs/concepts/unified_rag_cag_mag_architecture.md` Concept 9, "Freshness-Aware Data Routing", and sits at the top of that document's §3.4 Pattern 4 ("Data Sources → Freshness-Aware Routing → …"). Issues: Story #155 under Epic #150; Tasks #169–#180, one per plan task in order.
 
 ## What this component decides, and why it is its own batch
 
