@@ -41,6 +41,26 @@ class QdrantVectorStore(VectorStore):
             ],
         )
 
+    async def delete_document(self, document_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
+        """Delete every point of one document, filtered by tenant as well as document,
+        so one tenant can never delete another's points."""
+        await self._client.delete(
+            collection_name=_COLLECTION_NAME,
+            points_selector=qmodels.FilterSelector(
+                filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="tenant_id", match=qmodels.MatchValue(value=str(tenant_id))
+                        ),
+                        qmodels.FieldCondition(
+                            key="document_id", match=qmodels.MatchValue(value=str(document_id))
+                        ),
+                    ]
+                )
+            ),
+            wait=True,
+        )
+
     async def search(
         self, query_embedding: list[float], tenant_id: uuid.UUID, top_k: int
     ) -> list[SearchResult]:
