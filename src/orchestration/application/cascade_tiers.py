@@ -111,16 +111,15 @@ class RagTier(CascadeTier):
     """The cascade's last resort: any RAG Retriever. RAG has no partial hit.
 
     The retriever runs on the event loop, so any CPU work it does inline blocks
-    the other tiers in a PARALLEL route. SearchDocuments, CompressingRetriever,
-    BiEncoderRerankReranker (behind RerankingRetriever), and HyDERetriever, which
-    searches through SearchDocuments, embed on a worker thread. Each has been
-    measured behind this tier in a PARALLEL route, in
-    evaluation/reports/orchestration-meta-layer-retrievers.md. Composing
+    the other tiers in a PARALLEL route. Every Retriever and Reranker in src/
+    that does CPU work of its own runs it on a worker thread: SearchDocuments (and
+    so HyDERetriever), CompressingRetriever, BiEncoderRerankReranker,
+    CrossEncoderReranker, BM25KeywordSearch (and so HybridSearchDocuments), and
+    CacheWarmedRetrieve. Each has been measured behind this tier in a PARALLEL
+    route, in evaluation/reports/orchestration-meta-layer-retrievers.md; a new
+    retriever that computes inline would starve its sibling tiers again. Composing
     SearchDocuments with a CachingEmbeddingModel shared with UnifiedAnswerQuestion
     still pays off: its embedding of the already-embedded question is a lookup.
-
-    Three components still do CPU work inline (#181): BM25KeywordSearch, and so
-    HybridSearchDocuments; CrossEncoderReranker; and CacheWarmedRetrieve.execute.
     """
 
     def __init__(self, retriever: Retriever, *, top_k: int = 5) -> None:

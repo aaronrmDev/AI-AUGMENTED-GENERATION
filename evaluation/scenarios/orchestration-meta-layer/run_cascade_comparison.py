@@ -5,7 +5,8 @@
   slices across a sweep of context windows. No LLM, a few minutes.
 - retrievers: the same tier latency with every question forced into a PARALLEL
   route, once per RAG composition behind RagTier (SearchDocuments, compression,
-  bi-encoder reranking, HyDE), which shows whether a retriever's own CPU work
+  bi-encoder reranking, HyDE, hybrid BM25 search, cross-encoder reranking, and
+  CacheWarmedRetrieve), which shows whether a retriever's own CPU work
   starves the other tiers. No LLM: HyDE's passage comes from a stub.
 - comparison: a self-versus-self RunComparison on qwen3.5, RAG-only
   AnswerQuestion vs. UnifiedAnswerQuestion routed by the MiniLM prototype
@@ -106,11 +107,14 @@ from src.orchestration.infrastructure.session_scoped_semantic_fact_search import
 )
 from src.rag.application.answer_question import AnswerQuestion
 from src.rag.application.search_documents import SearchDocuments
-from src.rag.domain.entities import Chunk
-from src.rag.domain.ports import ChatModel, Retriever
+from src.rag.domain.entities import Chunk, Document
+from src.rag.domain.ports import ChatModel, DocumentRepository, Retriever
 from src.rag.infrastructure.bi_encoder_rerank_reranker import BiEncoderRerankReranker
+from src.rag.infrastructure.bm25_keyword_search import BM25KeywordSearch
 from src.rag.infrastructure.caching_embedding_model import CachingEmbeddingModel
 from src.rag.infrastructure.compressing_retriever import CompressingRetriever
+from src.rag.infrastructure.cross_encoder_reranker import CrossEncoderReranker
+from src.rag.infrastructure.hybrid_search_documents import HybridSearchDocuments
 from src.rag.infrastructure.hyde_retriever import HyDERetriever
 from src.rag.infrastructure.ollama_chat_model import OllamaChatModel
 from src.rag.infrastructure.qdrant_vector_store import QdrantVectorStore
@@ -222,6 +226,32 @@ class _FreshPassageChatModel(ChatModel):
         return await self.complete(question)
 
 
+class _InMemoryChunkRepository(DocumentRepository):
+    """Holds the corpus's chunks for BM25KeywordSearch, which ranks whatever
+    get_chunks_for_tenant returns. The runner seeds one tenant, so there is nothing
+    to filter by."""
+
+    def __init__(self, chunks: list[Chunk]) -> None:
+        self._chunks = chunks
+
+    async def save_document(self, document: Document) -> None:
+        raise NotImplementedError("the measurement only reads chunks")
+
+    async def update_document_status(
+        self, document_id: uuid.UUID, status: str, chunk_count: int
+    ) -> None:
+        raise NotImplementedError("the measurement only reads chunks")
+
+    async def save_chunks(self, chunks: list[Chunk], tenant_id: uuid.UUID) -> None:
+        raise NotImplementedError("the measurement only reads chunks")
+
+    async def get_chunks_for_tenant(self, tenant_id: uuid.UUID) -> list[Chunk]:
+        return self._chunks
+
+    async def get_chunk_by_id(self, chunk_id: uuid.UUID) -> Chunk | None:
+        return next((chunk for chunk in self._chunks if chunk.id == chunk_id), None)
+
+
 def _ms(started: float) -> float:
     return (time.perf_counter() - started) * 1000
 
@@ -296,6 +326,8 @@ async def _measure(
     search = SearchDocuments(embedder, vector_store)
     cache = HFFrozenCache(tokenizer=tokenizer, model=model)
     warmed = CacheWarmedRetrieve(embedder, cache, search, similarity_threshold=CAG_HIT)
+    chunks: list[Chunk] = []
+    frozen_documents: list[tuple[uuid.UUID, str]] = []
     for current, frozen in _DOCUMENTS:
         document_id = uuid.uuid4()
         chunk = Chunk(
@@ -305,9 +337,11 @@ async def _measure(
             embedding=embedder.embed(current),
         )
         await vector_store.upsert(chunk, tenant_id)
+        chunks.append(chunk)
         if frozen is not None:
             cache.preload(tenant_id, document_id, frozen)
             warmed.note_warmed(tenant_id, document_id, frozen)
+            frozen_documents.append((document_id, frozen))
 
     # Seeding is the only work done through a caller-held session. Every
     # tier and the budget recorder open their own, so no MAG timeout below
@@ -446,6 +480,12 @@ async def _measure(
         # compositions' own extra embeds go through the uncached model, so every
         # repeat pays them; the question's embedding stays a shared-cache lookup.
         uncached_search = SearchDocuments(raw_embedder, vector_store)
+        # Its own warmed set, so matching a query embeds it through the uncached model.
+        uncached_warmed = CacheWarmedRetrieve(
+            raw_embedder, cache, search, similarity_threshold=CAG_HIT
+        )
+        for document_id, frozen in frozen_documents:
+            uncached_warmed.note_warmed(tenant_id, document_id, frozen)
         compositions: dict[str, Retriever] = {
             "SearchDocuments": search,
             "CompressingRetriever": CompressingRetriever(search, raw_embedder),
@@ -453,6 +493,13 @@ async def _measure(
                 search, BiEncoderRerankReranker(raw_embedder)
             ),
             "HyDERetriever": HyDERetriever(uncached_search, _FreshPassageChatModel()),
+            "HybridSearchDocuments (SearchDocuments + BM25KeywordSearch)": (
+                HybridSearchDocuments(search, BM25KeywordSearch(_InMemoryChunkRepository(chunks)))
+            ),
+            "RerankingRetriever + CrossEncoderReranker": RerankingRetriever(
+                search, CrossEncoderReranker()
+            ),
+            "CacheWarmedRetrieve": uncached_warmed,
         }
         every_tier = RoutingDecision(
             frozenset(PARADIGM_ORDER),
@@ -480,8 +527,12 @@ async def _measure(
             f"every tier and to SearchDocuments, so SearchDocuments alone embeds nothing new. "
             f"The other compositions embed through the uncached MiniLM model on every "
             f"attempt: CompressingRetriever its query and every candidate sentence, "
-            f"BiEncoderRerankReranker its query and every candidate, and HyDERetriever's "
-            f"search its generated passage. That passage comes from a stub chat model that "
+            f"BiEncoderRerankReranker its query and every candidate, HyDERetriever's search "
+            f"its generated passage, and CacheWarmedRetrieve its query, against its own "
+            f"warmed copy of the {len(frozen_documents)} frozen documents. BM25KeywordSearch, "
+            f"inside HybridSearchDocuments, ranks an in-memory copy of the same "
+            f"{len(chunks)} chunks, and CrossEncoderReranker runs the real ms-marco MiniLM "
+            f"cross-encoder on CPU. HyDE's passage comes from a stub chat model that "
             f"returns a new passage at once: generation is awaited network I/O that yields "
             f"the loop, so the stub isolates the embedding. A timed-out CAG match keeps its "
             f"worker thread running to completion, so an attempt measured right after a CAG "
