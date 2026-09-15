@@ -1,3 +1,4 @@
+import asyncio
 import math
 import re
 
@@ -31,6 +32,12 @@ class BiEncoderRerankReranker(Reranker):
     ) -> list[SearchResult]:
         if not results:
             return []
+        # Every embedding is CPU work, so the whole scoring pass runs on one worker
+        # thread. On the event loop it would stall every other coroutine, which in a
+        # PARALLEL cascade route means the CAG and MAG tiers' budgets.
+        return await asyncio.to_thread(self._rank, query, results, top_k)
+
+    def _rank(self, query: str, results: list[SearchResult], top_k: int) -> list[SearchResult]:
         query_embedding = self._embedder.embed(query)
         scored = []
         for r in results:

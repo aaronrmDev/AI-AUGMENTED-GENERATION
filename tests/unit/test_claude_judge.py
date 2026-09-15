@@ -106,3 +106,31 @@ async def test_score_marks_each_empty_context_explicitly_rather_than_omitting_it
 
     full_prompt = str(fake_client.messages.last_call_kwargs["messages"])
     assert full_prompt.count("(none provided)") == 2
+
+
+async def test_score_includes_the_reference_passage_when_given():
+    fake_client = _FakeAnthropicClient(_VALID_PAYLOAD)
+    judge = ClaudeJudge(client=fake_client, model_id="claude-opus-5")
+
+    await judge.score(
+        query="q",
+        response_a="a",
+        response_b="b",
+        context_a="a's own retrieved chunk",
+        context_b="b's own retrieved chunk",
+        reference_context="THE-ACTUAL-CORRECT-ANSWER-PASSAGE",
+    )
+
+    full_prompt = str(fake_client.messages.last_call_kwargs["messages"])
+    assert "THE-ACTUAL-CORRECT-ANSWER-PASSAGE" in full_prompt
+    assert "Reference passage" in full_prompt
+
+
+async def test_score_omits_the_reference_passage_block_when_not_given():
+    fake_client = _FakeAnthropicClient(_VALID_PAYLOAD)
+    judge = ClaudeJudge(client=fake_client, model_id="claude-opus-5")
+
+    await judge.score(query="q", response_a="a", response_b="b", context_a="ca", context_b="cb")
+
+    full_prompt = str(fake_client.messages.last_call_kwargs["messages"])
+    assert "Reference passage" not in full_prompt

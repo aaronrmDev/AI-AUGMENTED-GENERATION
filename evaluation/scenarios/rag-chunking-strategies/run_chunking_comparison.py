@@ -91,7 +91,15 @@ async def _run(strategy: str) -> None:
 
     async def baseline(question: str) -> Answer:
         text = await chat_model.generate(question=question, context="")
-        return Answer(text=text, input_tokens=0, output_tokens=0, context="")
+        # Real counts (#147), not hardcoded 0 -- chat_model.generate() just
+        # ran, so its last_input_tokens/last_output_tokens reflect this exact
+        # call (no concurrent caller shares this instance in this script).
+        return Answer(
+            text=text,
+            input_tokens=chat_model.last_input_tokens,
+            output_tokens=chat_model.last_output_tokens,
+            context="",
+        )
 
     async def treatment(question: str) -> Answer:
         result = await answer_question.execute(tenant_id=tenant_id, question=question)
@@ -101,7 +109,10 @@ async def _run(strategy: str) -> None:
         # judge without changing AnswerQuestion's return contract.
         retrieved_context = "\n\n".join(source.content for source in result.sources)
         return Answer(
-            text=result.answer, input_tokens=0, output_tokens=0, context=retrieved_context
+            text=result.answer,
+            input_tokens=chat_model.last_input_tokens,
+            output_tokens=chat_model.last_output_tokens,
+            context=retrieved_context,
         )
 
     def success_check(question: str, answer: Answer) -> bool:
@@ -161,17 +172,21 @@ async def _run(strategy: str) -> None:
         }
         return checks.get(question, lambda a: False)(answer)
 
-    # Deviation from the harness design (ClaudeJudge): the Anthropic account had
-    # no credit balance to run a live Claude-judged comparison (confirmed via a
-    # direct API call, not assumed). Ruled with the user: use qwen3.5 itself as
-    # the qualitative judge instead, at zero cost. This is a real methodology
-    # weakening, not a like-for-like swap -- the same model family that
-    # generated the treatment answer is also scoring it, a self-grading-bias
-    # risk a stronger, independent judge model doesn't carry. Flagged in every
-    # report's notes field for exactly this reason; re-running with ClaudeJudge
-    # once credits exist is the correct follow-up.
-    judge = OllamaJudge(client=ollama_client, model_id="qwen3.5")
-    use_case = RunComparison(judge=judge, repeat_count=3)
+    # #147 re-measurement: the original run's judge (Ollama/qwen3.5) was the
+    # same model family generating the treatment answer, a self-grading-bias
+    # risk flagged in every original report's notes. The independent judge
+    # here is Ollama/llama3.1:8b -- a different model family entirely (Meta
+    # vs. Alibaba), satisfying the rubric's "Gemini... or a second local
+    # model family" escape hatch (docs/evaluation/qualitative-rubric.md)
+    # without adding a new paid external dependency this project doesn't
+    # otherwise have. Deviation from the harness's own original design
+    # (ClaudeJudge) remains real and unresolved -- the Anthropic account had
+    # no credit balance to run a live Claude-judged comparison at the time
+    # this scenario was first built -- but the same-model-family bias #147
+    # exists to fix is closed by this swap regardless of which independent
+    # judge is used.
+    judge = OllamaJudge(client=ollama_client, model_id="llama3.1:8b")
+    use_case = RunComparison(judge=judge, repeat_count=5)
     result = await use_case.execute(
         scenario_name=scenario.name,
         model_config=_MODEL_CONFIG,
@@ -179,22 +194,29 @@ async def _run(strategy: str) -> None:
         rag=True, cag=False, mag=False,
         notes=(
             f"strategy={strategy}, corpus=docs/architecture/RAG.md, "
-            f"{document.chunk_count} chunks. CAVEAT 1: qualitative judge is "
-            f"Ollama/qwen3.5, not Claude (no API credit balance at run time) -- "
-            f"same model family judging its own treatment output, a real "
-            f"self-grading-bias risk; re-run with ClaudeJudge once credits "
-            f"exist before treating these judge scores as final. CAVEAT 2: "
-            f"baseline has no retrieved context of its own (empty string), so "
-            f"per the #148 fix (each arm judged against its own context) "
-            f"baseline's groundedness is judged against '(none provided)' -- "
-            f"treat any baseline-vs-treatment groundedness gap as reflecting "
-            f"that structural difference in what each arm had to work with, "
-            f"not a measured claim about factual accuracy."
+            f"{document.chunk_count} chunks. #147 re-measurement: qualitative "
+            f"judge is now Ollama/llama3.1:8b, independent of qwen3.5 (the "
+            f"model generating the treatment answer) -- the original "
+            f"same-model-family self-grading-bias risk no longer applies. "
+            f"Groundedness is now judged against a run-independent reference "
+            f"passage (queries.yaml's gold_passage) rather than each arm's own "
+            f"retrieved context, so groundedness is comparable across the five "
+            f"chunking-strategy reports for the first time. repeat_count=5 "
+            f"(was 3), every repeat scored for task success, not just the "
+            f"last. Input/output token counts are now read from Ollama's real "
+            f"prompt_eval_count/eval_count, not hardcoded 0. CAVEAT (still "
+            f"real, unrelated to the above): baseline has no retrieved context "
+            f"of its own (empty string), so per the #148 fix (each arm's own "
+            f"context still used for the unverifiable-claims check) baseline's "
+            f"hallucination check runs against '(none provided)' -- this does "
+            f"not affect groundedness, which now uses the shared reference "
+            f"passage for both arms."
         ),
         questions=[q.question for q in scenario.questions],
         baseline=baseline,
         treatment=treatment,
         success_check=success_check,
+        reference_contexts=[q.gold_passage for q in scenario.questions],
     )
 
     report_path = Path(f"evaluation/reports/rag-chunking-{strategy}.md")

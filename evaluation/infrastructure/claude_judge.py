@@ -16,7 +16,13 @@ class ClaudeJudge(Judge):
         self._model_id = model_id
 
     async def score(
-        self, query: str, response_a: str, response_b: str, context_a: str, context_b: str
+        self,
+        query: str,
+        response_a: str,
+        response_b: str,
+        context_a: str,
+        context_b: str,
+        reference_context: str = "",
     ) -> tuple[JudgeScores, JudgeScores]:
         response = await self._client.messages.create(
             model=self._model_id,
@@ -26,7 +32,7 @@ class ClaudeJudge(Judge):
                 {
                     "role": "user",
                     "content": build_judge_user_message(
-                        query, response_a, response_b, context_a, context_b
+                        query, response_a, response_b, context_a, context_b, reference_context
                     ),
                 }
             ],

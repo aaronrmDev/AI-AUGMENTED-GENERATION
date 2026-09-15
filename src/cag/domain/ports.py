@@ -1,6 +1,15 @@
 from abc import ABC, abstractmethod
 
-from src.cag.domain.entities import CompressedKV, VerificationResult
+from src.cag.domain.entities import (
+    BatchRequest,
+    CompressedKV,
+    ConversationTurn,
+    EvictionDecision,
+    OffloadRun,
+    OffloadWorkload,
+    SessionRun,
+    VerificationResult,
+)
 
 
 class KVCacheCompressor(ABC):
@@ -29,6 +38,128 @@ class CrossLayerKVCompressor(ABC):
     def decompress(
         self, compressed: CompressedKV
     ) -> tuple[list[list[float]], list[list[float]]]: ...
+
+
+class KVCacheEvictor(ABC):
+    # H2O, SnapKV, and NACL all answer the same question from the same
+    # shape of input: given a per-token importance score (accumulated
+    # attention for H2O, windowed-and-pooled for SnapKV, an end-of-input
+    # proxy for NACL) and a token budget, which indices survive. What
+    # differs is how attention_scores itself got computed upstream and
+    # what each does with it below -- not this port's signature.
+    @abstractmethod
+    def select_keep_indices(
+        self, attention_scores: list[float], budget: int
+    ) -> EvictionDecision: ...
+
+
+class RecentPatternEvictor(ABC):
+    # MorphKV's own shape: it scores tokens from several recent decoding
+    # steps' attention distributions via Sum/Max Fusion, not a single
+    # already-accumulated vector -- a genuinely different input shape
+    # from KVCacheEvictor above, the same reasoning that keeps MiniCache
+    # off the single-tensor KVCacheCompressor port.
+    @abstractmethod
+    def select_keep_indices(
+        self, recent_attention_windows: list[list[float]], budget: int
+    ) -> EvictionDecision: ...
+
+
+class HashBasedEvictor(ABC):
+    # HASHEVICT's own shape: it estimates token similarity via
+    # locality-sensitive hashing over the raw KV vectors themselves,
+    # before any attention computation runs at all -- there is no
+    # per-token score to consume here, only vectors.
+    @abstractmethod
+    def select_keep_indices(
+        self, kv_vectors: list[list[float]], budget: int
+    ) -> EvictionDecision: ...
+
+
+class CacheDistiller(ABC):
+    # InfiniPot's own shape: rather than a binary per-token keep/evict
+    # call, it distills the whole cache down to `budget` representative
+    # rows once it overflows -- closer to selective compression of the
+    # cache than to per-token selection, so it returns a reduced KV
+    # tensor directly instead of an EvictionDecision's index list.
+    @abstractmethod
+    def distill(self, kv: list[list[float]], budget: int) -> list[list[float]]: ...
+
+
+class KVCacheAllocator(ABC):
+    # The allocation-stage contract PagedAttention and vAttention answer
+    # differently. Both decide where a sequence's KV tensors physically
+    # live in a fixed-size pool; they disagree on whether that space has
+    # to be contiguous, which is the whole substance of the trade CAG.md
+    # describes. Modelled in token slots rather than bytes because the
+    # comparison is about layout, not about any particular model's
+    # per-token footprint.
+    @abstractmethod
+    def allocate(self, sequence_id: str, num_tokens: int) -> bool: ...
+
+    @abstractmethod
+    def extend(self, sequence_id: str, additional_tokens: int) -> bool: ...
+
+    @abstractmethod
+    def fork(self, parent_id: str, child_id: str) -> bool: ...
+
+    @abstractmethod
+    def free(self, sequence_id: str) -> None: ...
+
+    @abstractmethod
+    def physical_slots_used(self) -> int: ...
+
+    @abstractmethod
+    def logical_tokens_held(self) -> int: ...
+
+    @abstractmethod
+    def free_runs(self) -> list[int]: ...
+
+
+class MultiTurnCacheStrategy(ABC):
+    # The session-stage decision CAG.md's five named methods answer
+    # differently: across a multi-turn session, what is kept, what is
+    # recomputed, and where it lives. They agree that recomputing the
+    # whole history every turn is the thing to avoid, and disagree about
+    # what to trade for avoiding it.
+    @abstractmethod
+    def run_session(self, turns: list[ConversationTurn]) -> SessionRun: ...
+
+
+class OffloadingStrategy(ABC):
+    # The storage-stage decision CAG.md's five named strategies answer
+    # differently: given more layers than the GPU can hold, what lives
+    # where, what moves when, and how much of that movement can be made
+    # to happen underneath compute that was going to run anyway. Each
+    # implementation differs in the mechanism, not in the question.
+    @abstractmethod
+    def run(self, workload: OffloadWorkload) -> OffloadRun: ...
+
+
+class BatchScheduler(ABC):
+    # The scheduling-stage decision CAG.md describes: given the requests
+    # waiting to run, which ones go together. Grouping is the whole
+    # substance -- a scheduler that ignores shared prefixes forces the
+    # same leading tokens to be prefilled once per batch they end up
+    # scattered across, while one that groups by prefix pays for them
+    # once per group.
+    @abstractmethod
+    def form_batches(
+        self, pending: list[BatchRequest], max_batch_size: int
+    ) -> list[list[BatchRequest]]: ...
+
+
+class CompletionServer(ABC):
+    # A thin boundary around a CAG-tier serving engine's completion
+    # endpoint -- what a future orchestration layer's CAG tier would
+    # call. Unlike every port above, the interesting behavior here
+    # (prefix-cache hits, invalidation on prefix change, eviction under
+    # memory pressure) lives entirely inside the serving engine itself,
+    # not in code this project writes -- this port exists so that
+    # behavior is reachable and testable from this project's own code
+    # rather than only from a raw HTTP call inline in a test.
+    @abstractmethod
+    def complete(self, prompt: str, max_tokens: int) -> str: ...
 
 
 class CandidateGenerator(ABC):

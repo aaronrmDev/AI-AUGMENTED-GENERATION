@@ -1,3 +1,4 @@
+import functools
 import os
 import uuid
 from collections.abc import AsyncGenerator
@@ -6,12 +7,18 @@ from typing import Any
 from fastapi import Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.caller import Caller, caller_from_claims
+from src.api.unified_pipeline import UnifiedPipeline, build_unified_pipeline
 from src.identity.domain.errors import TokenExpired
 from src.identity.infrastructure.db import get_engine, get_sessionmaker, set_tenant_context
 from src.identity.infrastructure.jwt_token_issuer import JWTTokenIssuer
+from src.identity.infrastructure.postgres_chat_session_repository import (
+    PostgresChatSessionRepository,
+)
 from src.identity.infrastructure.postgres_user_repository import PostgresUserRepository
 from src.identity.infrastructure.redis_rate_limiter import RedisRateLimiter
 from src.identity.infrastructure.redis_refresh_token_store import RedisRefreshTokenStore
+from src.orchestration.application.answer_in_session import AnswerInSession
 from src.rag.domain.ports import ChatModel
 from src.rag.infrastructure.claude_chat_model import ClaudeChatModel
 from src.rag.infrastructure.fixed_size_chunker import FixedSizeChunker
@@ -29,12 +36,43 @@ def get_token_issuer() -> JWTTokenIssuer:
     return JWTTokenIssuer(secret_key=os.environ["JWT_SECRET_KEY"])
 
 
+# One Redis client per process for each of these. redis.from_url opens a connection pool,
+# and building one per request opened a pool on every rate-limited request that nothing
+# ever closed.
+@functools.cache
 def get_refresh_token_store() -> RedisRefreshTokenStore:
     return RedisRefreshTokenStore(os.environ["REDIS_URL"])
 
 
+@functools.cache
 def get_rate_limiter() -> RedisRateLimiter:
     return RedisRateLimiter(os.environ["REDIS_URL"])
+
+
+async def close_redis_clients() -> None:
+    """Close the process's shared Redis clients, so the next call builds fresh ones.
+
+    An asyncio Redis connection belongs to the event loop that opened it, so the app calls
+    this on shutdown, on the loop that served its requests. Both clients are forgotten
+    before either is closed, so a close that fails can't leave a dead client cached for
+    the next call. Both are attempted, and the first failure is raised afterwards.
+    """
+    clients: list[RedisRateLimiter | RedisRefreshTokenStore] = []
+    if get_rate_limiter.cache_info().currsize:
+        clients.append(get_rate_limiter())
+    if get_refresh_token_store.cache_info().currsize:
+        clients.append(get_refresh_token_store())
+    get_rate_limiter.cache_clear()
+    get_refresh_token_store.cache_clear()
+
+    failures: list[Exception] = []
+    for client in clients:
+        try:
+            await client.aclose()
+        except Exception as exc:
+            failures.append(exc)
+    if failures:
+        raise failures[0]
 
 
 async def get_raw_db_session() -> AsyncGenerator[AsyncSession, None]:
@@ -137,3 +175,28 @@ def get_chat_model() -> ChatModel:
     return ClaudeChatModel(
         client=anthropic_client, model_id=os.environ.get("CHAT_MODEL", "claude-opus-5")
     )
+
+
+async def get_caller(claims: dict[str, Any] = Depends(get_current_user_claims)) -> Caller:
+    return caller_from_claims(claims)
+
+
+def get_chat_session_repository() -> PostgresChatSessionRepository:
+    return PostgresChatSessionRepository(_sessionmaker)
+
+
+@functools.cache
+def get_unified_pipeline() -> UnifiedPipeline:
+    # Built on first use, not at import, so importing the app doesn't embed every routing
+    # exemplar or open a chat-model client.
+    return build_unified_pipeline(
+        sessionmaker=_sessionmaker,
+        sessions=get_chat_session_repository(),
+        embedding_model=_embedding_model,
+        vector_store=_vector_store,
+        chat_model=get_chat_model(),
+    )
+
+
+def get_answer_in_session() -> AnswerInSession:
+    return get_unified_pipeline().answer_in_session

@@ -57,16 +57,39 @@ def _score_row(label: str, scores: JudgeScores) -> str:
     )
 
 
+def _success_rate_line(result: ComparisonResult, index: int) -> str | None:
+    # Per-question task-success breakdown (#147) -- only rendered when both
+    # arms actually carry it, so a ComparisonResult built before this field
+    # existed (any fixture or scenario that doesn't pass repeat-level success
+    # data) renders exactly as it did before, with no missing-index error.
+    b_rates = result.baseline.per_question_success_rate
+    t_rates = result.treatment.per_question_success_rate
+    if index >= len(b_rates) or index >= len(t_rates):
+        return None
+    return (
+        f"Task success this question: baseline {b_rates[index]:.0%}, "
+        f"treatment {t_rates[index]:.0%}"
+    )
+
+
 def _qualitative_section(result: ComparisonResult) -> list[str]:
     lines = ["## Qualitative (per question)", ""]
     for i, (scores_a, scores_b) in enumerate(result.judge_scores, start=1):
         lines.append(f"### Question {i}")
         lines.append("")
+        success_line = _success_rate_line(result, i - 1)
+        if success_line is not None:
+            lines.append(success_line)
+            lines.append("")
         lines.append("| Response | Coherence | Relevance | Completeness | Groundedness |")
         lines.append("|---|---|---|---|---|")
         lines.append(_score_row("Baseline (A)", scores_a))
         lines.append(_score_row("Treatment (B)", scores_b))
         lines.append("")
+        if i - 1 < len(result.baseline.answers) and i - 1 < len(result.treatment.answers):
+            lines.append(f"- Baseline answer: {result.baseline.answers[i - 1].text}")
+            lines.append(f"- Treatment answer: {result.treatment.answers[i - 1].text}")
+            lines.append("")
         if scores_a.parse_failed:
             lines.append(f"- ⚠ Baseline: {scores_a.unverifiable_claims[0]}")
         elif scores_a.unverifiable_claims:

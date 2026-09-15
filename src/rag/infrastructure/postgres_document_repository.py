@@ -72,6 +72,18 @@ class PostgresDocumentRepository(DocumentRepository):
             )
         await self._session.flush()
 
+    async def delete_document(self, document_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
+        # Chunks first: chunks.document_id references documents.id. tenant_id is matched
+        # explicitly as well as through RLS, like the chunk inserts above.
+        params = {"id": document_id, "tenant_id": tenant_id}
+        await self._session.execute(
+            text("DELETE FROM chunks WHERE document_id = :id AND tenant_id = :tenant_id"), params
+        )
+        await self._session.execute(
+            text("DELETE FROM documents WHERE id = :id AND tenant_id = :tenant_id"), params
+        )
+        await self._session.flush()
+
     async def get_chunks_for_tenant(self, tenant_id: uuid.UUID) -> list[Chunk]:
         result = await self._session.execute(
             text(

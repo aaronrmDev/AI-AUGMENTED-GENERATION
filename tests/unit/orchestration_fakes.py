@@ -1,8 +1,23 @@
+import asyncio
 import hashlib
 import uuid
 
-from src.orchestration.domain.entities import CacheHit, WarmEntry
-from src.orchestration.domain.ports import FrozenCache, WarmStore
+from src.orchestration.domain.entities import (
+    BudgetAllocation,
+    CacheHit,
+    Paradigm,
+    TierOutcome,
+    TierRequest,
+    TierResult,
+    WarmEntry,
+)
+from src.orchestration.domain.ports import (
+    CascadeTier,
+    FrozenCache,
+    QueryClassifier,
+    SessionBudgetRecorder,
+    WarmStore,
+)
 from src.orchestration.domain.sync_mixer import content_hash
 from src.rag.domain.ports import EmbeddingModel
 
@@ -87,3 +102,84 @@ class FakeBagOfWordsEmbeddingModel(EmbeddingModel):
         if norm == 0.0:
             return vector
         return [v / norm for v in vector]
+
+
+class FakeCascadeTier(CascadeTier):
+    def __init__(
+        self,
+        paradigm: Paradigm,
+        result: TierResult | None = None,
+        delay_seconds: float = 0.0,
+        error: BaseException | None = None,
+        cleanup_seconds: float = 0.0,
+    ) -> None:
+        self._paradigm = paradigm
+        self._result = result if result is not None else TierResult(TierOutcome.MISS)
+        self._delay = delay_seconds
+        self._error = error
+        # How long this tier takes to clean up after being cancelled -- the
+        # shape of a real tier invalidating its database session.
+        self._cleanup = cleanup_seconds
+        self.requests: list[TierRequest] = []
+        self.cancelled = False
+        self.cleaned_up = False
+
+    @property
+    def paradigm(self) -> Paradigm:
+        return self._paradigm
+
+    async def attempt(self, request: TierRequest) -> TierResult:
+        self.requests.append(request)
+        try:
+            if self._delay:
+                await asyncio.sleep(self._delay)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            if self._cleanup:
+                await asyncio.sleep(self._cleanup)
+                self.cleaned_up = True
+            raise
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+class FakeQueryClassifier(QueryClassifier):
+    def __init__(
+        self,
+        scores: dict[Paradigm, float],
+        delay_seconds: float = 0.0,
+        error: Exception | None = None,
+    ) -> None:
+        self._scores = scores
+        self._delay = delay_seconds
+        self._error = error
+        self.calls: list[tuple[str, list[float]]] = []
+
+    async def score(self, query: str, query_embedding: list[float]) -> dict[Paradigm, float]:
+        self.calls.append((query, query_embedding))
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        if self._error is not None:
+            raise self._error
+        return dict(self._scores)
+
+
+class FakeSessionBudgetRecorder(SessionBudgetRecorder):
+    def __init__(self, error: Exception | None = None) -> None:
+        self._error = error
+        self.records: list[
+            tuple[uuid.UUID, uuid.UUID, uuid.UUID, BudgetAllocation, frozenset[Paradigm]]
+        ] = []
+
+    async def record(
+        self,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        session_id: uuid.UUID,
+        allocation: BudgetAllocation,
+        contributing: frozenset[Paradigm],
+    ) -> None:
+        if self._error is not None:
+            raise self._error
+        self.records.append((tenant_id, user_id, session_id, allocation, contributing))

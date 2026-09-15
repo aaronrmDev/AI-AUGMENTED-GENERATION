@@ -1,9 +1,10 @@
+import asyncio
 import re
 import uuid
 
 from rank_bm25 import BM25Plus
 
-from src.rag.domain.entities import SearchResult
+from src.rag.domain.entities import Chunk, SearchResult
 from src.rag.domain.ports import DocumentRepository, Retriever
 
 _TOKEN = re.compile(r"[a-zA-Z0-9]+")
@@ -21,7 +22,13 @@ class BM25KeywordSearch(Retriever):
         chunks = await self._documents.get_chunks_for_tenant(tenant_id)
         if not chunks:
             return []
+        # Tokenizing the corpus, building the index, and scoring all grow with the tenant's
+        # chunks, so they run together on one worker thread. On the event loop they would
+        # stall every other coroutine, which in a PARALLEL cascade route means the CAG and
+        # MAG tiers' budgets.
+        return await asyncio.to_thread(self._rank, chunks, query, top_k)
 
+    def _rank(self, chunks: list[Chunk], query: str, top_k: int) -> list[SearchResult]:
         corpus = [_tokenize(chunk.content) for chunk in chunks]
         # BM25Plus, not the plain BM25Okapi the plan's snippet named: Okapi's IDF term is
         # log((N - n + 0.5) / (n + 0.5)), which is exactly 0 whenever a query term appears in

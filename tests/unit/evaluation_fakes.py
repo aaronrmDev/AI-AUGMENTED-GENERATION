@@ -8,9 +8,21 @@ class FakeJudge(Judge):
             coherence=4, relevance=4, completeness=4, groundedness=4
         )
         self.calls: list[tuple[str, str, str, str, str]] = []
+        # Tracked separately from .calls (#147) so every existing test
+        # asserting an exact 5-tuple shape on .calls keeps passing unchanged
+        # -- reference_context is a new, optional-by-default parameter, not
+        # part of the pre-#147 call shape those tests already pin down.
+        self.reference_context_calls: list[str] = []
 
     async def score(
-        self, query: str, response_a: str, response_b: str, context_a: str, context_b: str
+        self,
+        query: str,
+        response_a: str,
+        response_b: str,
+        context_a: str,
+        context_b: str,
+        reference_context: str = "",
     ) -> tuple[JudgeScores, JudgeScores]:
         self.calls.append((query, response_a, response_b, context_a, context_b))
+        self.reference_context_calls.append(reference_context)
         return self._scores, self._scores

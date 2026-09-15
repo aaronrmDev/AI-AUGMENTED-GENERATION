@@ -1,7 +1,9 @@
+import threading
 import uuid
 
 from src.rag.domain.entities import SearchResult
 from src.rag.infrastructure.compressing_retriever import CompressingRetriever
+from tests.unit.rag_fakes import ThreadRecordingEmbeddingModel
 
 
 class _FakeInner:
@@ -26,7 +28,10 @@ async def test_keeps_the_query_relevant_sentence_and_drops_the_irrelevant_one():
     results = [
         SearchResult(
             document_id=uuid.uuid4(), chunk_id=uuid.uuid4(),
-            content="This sentence answers the query directly. This sentence is irrelevant padding.",
+            content=(
+                "This sentence answers the query directly. "
+                "This sentence is irrelevant padding."
+            ),
             score=0.9,
         )
     ]
@@ -42,8 +47,14 @@ async def test_keeps_the_query_relevant_sentence_and_drops_the_irrelevant_one():
 
 async def test_a_result_contributing_zero_kept_sentences_is_dropped():
     results = [
-        SearchResult(document_id=uuid.uuid4(), chunk_id=uuid.uuid4(), content="Totally irrelevant padding here.", score=0.9),
-        SearchResult(document_id=uuid.uuid4(), chunk_id=uuid.uuid4(), content="This directly answers the query relevant to it.", score=0.8),
+        SearchResult(
+            document_id=uuid.uuid4(), chunk_id=uuid.uuid4(),
+            content="Totally irrelevant padding here.", score=0.9,
+        ),
+        SearchResult(
+            document_id=uuid.uuid4(), chunk_id=uuid.uuid4(),
+            content="This directly answers the query relevant to it.", score=0.8,
+        ),
     ]
     # target_tokens=9, not the plan's literal 8: "This directly answers the
     # query relevant to it." encodes to exactly 9 cl100k_base tokens. At 8,
@@ -62,3 +73,21 @@ async def test_a_result_contributing_zero_kept_sentences_is_dropped():
 
     assert len(compressed) == 1
     assert "answers the query" in compressed[0].content
+
+
+async def test_every_embedding_runs_off_the_event_loop():
+    results = [
+        SearchResult(
+            document_id=uuid.uuid4(), chunk_id=uuid.uuid4(),
+            content="This sentence answers the query. This sentence is padding.", score=0.9,
+        )
+    ]
+    embedder = ThreadRecordingEmbeddingModel(_KeywordOverlapEmbedder())
+    retriever = CompressingRetriever(
+        inner=_FakeInner(results), embedding_model=embedder, target_tokens=50
+    )
+
+    await retriever.execute(tenant_id=uuid.uuid4(), query="query relevant", top_k=1)
+
+    assert len(embedder.thread_ids) == 3  # the query and both sentences
+    assert threading.get_ident() not in embedder.thread_ids
