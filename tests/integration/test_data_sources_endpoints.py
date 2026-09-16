@@ -5,9 +5,14 @@ HTTP, the same way every other route in this API is proven."""
 import os
 import time
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+
+from src.identity.infrastructure.jwt_token_issuer import JWTTokenIssuer
+from tests.integration.orchestration_env import VALID_HASH
 
 
 @pytest.fixture(scope="module")
@@ -105,7 +110,7 @@ async def test_a_client_cannot_declare_its_own_tenant_id(celery_worker_for_inges
 
 
 @pytest.mark.asyncio
-async def test_checking_another_users_job_returns_404(celery_worker_for_ingestion):
+async def test_checking_another_tenants_job_returns_404(celery_worker_for_ingestion):
     from src.api.main import app
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -128,6 +133,88 @@ async def test_checking_another_users_job_returns_404(celery_worker_for_ingestio
             f"/data-sources/jobs/{task_id}", headers={"Authorization": f"Bearer {token_b}"}
         )
         assert cross_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_user_scoped_job_is_visible_only_to_the_user_who_posted_it(
+    celery_worker_for_ingestion, db_session
+):
+    """The one HTTP-level proof that `scope: "user"` -- every other test in this file
+    posts `scope: "tenant"` -- is actually denied to a different user in the SAME
+    tenant, not just to a different tenant. RegisterUser.execute mints a fresh
+    tenant_id per registration, so two logins via _register_and_login() can never land
+    in the same tenant; a second user is inserted directly into the first user's
+    tenant instead, the same way tests/integration/test_sessions_endpoints.py's
+    _user()/_auth() helpers already do for the identical problem on the session
+    routes."""
+    from src.api.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        token_a = await _register_and_login(client)
+        claims = JWTTokenIssuer(secret_key=os.environ["JWT_SECRET_KEY"]).verify_access_token(
+            token_a
+        )
+        tenant_id = uuid.UUID(claims["tenant_id"])
+
+        post_response = await client.post(
+            "/data-sources",
+            json={
+                "source_key": "my-notes",
+                "scope": "user",
+                "expected_change_interval_seconds": 3600,
+                "content": "text",
+            },
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert post_response.status_code == 202
+        task_id = post_response.json()["task_id"]
+
+        deadline = time.monotonic() + 30
+        status_body = None
+        while time.monotonic() < deadline:
+            status_response = await client.get(
+                f"/data-sources/jobs/{task_id}", headers={"Authorization": f"Bearer {token_a}"}
+            )
+            assert status_response.status_code == 200
+            status_body = status_response.json()
+            if status_body["state"] != "pending":
+                break
+            time.sleep(0.5)
+        assert status_body is not None
+        assert status_body["state"] == "success"
+
+        other_user_id = uuid.uuid4()
+        now = datetime.now(UTC)
+        await db_session.execute(
+            text(
+                "INSERT INTO users (id, email, hashed_password, tenant_id, created_at, updated_at) "
+                "VALUES (:id, :email, :hashed_password, :tenant_id, :created_at, :updated_at)"
+            ),
+            {
+                "id": other_user_id,
+                "email": f"{other_user_id}@example.com",
+                "hashed_password": VALID_HASH,
+                "tenant_id": tenant_id,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        await db_session.commit()
+        token_b = (
+            JWTTokenIssuer(secret_key=os.environ["JWT_SECRET_KEY"])
+            .issue_pair(other_user_id, tenant_id)
+            .access_token.value
+        )
+
+        cross_response = await client.get(
+            f"/data-sources/jobs/{task_id}", headers={"Authorization": f"Bearer {token_b}"}
+        )
+        assert cross_response.status_code == 404
+
+        same_user_response = await client.get(
+            f"/data-sources/jobs/{task_id}", headers={"Authorization": f"Bearer {token_a}"}
+        )
+        assert same_user_response.status_code == 200
 
 
 @pytest.mark.asyncio

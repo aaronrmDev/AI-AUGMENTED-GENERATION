@@ -57,6 +57,13 @@ def get_ingestion_redis_client() -> redis.Redis:
     # line this project runs on (see RedisRateLimiter's identical note) -- a
     # narrowly-scoped ignore at this call site, matching that established
     # convention, rather than a blanket per-module ignore.
+    #
+    # Deliberately NOT decode_responses=True: CeleryIngestionJobDispatcher.status()
+    # (src/workers/celery_ingestion_dispatcher.py) calls .decode() on whatever this
+    # client's .get() returns, which only works against the raw bytes a client built
+    # without decode_responses=True hands back -- passing a decode_responses=True
+    # client here in some future wiring change would make that .decode() call raise
+    # AttributeError: 'str' object has no attribute 'decode' on every status() lookup.
     return redis.from_url(os.environ["REDIS_URL"])  # type: ignore[no-untyped-call, no-any-return]
 
 

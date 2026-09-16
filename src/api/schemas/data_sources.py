@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from src.orchestration.domain.entities import IngestionResult, JobState, JobStatus
+from src.orchestration.domain.entities import IngestionResult, JobStatus
 
 MAX_CONTENT_CHARS = 2_000_000  # generous text ceiling; MaxBodySizeMiddleware's 11 MiB
                                  # override on this route is the real backstop

@@ -12,6 +12,7 @@ from src.orchestration.domain.entities import (
     JobState,
     JobStatus,
 )
+from src.orchestration.domain.ingestion_ownership import owner_key, owner_matches
 from src.orchestration.domain.ports import IngestionJobDispatcher
 
 
@@ -91,11 +92,12 @@ class FakeRefreshTokenStore(RefreshTokenStore):
 
 class FakeIngestionJobDispatcher(IngestionJobDispatcher):
     """Runs the 'ingestion' synchronously and in-memory -- no Celery, no Redis.
-    Stores just enough to answer status() and to enforce the same ownership rule
-    CeleryIngestionJobDispatcher enforces for real."""
+    Stores just enough to answer status(), checking ownership through the same
+    owner_key()/owner_matches() pair CeleryIngestionJobDispatcher checks it with for
+    real, rather than a second, independent re-implementation of the same rule."""
 
     def __init__(self) -> None:
-        self._jobs: dict[str, tuple[uuid.UUID, uuid.UUID | None, JobStatus]] = {}
+        self._jobs: dict[str, tuple[str, JobStatus]] = {}
 
     async def dispatch(
         self,
@@ -113,7 +115,10 @@ class FakeIngestionJobDispatcher(IngestionJobDispatcher):
         result = IngestionResult(
             source_id=uuid.uuid4(), route=IngestionRoute.RAG_ONLY, changed=True
         )
-        self._jobs[task_id] = (tenant_id, user_id, JobStatus(JobState.SUCCESS, result, None))
+        self._jobs[task_id] = (
+            owner_key(tenant_id, user_id),
+            JobStatus(JobState.SUCCESS, result, None),
+        )
         return task_id
 
     async def status(
@@ -122,9 +127,7 @@ class FakeIngestionJobDispatcher(IngestionJobDispatcher):
         entry = self._jobs.get(task_id)
         if entry is None:
             return None
-        owner_tenant, owner_user, status = entry
-        if owner_tenant != tenant_id:
-            return None
-        if owner_user is not None and owner_user != user_id:
+        owner, status = entry
+        if not owner_matches(owner, tenant_id=tenant_id, user_id=user_id):
             return None
         return status

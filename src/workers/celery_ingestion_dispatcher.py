@@ -12,6 +12,7 @@ from src.orchestration.domain.entities import (
     JobState,
     JobStatus,
 )
+from src.orchestration.domain.ingestion_ownership import owner_key, owner_matches
 from src.orchestration.domain.ports import IngestionJobDispatcher
 from src.workers.celery_app import JOB_TTL_SECONDS
 
@@ -56,8 +57,9 @@ class CeleryIngestionJobDispatcher(IngestionJobDispatcher):
             return str(result.id)
 
         task_id = await asyncio.to_thread(_send)
-        owner = f"{tenant_id}:{user_id if user_id is not None else ''}"
-        await self._redis.set(f"{_OWNERSHIP_KEY_PREFIX}{task_id}", owner, ex=JOB_TTL_SECONDS)
+        await self._redis.set(
+            f"{_OWNERSHIP_KEY_PREFIX}{task_id}", owner_key(tenant_id, user_id), ex=JOB_TTL_SECONDS
+        )
         return task_id
 
     async def status(
@@ -66,17 +68,15 @@ class CeleryIngestionJobDispatcher(IngestionJobDispatcher):
         owner = await self._redis.get(f"{_OWNERSHIP_KEY_PREFIX}{task_id}")
         if owner is None:
             return None
-        owner_tenant_str, _, owner_user_str = owner.decode().partition(":")
-        if uuid.UUID(owner_tenant_str) != tenant_id:
-            return None
-        if owner_user_str and uuid.UUID(owner_user_str) != user_id:
+        if not owner_matches(owner.decode(), tenant_id=tenant_id, user_id=user_id):
             return None
 
         def _read() -> JobStatus:
             async_result: AsyncResult = self._celery_app.AsyncResult(task_id)
-            if async_result.state in ("PENDING", "STARTED", "RETRY"):
+            state = async_result.state
+            if state in ("PENDING", "STARTED", "RETRY"):
                 return JobStatus(JobState.PENDING, None, None)
-            if async_result.state == "SUCCESS":
+            if state == "SUCCESS":
                 raw = async_result.result
                 return JobStatus(
                     JobState.SUCCESS,

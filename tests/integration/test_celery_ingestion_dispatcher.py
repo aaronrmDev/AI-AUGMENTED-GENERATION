@@ -16,7 +16,9 @@ from src.orchestration.domain.entities import DataSourceProfile, JobState, Sourc
 TENANT = uuid.uuid4()
 OTHER_TENANT = uuid.uuid4()
 USER = uuid.uuid4()
+OTHER_USER = uuid.uuid4()
 PROFILE = DataSourceProfile("return-policy", SourceScope.TENANT, timedelta(days=90))
+USER_PROFILE = DataSourceProfile("user-notes", SourceScope.USER, timedelta(days=90))
 
 
 @pytest.fixture
@@ -69,6 +71,19 @@ async def test_status_denies_another_tenant(dispatcher):
         tenant_id=TENANT, profile=PROFILE, content="policy text", user_id=None
     )
     assert await dispatcher.status(task_id, tenant_id=OTHER_TENANT, user_id=USER) is None
+
+
+@pytest.mark.asyncio
+async def test_status_denies_another_user_in_the_same_tenant(dispatcher):
+    # The tenant check alone can't prove this: a user-scoped job dispatched for
+    # (TENANT, USER) must also be denied to (TENANT, OTHER_USER) -- the same-tenant,
+    # different-user branch of status()'s ownership check, exercised here against the
+    # real CeleryIngestionJobDispatcher rather than only FakeIngestionJobDispatcher's
+    # own re-implementation of the same rule.
+    task_id = await dispatcher.dispatch(
+        tenant_id=TENANT, profile=USER_PROFILE, content="notes", user_id=USER
+    )
+    assert await dispatcher.status(task_id, tenant_id=TENANT, user_id=OTHER_USER) is None
 
 
 @pytest.mark.asyncio
