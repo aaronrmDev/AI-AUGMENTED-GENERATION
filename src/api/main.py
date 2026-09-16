@@ -8,8 +8,10 @@ from src.api.routers.auth import router as auth_router
 from src.api.routers.chat import router as chat_router
 from src.api.routers.documents import router as documents_router
 from src.api.routers.sessions import router as sessions_router
+from src.api.security_logging import configure_security_logging
 
 app = FastAPI(title="Unified RAG x CAG x MAG AI System")
+configure_security_logging()
 register_exception_handlers(app)
 app.add_middleware(RateLimitHeadersMiddleware)
 app.add_middleware(

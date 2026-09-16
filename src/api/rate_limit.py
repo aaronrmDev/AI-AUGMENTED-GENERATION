@@ -46,10 +46,11 @@ def global_chat_limit() -> int:
 
 
 class RateLimitExceeded(Exception):
-    def __init__(self, limit: int, remaining: int, reset_at: datetime) -> None:
+    def __init__(self, limit: int, remaining: int, reset_at: datetime, key: str) -> None:
         self.limit = limit
         self.remaining = remaining
         self.reset_at = reset_at
+        self.key = key
 
 
 class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
@@ -106,7 +107,7 @@ async def enforce_rate_limit(
         # over this exception handler's correct ones for the check that
         # actually failed.
         request.state.rate_limit_headers = None
-        raise RateLimitExceeded(limit=limit, remaining=0, reset_at=reset_at)
+        raise RateLimitExceeded(limit=limit, remaining=0, reset_at=reset_at, key=key)
 
     headers = {
         "X-RateLimit-Limit": str(limit),
