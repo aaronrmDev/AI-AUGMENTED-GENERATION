@@ -3,6 +3,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 from src.identity.infrastructure.db import get_engine, get_sessionmaker
 from src.mag.infrastructure.neo4j_memory_graph_repository import Neo4jMemoryGraphRepository
 from src.mag.infrastructure.qdrant_semantic_memory_index import QdrantSemanticMemoryIndex
@@ -28,7 +30,9 @@ from src.workers.celery_app import celery_app
 _UNUSED_CAG_THRESHOLD = 0.9
 
 
-async def _build_ingest_data_source() -> tuple[IngestDataSource, Neo4jMemoryGraphRepository]:
+async def _build_ingest_data_source() -> (
+    tuple[IngestDataSource, AsyncEngine, Neo4jMemoryGraphRepository]
+):
     engine = get_engine(os.environ["APP_DATABASE_URL"])
     sessionmaker = get_sessionmaker(engine)
     embedder = CachingEmbeddingModel(SentenceTransformersEmbedder())
@@ -38,27 +42,39 @@ async def _build_ingest_data_source() -> tuple[IngestDataSource, Neo4jMemoryGrap
         os.environ["NEO4J_URL"],
         auth=(os.environ["NEO4J_USERNAME"], os.environ["NEO4J_PASSWORD"]),
     )
-    # Every store this composition root touches provisions its own schema on
-    # first use in this codebase's established pattern: QdrantVectorStore /
-    # QdrantSemanticMemoryIndex both expose ensure_collection(), and
-    # tests/integration/freshness_env.py calls all three (including this
-    # graph's ensure_schema()) once per environment before any write. Alembic
-    # migrations own Postgres's schema up front, but Qdrant and Neo4j have no
-    # migration runner -- ensure_collection()/ensure_schema() *is* their
-    # migration step, and nothing else in this codebase runs it for a real
-    # (non-test) process. Skipping it here would leave a fresh Neo4j instance
-    # (a real one, e.g. from docker-compose up on a clean volume) with none of
-    # Neo4jMemoryGraphRepository's uniqueness constraints or the Entity
-    # embedding index, silently degrading semantic-fact writes from
-    # constrained MERGE-by-id to full scans with no duplicate protection.
-    # Every statement in ensure_schema() is `IF NOT EXISTS`, so calling it on
-    # every task invocation -- required here since this task has no
-    # process-startup hook to call it once, unlike a real worker entry point
-    # -- is a cheap, idempotent no-op after the first call rather than a
-    # per-call cost that grows with usage.
-    await vector_store.ensure_collection()
-    await semantic_index.ensure_collection()
-    await graph.ensure_schema()
+    try:
+        # Every store this composition root touches provisions its own schema
+        # on first use in this codebase's established pattern:
+        # QdrantVectorStore / QdrantSemanticMemoryIndex both expose
+        # ensure_collection(), and tests/integration/freshness_env.py calls
+        # all three (including this graph's ensure_schema()) once per
+        # environment before any write. Alembic migrations own Postgres's
+        # schema up front, but Qdrant and Neo4j have no migration runner --
+        # ensure_collection()/ensure_schema() *is* their migration step, and
+        # nothing else in this codebase runs it for a real (non-test)
+        # process. Skipping it here would leave a fresh Neo4j instance (a
+        # real one, e.g. from docker-compose up on a clean volume) with none
+        # of Neo4jMemoryGraphRepository's uniqueness constraints or the
+        # Entity embedding index, silently degrading semantic-fact writes
+        # from constrained MERGE-by-id to full scans with no duplicate
+        # protection. Every statement in ensure_schema() is `IF NOT EXISTS`,
+        # so calling it on every task invocation -- required here since this
+        # task has no process-startup hook to call it once, unlike a real
+        # worker entry point -- is a cheap, idempotent no-op after the first
+        # call rather than a per-call cost that grows with usage.
+        await vector_store.ensure_collection()
+        await semantic_index.ensure_collection()
+        await graph.ensure_schema()
+    except Exception:
+        # A provisioning failure here means this function raises before ever
+        # handing engine/graph back to a caller who could close them in its
+        # own finally block (ingest_data_source_task's, below) -- without
+        # this except, a transient Qdrant/Neo4j provisioning error would
+        # leak the engine's connection pool and the Bolt driver this same
+        # call already opened, on top of whatever failure is being reported.
+        await graph.close()
+        await engine.dispose()
+        raise
 
     repository = PostgresDataSourceRepository(sessionmaker)
     rag_index = ChunkedRagIndex(sessionmaker, vector_store, FixedSizeChunker(), embedder)
@@ -68,15 +84,20 @@ async def _build_ingest_data_source() -> tuple[IngestDataSource, Neo4jMemoryGrap
         embedder, cache, search, similarity_threshold=_UNUSED_CAG_THRESHOLD
     )
     writer = RecordSemanticFactWriter(sessionmaker, semantic_index, embedder, graph)
-    # graph is handed back alongside the use case, not stashed anywhere else,
-    # so the caller can close it -- see ingest_data_source_task's own finally
-    # block for why only this one of this function's four per-call clients
-    # (engine, the two Qdrant-backed stores, this driver) gets closed: it's
-    # the only one whose wrapper class exposes a close() at all, and it's
-    # also the only one confirmed (empirically, via neo4j's own __del__
-    # -triggered ResourceWarning) to leak a real resource -- an open Bolt
-    # connection pool -- when left for GC instead.
-    return IngestDataSource(repository, rag_index, cache, warmed, writer), graph
+    # engine and graph are handed back alongside the use case, not stashed
+    # anywhere else, so the caller can close both -- see
+    # ingest_data_source_task's own finally block. The two Qdrant-backed
+    # stores this function also builds (vector_store, semantic_index) are
+    # NOT handed back: QdrantVectorStore and QdrantSemanticMemoryIndex
+    # expose no close() today, so there is nothing for a caller to call --
+    # disclosed as a known, out-of-scope gap in this task's report, not
+    # silently ignored (fixing it means expanding two shared RAG/MAG
+    # infrastructure classes other call sites and tests also depend on).
+    # engine (a plain sqlalchemy.ext.asyncio.AsyncEngine) and graph (whose
+    # own close() is already public API, exercised identically by
+    # freshness_env.py's teardown) both already expose what's needed, so
+    # both get closed here with zero new API surface.
+    return IngestDataSource(repository, rag_index, cache, warmed, writer), engine, graph
 
 
 @celery_app.task(name="ingest_data_source")  # type: ignore[untyped-decorator]
@@ -99,7 +120,7 @@ def ingest_data_source_task(
     import concurrent.futures
 
     async def _run() -> dict[str, Any]:
-        ingest, graph = await _build_ingest_data_source()
+        ingest, engine, graph = await _build_ingest_data_source()
         try:
             profile = DataSourceProfile(
                 source_key,
@@ -122,19 +143,23 @@ def ingest_data_source_task(
             # Confirmed empirically (uv run pytest ... -W error::ResourceWarning):
             # an unclosed AsyncBoltDriver left for GC raises its own
             # ResourceWarning from neo4j's __del__ -- a real leaked Bolt
-            # connection pool, not a style nit. This task builds a fresh
-            # driver on every invocation (no per-process startup/shutdown
-            # hook exists here to build and close one just once), so closing
-            # it here is what keeps a long-lived worker process from
-            # accumulating one open driver per ingestion it has ever run.
-            # engine and the two Qdrant-backed stores this same composition
-            # root builds are NOT closed/disposed here -- QdrantVectorStore
-            # and QdrantSemanticMemoryIndex expose no close() today, and
-            # adding one is real, but out of this task's scope (it touches
-            # shared RAG/MAG infrastructure classes other call sites and
-            # tests also depend on). Disclosed as a known, deliberately
-            # unfixed concern in this task's report, not silently ignored.
+            # connection pool, not a style nit. engine.dispose() closes this
+            # call's own AsyncEngine (and the asyncpg connection pool it
+            # opened) the same way -- both engine and graph are built fresh
+            # on every invocation (no per-process startup/shutdown hook
+            # exists here to build and close either just once), so closing
+            # both here is what keeps a long-lived worker process from
+            # accumulating one open driver and one open connection pool per
+            # ingestion it has ever run. The two Qdrant-backed stores this
+            # same composition root builds are NOT closed here --
+            # QdrantVectorStore and QdrantSemanticMemoryIndex expose no
+            # close() today, and adding one is real, but out of this task's
+            # scope (it touches shared RAG/MAG infrastructure classes other
+            # call sites and tests also depend on). Disclosed as a known,
+            # deliberately unfixed concern in this task's report, not
+            # silently ignored.
             await graph.close()
+            await engine.dispose()
 
     # A real Celery worker process (prefork, solo, or gevent pool) has no
     # already-running event loop the way uvicorn does -- asyncio.run is the
