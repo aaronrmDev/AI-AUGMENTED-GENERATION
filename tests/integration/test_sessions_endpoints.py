@@ -302,8 +302,10 @@ async def test_the_global_chat_quota_is_shared_across_every_account(
         second = await client.post(
             f"/sessions/{session_b}/answers", json=question, headers=headers_b
         )
-        # A third account's very first request still gets refused: the quota
-        # is global, not tied to either account that already used it.
+        # Account B again, not a third account: its own per-user limit is
+        # nowhere close to tripped, yet this request is still refused because
+        # the two prior requests (one from each account) already exhausted
+        # the quota of 2 that's shared across every account.
         third = await client.post(
             f"/sessions/{session_b}/answers", json=question, headers=headers_b
         )

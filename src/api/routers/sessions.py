@@ -11,6 +11,7 @@ from src.api.dependencies import (
 )
 from src.api.rate_limit import (
     GLOBAL_CHAT_KEY,
+    GLOBAL_CHAT_WINDOW_SECONDS,
     SESSION_CREATE_LIMIT,
     chat_rate_limit,
     enforce_rate_limit,
@@ -92,7 +93,7 @@ async def answer(
         limiter=get_rate_limiter(),
         key=GLOBAL_CHAT_KEY,
         limit=global_chat_limit(),
-        window_seconds=3600,
+        window_seconds=GLOBAL_CHAT_WINDOW_SECONDS,
     )
     result = await answer_in_session.execute(
         caller.tenant_id, caller.user_id, session_id, payload.question

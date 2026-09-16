@@ -22,14 +22,29 @@ from fastapi import Request
 
 
 def trusted_proxy_count() -> int:
-    return int(os.environ.get("TRUSTED_PROXY_COUNT", "0"))
+    try:
+        return int(os.environ.get("TRUSTED_PROXY_COUNT", "0"))
+    except ValueError:
+        # A malformed value (e.g. a config typo) degrades to the fail-closed
+        # default rather than crashing every auth request: 0 never reads
+        # X-Forwarded-For at all, so this can't be tricked into trusting a
+        # forged header -- it can only ever fail toward the safer behavior.
+        return 0
 
 
 def real_client_ip(request: Request) -> str:
     count = trusted_proxy_count()
     if count > 0:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded is not None:
+        # A client or intermediary is allowed to send more than one raw
+        # X-Forwarded-For header line; .get() would silently see only the
+        # first. .getlist() collects every raw line, and joining them with
+        # ", " before splitting on commas treats them exactly as if they'd
+        # arrived pre-joined into one header, which is what Traefik's named
+        # ingress -- the only proxy this project actually deploys behind --
+        # already does today.
+        raw_lines = request.headers.getlist("x-forwarded-for")
+        if raw_lines:
+            forwarded = ", ".join(raw_lines)
             hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
             if len(hops) >= count:
                 return hops[-count]

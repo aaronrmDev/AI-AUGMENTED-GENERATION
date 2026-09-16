@@ -1,6 +1,6 @@
 from starlette.requests import Request
 
-from src.api.client_address import real_client_ip
+from src.api.client_address import real_client_ip, trusted_proxy_count
 
 
 def _request(*, client_host: str = "10.0.0.1", forwarded_for: str | None = None) -> Request:
@@ -52,3 +52,25 @@ def test_no_client_at_all_returns_unknown(monkeypatch):
     monkeypatch.delenv("TRUSTED_PROXY_COUNT", raising=False)
     scope = {"type": "http", "method": "GET", "path": "/", "headers": [], "client": None}
     assert real_client_ip(Request(scope)) == "unknown"
+
+
+def test_a_malformed_trusted_proxy_count_falls_back_to_zero_instead_of_raising(monkeypatch):
+    monkeypatch.setenv("TRUSTED_PROXY_COUNT", "abc")
+    assert trusted_proxy_count() == 0
+
+
+def test_multiple_raw_forwarded_for_header_lines_are_all_honored(monkeypatch):
+    monkeypatch.setenv("TRUSTED_PROXY_COUNT", "2")
+    # Two raw header lines rather than one comma-joined line -- .get() would
+    # only see the first ("203.0.113.7") and never reach the second hop.
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [
+            (b"x-forwarded-for", b"203.0.113.7"),
+            (b"x-forwarded-for", b"198.51.100.9"),
+        ],
+        "client": ("10.0.0.1", 12345),
+    }
+    assert real_client_ip(Request(scope)) == "203.0.113.7"

@@ -10,6 +10,7 @@ from src.api.dependencies import (
 )
 from src.api.rate_limit import (
     GLOBAL_CHAT_KEY,
+    GLOBAL_CHAT_WINDOW_SECONDS,
     chat_rate_limit,
     enforce_rate_limit,
     global_chat_limit,
@@ -48,7 +49,7 @@ async def chat(
         limiter=get_rate_limiter(),
         key=GLOBAL_CHAT_KEY,
         limit=global_chat_limit(),
-        window_seconds=3600,
+        window_seconds=GLOBAL_CHAT_WINDOW_SECONDS,
     )
     search = SearchDocuments(embedding_model=get_embedding_model(), vector_store=get_vector_store())
     use_case = AnswerQuestion(search_documents=search, chat_model=get_chat_model(), top_k=_TOP_K)

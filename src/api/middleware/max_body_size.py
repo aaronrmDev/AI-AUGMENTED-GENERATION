@@ -30,10 +30,15 @@ class MaxBodySizeMiddleware:
         self.path_overrides = dict(path_overrides or {})
 
     def _limit_for(self, path: str) -> int:
-        for prefix, limit in self.path_overrides.items():
-            if path.startswith(prefix):
-                return limit
-        return self.default_max_bytes
+        """Returns the byte ceiling for this exact request path, or the default.
+
+        Matched by exact string equality, never by prefix: a `path_overrides` entry
+        for "/documents" applies only to that literal path (the upload route) and
+        never to a distinct route that merely starts with the same string, such as
+        "/documents/search", which has its own, much smaller, legitimate body size
+        and would otherwise inherit an upload-sized ceiling it never asked for.
+        """
+        return self.path_overrides.get(path, self.default_max_bytes)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":

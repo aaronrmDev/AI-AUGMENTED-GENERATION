@@ -27,7 +27,7 @@ def chat_rate_limit() -> int:
 
 GLOBAL_CHAT_KEY = "global:chat"  # shared by every caller, not per-user or per-tenant
 GLOBAL_CHAT_WINDOW_SECONDS = 3600
-_DEFAULT_GLOBAL_CHAT_LIMIT = 1000
+_DEFAULT_GLOBAL_CHAT_LIMIT = 10000
 
 
 def global_chat_limit() -> int:
@@ -116,15 +116,20 @@ async def enforce_rate_limit(
     }
     # A route that checks more than one limit on the same request (a per-user
     # budget and a global quota, say) calls this twice against the same
-    # `response`/`request`. Only the *first* successful call's headers should
-    # ever reach the client -- those are the ones tied to the limit that was
-    # checked (and so could have failed) first, and the ones a caller can
-    # actually act on -- so skip writing here if an earlier call on this same
-    # request already did. Written to both places: directly on `response`
-    # covers the normal successful-response path with no extra hop through
-    # the middleware, and stashed on `request.state` is what lets
+    # `request`. Only the *first* successful call's headers should ever reach
+    # the client -- those are the ones tied to the limit that was checked (and
+    # so could have failed) first, and the ones a caller can actually act on --
+    # so skip writing here if an earlier call on this same request already
+    # did. Gated on `request.state.rate_limit_headers` alone, not on whether
+    # `response.headers` already carries them: `request.state` is the single
+    # source of truth that persists for the whole request regardless of which
+    # `Response` object a given call happens to be holding, so a future caller
+    # that passed a fresh `Response` into a second call couldn't fool this
+    # check into writing again. Written to both places: directly on
+    # `response` covers the normal successful-response path with no extra hop
+    # through the middleware, and stashed on `request.state` is what lets
     # RateLimitHeadersMiddleware recover these same values if the route
     # raises a domain exception afterward.
-    if "X-RateLimit-Limit" not in response.headers:
+    if getattr(request.state, "rate_limit_headers", None) is None:
         response.headers.update(headers)
         request.state.rate_limit_headers = headers

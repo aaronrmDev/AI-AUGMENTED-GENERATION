@@ -11,7 +11,6 @@ from src.api.routers.sessions import router as sessions_router
 from src.api.security_logging import configure_security_logging
 
 app = FastAPI(title="Unified RAG x CAG x MAG AI System")
-configure_security_logging()
 register_exception_handlers(app)
 app.add_middleware(RateLimitHeadersMiddleware)
 app.add_middleware(
@@ -29,6 +28,11 @@ app.include_router(sessions_router)
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.on_event("startup")
+async def configure_security_logging_on_startup() -> None:
+    configure_security_logging()
 
 
 @app.on_event("startup")

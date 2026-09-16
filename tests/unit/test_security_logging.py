@@ -1,5 +1,6 @@
 import uuid
 
+import pytest
 import structlog
 
 from src.api.caller import Caller
@@ -7,6 +8,17 @@ from src.api.exception_handlers import rate_limit_exceeded_handler, session_not_
 from src.api.rate_limit import RateLimitExceeded
 from src.api.security_logging import configure_security_logging
 from src.orchestration.domain.errors import SessionNotFound
+
+
+@pytest.fixture(autouse=True)
+def _restore_structlog_defaults():
+    # configure_security_logging() below reconfigures structlog process-wide
+    # (PrintLoggerFactory, JSON rendering). Left in place, that configuration
+    # would leak into every test that runs afterward in this same process,
+    # regardless of module -- reset it back to structlog's own defaults once
+    # each test here is done.
+    yield
+    structlog.reset_defaults()
 
 
 def _request(*, caller: Caller | None = None):

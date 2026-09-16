@@ -65,11 +65,11 @@ def test_a_chat_limit_below_1_is_refused(monkeypatch):
         chat_rate_limit()
 
 
-def test_the_global_chat_limit_defaults_to_1000_and_is_read_from_the_environment_per_call(
+def test_the_global_chat_limit_defaults_to_10000_and_is_read_from_the_environment_per_call(
     monkeypatch,
 ):
     monkeypatch.delenv("CHAT_RATE_LIMIT_GLOBAL_PER_HOUR", raising=False)
-    assert global_chat_limit() == 1000
+    assert global_chat_limit() == 10000
     monkeypatch.setenv("CHAT_RATE_LIMIT_GLOBAL_PER_HOUR", "2")
     assert global_chat_limit() == 2
 
