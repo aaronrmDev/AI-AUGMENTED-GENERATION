@@ -7,7 +7,9 @@ from src.orchestration.domain.entities import (
     BudgetAllocation,
     CacheHit,
     DataSource,
+    DataSourceProfile,
     IngestionRoute,
+    JobStatus,
     Paradigm,
     SourceVersion,
     TierRequest,
@@ -274,3 +276,28 @@ class SessionFactWriter(ABC):
     async def record(
         self, tenant_id: uuid.UUID, user_id: uuid.UUID, fact_key: str, fact_value: str
     ) -> None: ...
+
+
+class IngestionJobDispatcher(ABC):
+    """Runs an ingestion asynchronously and reports on it. IngestDataSource never
+    depends on this -- it has no idea whether it's being run synchronously in a
+    test, from the evaluation harness, or inside a Celery task, and this port is
+    what keeps it that way."""
+
+    @abstractmethod
+    async def dispatch(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        profile: DataSourceProfile,
+        content: str,
+        user_id: uuid.UUID | None,
+    ) -> str:
+        """Enqueues the ingestion and returns a task id the caller can poll."""
+
+    @abstractmethod
+    async def status(
+        self, task_id: str, *, tenant_id: uuid.UUID, user_id: uuid.UUID
+    ) -> JobStatus | None:
+        """None means the task id doesn't exist or doesn't belong to this caller --
+        the router maps that to the same 404 shape used everywhere else in this API."""

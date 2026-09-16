@@ -5,6 +5,14 @@ from typing import Any
 from src.identity.domain.entities import AccessToken, PasswordHash, RefreshToken, TokenPair, User
 from src.identity.domain.errors import EmailAlreadyRegistered
 from src.identity.domain.ports import PasswordHasher, RefreshTokenStore, TokenIssuer, UserRepository
+from src.orchestration.domain.entities import (
+    DataSourceProfile,
+    IngestionResult,
+    IngestionRoute,
+    JobState,
+    JobStatus,
+)
+from src.orchestration.domain.ports import IngestionJobDispatcher
 
 
 class FakeUserRepository(UserRepository):
@@ -79,3 +87,44 @@ class FakeRefreshTokenStore(RefreshTokenStore):
 
     async def delete(self, token_id: uuid.UUID) -> None:
         self._store.pop(token_id, None)
+
+
+class FakeIngestionJobDispatcher(IngestionJobDispatcher):
+    """Runs the 'ingestion' synchronously and in-memory -- no Celery, no Redis.
+    Stores just enough to answer status() and to enforce the same ownership rule
+    CeleryIngestionJobDispatcher enforces for real."""
+
+    def __init__(self) -> None:
+        self._jobs: dict[str, tuple[uuid.UUID, uuid.UUID | None, JobStatus]] = {}
+
+    async def dispatch(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        profile: DataSourceProfile,
+        content: str,
+        user_id: uuid.UUID | None,
+    ) -> str:
+        task_id = str(uuid.uuid4())
+        # A real ingestion isn't run here -- this fake exists to exercise the
+        # port's contract (dispatch/status/ownership), not IngestDataSource's own
+        # behavior, which already has its own tests. changed=True is a fixed,
+        # arbitrary stand-in result.
+        result = IngestionResult(
+            source_id=uuid.uuid4(), route=IngestionRoute.RAG_ONLY, changed=True
+        )
+        self._jobs[task_id] = (tenant_id, user_id, JobStatus(JobState.SUCCESS, result, None))
+        return task_id
+
+    async def status(
+        self, task_id: str, *, tenant_id: uuid.UUID, user_id: uuid.UUID
+    ) -> JobStatus | None:
+        entry = self._jobs.get(task_id)
+        if entry is None:
+            return None
+        owner_tenant, owner_user, status = entry
+        if owner_tenant != tenant_id:
+            return None
+        if owner_user is not None and owner_user != user_id:
+            return None
+        return status
