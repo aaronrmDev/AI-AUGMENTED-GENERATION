@@ -8,7 +8,13 @@ from src.api.dependencies import (
     get_rate_limiter,
     get_vector_store,
 )
-from src.api.rate_limit import chat_rate_limit, enforce_rate_limit
+from src.api.rate_limit import (
+    GLOBAL_CHAT_KEY,
+    GLOBAL_CHAT_WINDOW_SECONDS,
+    chat_rate_limit,
+    enforce_rate_limit,
+    global_chat_limit,
+)
 from src.api.schemas.chat import ChatRequest, ChatResponse, ChatSourceSchema
 from src.rag.application.answer_question import AnswerQuestion
 from src.rag.application.search_documents import SearchDocuments
@@ -25,13 +31,25 @@ async def chat(
     response: Response,
     caller: Caller = Depends(get_caller),
 ) -> ChatResponse:
-    # The same per-user budget answering in a session draws from, under the same key.
+    # Per-user budget checked first, global quota second: a single account
+    # already over its own limit is rejected here, before it can ever touch
+    # (and burn down) the shared global counter -- checking the other order
+    # would let one abusive account exhaust everyone else's global budget via
+    # requests that were always going to be rejected anyway.
     await enforce_rate_limit(
         request,
         response,
         limiter=get_rate_limiter(),
         key=f"chat:{caller.user_id}",
         limit=chat_rate_limit(),
+    )
+    await enforce_rate_limit(
+        request,
+        response,
+        limiter=get_rate_limiter(),
+        key=GLOBAL_CHAT_KEY,
+        limit=global_chat_limit(),
+        window_seconds=GLOBAL_CHAT_WINDOW_SECONDS,
     )
     search = SearchDocuments(embedding_model=get_embedding_model(), vector_store=get_vector_store())
     use_case = AnswerQuestion(search_documents=search, chat_model=get_chat_model(), top_k=_TOP_K)

@@ -4,9 +4,11 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+import redis.asyncio as redis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
+from src.api.rate_limit import GLOBAL_CHAT_KEY
 from src.identity.infrastructure.db import set_tenant_context
 from src.identity.infrastructure.jwt_token_issuer import JWTTokenIssuer
 from src.mag.domain.entities import SemanticMemory
@@ -23,6 +25,10 @@ pytestmark = pytest.mark.asyncio(loop_scope="module")
 _SECRET = "test-secret-key"
 _POLICY = "Our return policy allows returns of unopened items within forty-five days."
 _NOT_FOUND = {"detail": "Session not found"}
+# Mirrors RedisRateLimiter's own private _KEY_PREFIX -- there's no public
+# constant for it, and reading the counter directly is the only way to prove
+# a rejected request never incremented it.
+_GLOBAL_CHAT_REDIS_KEY = f"identity:ratelimit:{GLOBAL_CHAT_KEY}"
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +38,15 @@ def _default_chat_rate_limit():
     os.environ.pop("CHAT_RATE_LIMIT_PER_MINUTE", None)
     if previous is not None:
         os.environ["CHAT_RATE_LIMIT_PER_MINUTE"] = previous
+
+
+@pytest.fixture(autouse=True)
+def _default_global_chat_rate_limit():
+    previous = os.environ.pop("CHAT_RATE_LIMIT_GLOBAL_PER_HOUR", None)
+    yield
+    os.environ.pop("CHAT_RATE_LIMIT_GLOBAL_PER_HOUR", None)
+    if previous is not None:
+        os.environ["CHAT_RATE_LIMIT_GLOBAL_PER_HOUR"] = previous
 
 
 @pytest.fixture(autouse=True)
@@ -266,6 +281,74 @@ async def test_the_chat_limit_is_shared_between_answering_and_post_chat(
     assert chat.status_code == 429
 
 
+async def test_the_global_chat_quota_is_shared_across_every_account(
+    db_session, app_database_url, redis_url, qdrant_url, embedding_model
+):
+    os.environ["CHAT_RATE_LIMIT_GLOBAL_PER_HOUR"] = "2"
+    tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+    headers_a = _auth(await _user(db_session, tenant_a), tenant_a)
+    headers_b = _auth(await _user(db_session, tenant_b), tenant_b)
+    await _seed_policy(tenant_a, embedding_model)
+    await _seed_policy(tenant_b, embedding_model)
+    question = {"question": "What is the return policy?"}
+    async with await _client(app_database_url, redis_url, qdrant_url, embedding_model) as client:
+        session_a = (await client.post("/sessions", json={}, headers=headers_a)).json()["id"]
+        session_b = (await client.post("/sessions", json={}, headers=headers_b)).json()["id"]
+        # Two different accounts, well under either one's own 100/minute limit,
+        # exhaust the shared global quota of 2 between them.
+        first = await client.post(
+            f"/sessions/{session_a}/answers", json=question, headers=headers_a
+        )
+        second = await client.post(
+            f"/sessions/{session_b}/answers", json=question, headers=headers_b
+        )
+        # Account B again, not a third account: its own per-user limit is
+        # nowhere close to tripped, yet this request is still refused because
+        # the two prior requests (one from each account) already exhausted
+        # the quota of 2 that's shared across every account.
+        third = await client.post(
+            f"/sessions/{session_b}/answers", json=question, headers=headers_b
+        )
+
+    assert [first.status_code, second.status_code, third.status_code] == [200, 200, 429]
+
+
+async def test_an_account_already_over_its_own_limit_never_touches_the_global_counter(
+    db_session, app_database_url, redis_url, qdrant_url, embedding_model
+):
+    # The per-user check must run -- and reject -- before the global one ever
+    # executes. Checked the other way around, every request from an account
+    # already over its own limit would still increment the shared global
+    # counter on its way to being rejected, letting one abusive account burn
+    # down the global quota and deny service to every other tenant.
+    os.environ["CHAT_RATE_LIMIT_PER_MINUTE"] = "1"
+    tenant_id = uuid.uuid4()
+    headers = _auth(await _user(db_session, tenant_id), tenant_id)
+    await _seed_policy(tenant_id, embedding_model)
+    question = {"question": "What is the return policy?"}
+    async with await _client(app_database_url, redis_url, qdrant_url, embedding_model) as client:
+        session_id = (await client.post("/sessions", json={}, headers=headers)).json()["id"]
+        first = await client.post(
+            f"/sessions/{session_id}/answers", json=question, headers=headers
+        )
+        # Both refused by the per-user check alone (already at its limit of
+        # 1) -- neither should ever reach the global check.
+        second = await client.post(
+            f"/sessions/{session_id}/answers", json=question, headers=headers
+        )
+        third = await client.post(
+            f"/sessions/{session_id}/answers", json=question, headers=headers
+        )
+
+    assert [first.status_code, second.status_code, third.status_code] == [200, 429, 429]
+    redis_client = redis.from_url(redis_url, decode_responses=True)
+    global_count = await redis_client.get(_GLOBAL_CHAT_REDIS_KEY)
+    await redis_client.aclose()
+    # Only the one request that passed its own per-user check incremented
+    # the shared global counter; the two the per-user limit rejected did not.
+    assert global_count == "1"
+
+
 async def test_creating_sessions_is_limited_to_20_a_minute_per_user(
     db_session, app_database_url, redis_url, qdrant_url, embedding_model
 ):
@@ -302,3 +385,15 @@ async def test_invalid_requests_are_refused_with_422(
             ),
         ]
     assert [r.status_code for r in responses] == [422] * 6
+
+
+async def test_an_oversized_request_body_is_rejected_before_validation_runs(
+    app_database_url, redis_url, qdrant_url, embedding_model
+):
+    async with await _client(app_database_url, redis_url, qdrant_url, embedding_model) as client:
+        response = await client.post(
+            "/sessions", content=json.dumps({"title": "x" * 20_000}).encode(), headers={
+                "Content-Type": "application/json", "Authorization": "Bearer not-even-checked",
+            }
+        )
+    assert response.status_code == 413

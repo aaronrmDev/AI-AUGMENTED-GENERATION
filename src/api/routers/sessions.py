@@ -9,7 +9,14 @@ from src.api.dependencies import (
     get_chat_session_repository,
     get_rate_limiter,
 )
-from src.api.rate_limit import SESSION_CREATE_LIMIT, chat_rate_limit, enforce_rate_limit
+from src.api.rate_limit import (
+    GLOBAL_CHAT_KEY,
+    GLOBAL_CHAT_WINDOW_SECONDS,
+    SESSION_CREATE_LIMIT,
+    chat_rate_limit,
+    enforce_rate_limit,
+    global_chat_limit,
+)
 from src.api.schemas.sessions import (
     AnswerRequest,
     AnswerResponse,
@@ -68,12 +75,25 @@ async def answer(
     caller: Caller = Depends(get_caller),
     answer_in_session: AnswerInSession = Depends(get_answer_in_session),
 ) -> AnswerResponse:
+    # Per-user budget checked first, global quota second: a single account
+    # already over its own limit is rejected here, before it can ever touch
+    # (and burn down) the shared global counter -- checking the other order
+    # would let one abusive account exhaust everyone else's global budget via
+    # requests that were always going to be rejected anyway.
     await enforce_rate_limit(
         request,
         response,
         limiter=get_rate_limiter(),
         key=f"chat:{caller.user_id}",
         limit=chat_rate_limit(),
+    )
+    await enforce_rate_limit(
+        request,
+        response,
+        limiter=get_rate_limiter(),
+        key=GLOBAL_CHAT_KEY,
+        limit=global_chat_limit(),
+        window_seconds=GLOBAL_CHAT_WINDOW_SECONDS,
     )
     result = await answer_in_session.execute(
         caller.tenant_id, caller.user_id, session_id, payload.question

@@ -4,6 +4,7 @@ import uuid
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.client_address import real_client_ip
 from src.api.dependencies import (
     get_rate_limiter,
     get_raw_db_session,
@@ -77,12 +78,11 @@ def _parse_refresh_cookie(token_id_str: str) -> uuid.UUID:
 
 
 async def _enforce_rate_limit(request: Request, response: Response, route_name: str) -> None:
-    client_ip = request.client.host if request.client else "unknown"
     await enforce_rate_limit(
         request,
         response,
         limiter=get_rate_limiter(),
-        key=f"{route_name}:{client_ip}",
+        key=f"{route_name}:{real_client_ip(request)}",
         limit=AUTH_LIMIT,
     )
 

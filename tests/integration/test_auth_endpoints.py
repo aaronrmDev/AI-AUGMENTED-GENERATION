@@ -266,3 +266,34 @@ async def test_sixth_request_in_a_window_is_rate_limited(app_database_url, redis
         )
         assert sixth.status_code == 429
         assert sixth.headers["X-RateLimit-Remaining"] == "0"
+
+
+async def test_auth_rate_limit_keys_the_trusted_forwarded_address_not_the_proxy(
+    app_database_url, redis_url
+):
+    os.environ["TRUSTED_PROXY_COUNT"] = "1"
+    try:
+        async with await _client(app_database_url, redis_url) as client:
+            # Six requests from one forwarded address exhaust its 5/minute limit --
+            # the sixth is refused even though every request arrived from the same
+            # httpx test-client "proxy" address, because the trusted header is
+            # what keys the limit now, not request.client.host.
+            first_address = [
+                await client.post(
+                    "/auth/login",
+                    json={"email": "nobody@example.com", "password": "wrong-password"},
+                    headers={"X-Forwarded-For": "203.0.113.7"},
+                )
+                for _ in range(6)
+            ]
+            # A different forwarded address gets its own, fresh bucket.
+            second_address = await client.post(
+                "/auth/login",
+                json={"email": "nobody@example.com", "password": "wrong-password"},
+                headers={"X-Forwarded-For": "203.0.113.8"},
+            )
+    finally:
+        del os.environ["TRUSTED_PROXY_COUNT"]
+
+    assert [r.status_code for r in first_address] == [401] * 5 + [429]
+    assert second_address.status_code == 401
