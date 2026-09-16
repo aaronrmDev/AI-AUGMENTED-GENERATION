@@ -9,7 +9,11 @@ from src.identity.domain.errors import (
     TokenAlreadyUsed,
     TokenExpired,
 )
-from src.orchestration.domain.errors import QueryExceedsBudget, SessionNotFound
+from src.orchestration.domain.errors import (
+    IngestionJobNotFound,
+    QueryExceedsBudget,
+    SessionNotFound,
+)
 from src.rag.domain.errors import UnsupportedFileType
 
 
@@ -74,6 +78,21 @@ async def query_exceeds_budget_handler(request: Request, exc: QueryExceedsBudget
     return JSONResponse(status_code=422, content={"detail": str(exc)})
 
 
+async def ingestion_job_not_found_handler(
+    request: Request, exc: IngestionJobNotFound
+) -> JSONResponse:
+    caller = getattr(request.state, "caller", None)
+    security_logger.info(
+        "authz_denied",
+        tenant_id=str(caller.tenant_id) if caller else None,
+        user_id=str(caller.user_id) if caller else None,
+        task_id=exc.task_id,
+        path=request.url.path,
+        method=request.method,
+    )
+    return JSONResponse(status_code=404, content={"detail": "Ingestion job not found"})
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(InvalidCredentials, invalid_credentials_handler)  # type: ignore[arg-type]
     app.add_exception_handler(EmailAlreadyRegistered, email_already_registered_handler)  # type: ignore[arg-type]
@@ -83,3 +102,4 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)  # type: ignore[arg-type]
     app.add_exception_handler(SessionNotFound, session_not_found_handler)  # type: ignore[arg-type]
     app.add_exception_handler(QueryExceedsBudget, query_exceeds_budget_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(IngestionJobNotFound, ingestion_job_not_found_handler)  # type: ignore[arg-type]

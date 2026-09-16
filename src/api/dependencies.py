@@ -4,6 +4,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
+import redis.asyncio as redis
 from fastapi import Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +20,7 @@ from src.identity.infrastructure.postgres_user_repository import PostgresUserRep
 from src.identity.infrastructure.redis_rate_limiter import RedisRateLimiter
 from src.identity.infrastructure.redis_refresh_token_store import RedisRefreshTokenStore
 from src.orchestration.application.answer_in_session import AnswerInSession
+from src.orchestration.domain.ports import IngestionJobDispatcher
 from src.rag.domain.ports import ChatModel
 from src.rag.infrastructure.claude_chat_model import ClaudeChatModel
 from src.rag.infrastructure.fixed_size_chunker import FixedSizeChunker
@@ -49,6 +51,34 @@ def get_rate_limiter() -> RedisRateLimiter:
     return RedisRateLimiter(os.environ["REDIS_URL"])
 
 
+@functools.cache
+def get_ingestion_redis_client() -> redis.Redis:
+    # redis.asyncio.utils.from_url ships with zero annotations in the redis 6.x
+    # line this project runs on (see RedisRateLimiter's identical note) -- a
+    # narrowly-scoped ignore at this call site, matching that established
+    # convention, rather than a blanket per-module ignore.
+    return redis.from_url(os.environ["REDIS_URL"])  # type: ignore[no-untyped-call, no-any-return]
+
+
+@functools.cache
+def get_ingestion_job_dispatcher() -> IngestionJobDispatcher:
+    # Deferred, not a top-level import: src.workers.celery_app reads REDIS_URL
+    # at *import* time (the same module-level-singleton pattern this file's
+    # own _engine/_sessionmaker already uses for APP_DATABASE_URL). This
+    # module is imported by every test that imports src.api.main -- including
+    # ones that never touch ingestion and never set REDIS_URL before doing so
+    # -- so making this a top-level import here would turn REDIS_URL into a
+    # hard import-time requirement for the whole file, breaking any such test
+    # at collection time. get_rate_limiter/get_refresh_token_store above
+    # already avoid exactly this by reading os.environ["REDIS_URL"] lazily,
+    # inside their own function bodies, not at module import time; this
+    # follows the same discipline for the two new classes it needs.
+    from src.workers.celery_app import celery_app
+    from src.workers.celery_ingestion_dispatcher import CeleryIngestionJobDispatcher
+
+    return CeleryIngestionJobDispatcher(celery_app, get_ingestion_redis_client())
+
+
 async def close_redis_clients() -> None:
     """Close the process's shared Redis clients, so the next call builds fresh ones.
 
@@ -57,13 +87,16 @@ async def close_redis_clients() -> None:
     before either is closed, so a close that fails can't leave a dead client cached for
     the next call. Both are attempted, and the first failure is raised afterwards.
     """
-    clients: list[RedisRateLimiter | RedisRefreshTokenStore] = []
+    clients: list[RedisRateLimiter | RedisRefreshTokenStore | redis.Redis] = []
     if get_rate_limiter.cache_info().currsize:
         clients.append(get_rate_limiter())
     if get_refresh_token_store.cache_info().currsize:
         clients.append(get_refresh_token_store())
+    if get_ingestion_redis_client.cache_info().currsize:
+        clients.append(get_ingestion_redis_client())
     get_rate_limiter.cache_clear()
     get_refresh_token_store.cache_clear()
+    get_ingestion_redis_client.cache_clear()
 
     failures: list[Exception] = []
     for client in clients:
