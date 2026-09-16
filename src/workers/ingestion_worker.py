@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,7 @@ from src.mag.infrastructure.qdrant_semantic_memory_index import QdrantSemanticMe
 from src.orchestration.application.cache_warmed_retrieve import CacheWarmedRetrieve
 from src.orchestration.application.ingest_data_source import IngestDataSource
 from src.orchestration.domain.entities import DataSourceProfile, SourceScope
+from src.orchestration.domain.errors import ScopeMismatch
 from src.orchestration.infrastructure.chunked_rag_index import ChunkedRagIndex
 from src.orchestration.infrastructure.null_frozen_cache import NullFrozenCache
 from src.orchestration.infrastructure.postgres_data_source_repository import (
@@ -24,10 +26,22 @@ from src.rag.infrastructure.qdrant_vector_store import QdrantVectorStore
 from src.rag.infrastructure.sentence_transformers_embedder import SentenceTransformersEmbedder
 from src.workers.celery_app import celery_app
 
+logger = logging.getLogger(__name__)
+
 # CAG's own similarity threshold for a warmed-cache hit -- CacheWarmedRetrieve's
 # constructor requires one, but with NullFrozenCache backing it, nothing this
 # task does ever produces a hit for the threshold to apply to.
 _UNUSED_CAG_THRESHOLD = 0.9
+
+# Built once, at import time, the same singleton-service pattern
+# src/api/dependencies.py already uses for this exact class ("safe because,
+# unlike the asyncpg engine and the async Qdrant/Neo4j clients, it holds no
+# event-loop-bound connection"). Rebuilding SentenceTransformersEmbedder() on
+# every task invocation reloads the MiniLM model from disk each time *and*
+# throws away CachingEmbeddingModel's LRU cache with it, defeating the point
+# of caching across jobs -- a Celery worker process lives far longer than one
+# task, so both belong at module scope, not inside _build_ingest_data_source().
+_embedding_model = CachingEmbeddingModel(SentenceTransformersEmbedder())
 
 
 async def _build_ingest_data_source() -> (
@@ -35,7 +49,7 @@ async def _build_ingest_data_source() -> (
 ):
     engine = get_engine(os.environ["APP_DATABASE_URL"])
     sessionmaker = get_sessionmaker(engine)
-    embedder = CachingEmbeddingModel(SentenceTransformersEmbedder())
+    embedder = _embedding_model
     vector_store = QdrantVectorStore(os.environ["QDRANT_URL"])
     semantic_index = QdrantSemanticMemoryIndex(os.environ["QDRANT_URL"])
     graph = Neo4jMemoryGraphRepository(
@@ -127,13 +141,39 @@ def ingest_data_source_task(
                 SourceScope(scope),
                 timedelta(seconds=expected_change_interval_seconds),
             )
-            result = await ingest.execute(
-                uuid.UUID(tenant_id),
-                profile,
-                content,
-                datetime.now(UTC),
-                user_id=uuid.UUID(user_id) if user_id is not None else None,
-            )
+            try:
+                result = await ingest.execute(
+                    uuid.UUID(tenant_id),
+                    profile,
+                    content,
+                    datetime.now(UTC),
+                    user_id=uuid.UUID(user_id) if user_id is not None else None,
+                )
+            except (ScopeMismatch, ValueError):
+                # A domain rule IngestDataSource itself raises -- ScopeMismatch for a
+                # user_id/scope mismatch, ValueError for _new_source's two route/scope
+                # conflicts. Both messages are safe to hand back to an authenticated
+                # caller verbatim: CeleryIngestionJobDispatcher.status() surfaces
+                # str(async_result.result) as the `error` field GET /data-sources/
+                # jobs/{task_id} returns, and a domain rule explaining itself is
+                # exactly what that field is for.
+                raise
+            except Exception:
+                # Anything else -- an asyncpg/SQLAlchemy exception, a Qdrant or Neo4j
+                # client error, ... -- could carry a SQL statement, a connection
+                # string, or other internals that must never reach an HTTP caller
+                # through that same `error` field. Logged here so the real failure
+                # isn't lost, then replaced with a message that says only that
+                # ingestion failed; `from None` keeps the original exception out of
+                # the re-raised one's own chain, so nothing about it survives into
+                # whatever Celery's result backend ends up storing.
+                logger.warning(
+                    "ingestion task failed for tenant=%s source_key=%s",
+                    tenant_id,
+                    source_key,
+                    exc_info=True,
+                )
+                raise RuntimeError("ingestion failed") from None
             return {
                 "source_id": str(result.source_id),
                 "route": result.route.value,
