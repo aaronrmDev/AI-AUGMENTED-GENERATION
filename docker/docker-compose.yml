@@ -128,6 +128,39 @@ services:
     command: >
       sh -c "uv run alembic upgrade head && uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000"
 
+  worker:
+    # Reuses Dockerfile.api's image rather than a dedicated Dockerfile.worker --
+    # the worker's dependencies are identical to the API's today (both import
+    # from the same src/ tree via `uv run`). A dedicated Dockerfile stays
+    # named-but-deferred in the Phase 1 blueprint until the two processes'
+    # dependencies actually diverge.
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    environment:
+      # src/workers/ingestion_worker.py's own composition root reads these
+      # directly via os.environ -- APP_DATABASE_URL (not the bootstrap
+      # DATABASE_URL above) for the same RLS-safe app_user reason the api
+      # service already documents, plus Qdrant and Neo4j since the worker's
+      # IngestDataSource builds its own RAG index and memory-graph writer.
+      APP_DATABASE_URL: postgresql+asyncpg://app_user:${APP_DB_PASSWORD}@postgres:5432/unified_ai
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      NEO4J_URL: bolt://neo4j:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-unified_ai_neo4j}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    command: uv run celery -A src.workers.celery_app:celery_app worker --loglevel=info
+
 volumes:
   api_storage:
   neo4j_data:
