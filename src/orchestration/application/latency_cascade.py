@@ -109,8 +109,9 @@ class LatencyCascade:
     the background when on_rag_findings is set ("if RAG is slow -> return
     best-effort + async update"), bounded by background_timeout and
     max_background so a hung RAG backend cannot accumulate tasks. That work
-    lives in this process only -- src/workers/ doesn't exist yet -- so drain()
-    before shutdown.
+    lives in this process only -- src/workers/ now exists, but only for Celery-
+    dispatched ingestion jobs, which have no notion of this cascade's own best-effort
+    background RAG follow-ups -- so drain() before shutdown.
     """
 
     def __init__(

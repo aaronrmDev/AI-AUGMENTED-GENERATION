@@ -10,6 +10,7 @@ from src.identity.domain.ports import RateLimiter
 WINDOW_SECONDS = 60
 AUTH_LIMIT = 5  # per client IP per window, on /auth/register and /auth/login
 SESSION_CREATE_LIMIT = 20  # per user per window, on POST /sessions
+INGESTION_RATE_LIMIT = 10  # per user per window, on POST /data-sources
 _DEFAULT_CHAT_LIMIT = 100
 
 

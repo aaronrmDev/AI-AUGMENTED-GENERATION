@@ -11,7 +11,9 @@ _KEY_PREFIX = "identity:refresh:"
 
 class RedisRefreshTokenStore(RefreshTokenStore):
     def __init__(self, redis_url: str) -> None:
-        self._client = redis.from_url(redis_url, decode_responses=True)
+        # See the same ignore on RedisRateLimiter.__init__ for why: redis 6.x's
+        # asyncio.utils.from_url wrapper carries no annotations at all.
+        self._client = redis.from_url(redis_url, decode_responses=True)  # type: ignore[no-untyped-call]
 
     async def save(self, refresh_token: RefreshToken, user_id: uuid.UUID) -> None:
         ttl_seconds = int((refresh_token.expires_at - datetime.now(UTC)).total_seconds())
