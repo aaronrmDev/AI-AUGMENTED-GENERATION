@@ -15,7 +15,9 @@ _TTL_SECONDS = 86400
 
 class RedisWorkingMemoryStore(WorkingMemoryStore):
     def __init__(self, redis_url: str) -> None:
-        self._client = redis.from_url(redis_url, decode_responses=True)
+        # See the same ignore on RedisRateLimiter.__init__ for why: redis 6.x's
+        # asyncio.utils.from_url wrapper carries no annotations at all.
+        self._client = redis.from_url(redis_url, decode_responses=True)  # type: ignore[no-untyped-call]
 
     async def push_turn(self, session_id: uuid.UUID, turn: WorkingMemoryTurn) -> None:
         key = self._key(session_id)

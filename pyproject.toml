@@ -14,6 +14,7 @@ dependencies = [
     "argon2-cffi>=23.1",
     "pyjwt>=2.8",
     "redis>=5.0",
+    "celery[redis]>=5.4",
     "email-validator>=2.1",
     "sentence-transformers>=3.0",
     "qdrant-client>=1.9",
@@ -111,6 +112,14 @@ exclude = ["tests/"]
 # rather than a blanket ignore_missing_imports, so a real missing-stub problem
 # introduced by some other dependency still fails the check as intended.
 module = "rank_bm25"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# celery (and celery.result, imported separately by CeleryIngestionJobDispatcher)
+# ships no py.typed marker and no `types-celery` stub package exists on PyPI
+# (checked at the time this was added) -- the same "no inline types, no stub
+# package" situation as rank_bm25 above, scoped the same way.
+module = ["celery", "celery.result"]
 ignore_missing_imports = true
 
 [build-system]
