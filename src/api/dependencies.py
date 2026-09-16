@@ -4,7 +4,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.caller import Caller, caller_from_claims
@@ -177,8 +177,17 @@ def get_chat_model() -> ChatModel:
     )
 
 
-async def get_caller(claims: dict[str, Any] = Depends(get_current_user_claims)) -> Caller:
-    return caller_from_claims(claims)
+async def get_caller(
+    request: Request, claims: dict[str, Any] = Depends(get_current_user_claims)
+) -> Caller:
+    caller = caller_from_claims(claims)
+    # Lets an exception handler running later in the same request (which only
+    # ever receives `request` and the raised exception, never a route's own
+    # resolved dependencies) recover the authenticated caller's identity for a
+    # security-event log -- the same request.state handoff enforce_rate_limit
+    # already uses for its own headers.
+    request.state.caller = caller
+    return caller
 
 
 def get_chat_session_repository() -> PostgresChatSessionRepository:

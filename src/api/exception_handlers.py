@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from src.api.rate_limit import RateLimitExceeded
+from src.api.security_logging import security_logger
 from src.identity.domain.errors import (
     EmailAlreadyRegistered,
     InvalidCredentials,
@@ -35,6 +36,13 @@ async def unsupported_file_type_handler(request: Request, exc: UnsupportedFileTy
 
 
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    security_logger.info(
+        "rate_limit_exceeded",
+        key=exc.key,
+        limit=exc.limit,
+        path=request.url.path,
+        method=request.method,
+    )
     # Reads limit/remaining/reset_at off the exception rather than the response:
     # the raise in enforce_rate_limit happens before any headers are written to
     # the route's injected Response, and FastAPI's exception-handling path builds
@@ -48,6 +56,15 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
 
 
 async def session_not_found_handler(request: Request, exc: SessionNotFound) -> JSONResponse:
+    caller = getattr(request.state, "caller", None)
+    security_logger.info(
+        "authz_denied",
+        tenant_id=str(caller.tenant_id) if caller else None,
+        user_id=str(caller.user_id) if caller else None,
+        session_id=str(exc.session_id),
+        path=request.url.path,
+        method=request.method,
+    )
     # One status and body whether the session is missing, another user's, or another
     # tenant's, so a caller can't learn which session ids exist.
     return JSONResponse(status_code=404, content={"detail": "Session not found"})
