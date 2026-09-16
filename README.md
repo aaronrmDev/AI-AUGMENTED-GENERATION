@@ -50,7 +50,7 @@ Every batch of work below shipped through the same discipline: a design spec, an
 | Orchestration: Meta-Layer | All five meta-layer components above, built and live-measured | 31 |
 | Unified API | HTTP access to the meta-layer: session-scoped answers (shipped), hardening against abuse (shipped), freshness-routed ingestion (shipped) | 12 closed, 0 open |
 
-That's 178 closed issues across eleven milestones, tracked the same way from the first line of code to the latest release.
+That's 186 closed issues across eleven milestones, tracked the same way from the first line of code to the latest release.
 
 ### The proof, in numbers
 
