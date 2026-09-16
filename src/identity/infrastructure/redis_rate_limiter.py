@@ -9,7 +9,11 @@ _KEY_PREFIX = "identity:ratelimit:"
 
 class RedisRateLimiter(RateLimiter):
     def __init__(self, redis_url: str) -> None:
-        self._client = redis.from_url(redis_url, decode_responses=True)
+        # redis.asyncio.utils.from_url ships with zero annotations in the redis 6.x
+        # line (verified against the installed 6.4.0 wheel), unlike the 8.1.0 this
+        # project ran on before celery[redis]>=5.4 (added for the ingestion job
+        # dispatcher) pulled in kombu[redis], which caps redis at <6.5.
+        self._client = redis.from_url(redis_url, decode_responses=True)  # type: ignore[no-untyped-call]
 
     async def check(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int, datetime]:
         redis_key = f"{_KEY_PREFIX}{key}"

@@ -48,9 +48,9 @@ Every batch of work below shipped through the same discipline: a design spec, an
 | RAG+MAG: Cross-Paradigm Synergy | State-Aware RAG and the RAG↔MAG warm/cold tiering boundary | 8 |
 | CAG+MAG: Cross-Paradigm Synergy | The CAG↔MAG hot/warm tiering boundary and its own sync tiebreak | 6 |
 | Orchestration: Meta-Layer | All five meta-layer components above, built and live-measured | 31 |
-| Unified API | HTTP access to the meta-layer: session-scoped answers (shipped), hardening against abuse (shipped), freshness-routed ingestion (still ahead) | 11 closed, 1 open |
+| Unified API | HTTP access to the meta-layer: session-scoped answers (shipped), hardening against abuse (shipped), freshness-routed ingestion (shipped) | 12 closed, 0 open |
 
-That's 177 closed issues across eleven milestones, tracked the same way from the first line of code to the latest release.
+That's 186 closed issues across eleven milestones, tracked the same way from the first line of code to the latest release.
 
 ### The proof, in numbers
 
@@ -58,6 +58,7 @@ That's 177 closed issues across eleven milestones, tracked the same way from the
 - **52 narrative evaluation reports** under [evaluation/reports/](evaluation/reports/), each one a real baseline-versus-treatment comparison against a live judge model, not a unit test dressed up as a benchmark.
 - Every cross-paradigm synthesis technique — Cache-Warmed RAG, State-Aware RAG, and the three tiering/sync boundaries between all three paradigms — is measured against real infrastructure, including a genuine GPU-served vLLM instance for the CAG-side measurements.
 - The Unified API's session-scoped endpoint (`POST /sessions`, `GET /sessions`, `POST /sessions/{session_id}/answers`) serves the full per-query orchestration path over HTTP, with object-level authorization enforced on every session lookup.
+- Freshness-routed ingestion is served the same way: `POST /data-sources` hands a tenant- or user-scoped source to this project's first background-worker subsystem, Celery against a Redis broker under `src/workers/`, and `GET /data-sources/jobs/{task_id}` polls the result, denying a caller who isn't the job's own tenant or user the same 404 a missing task id gets.
 
 ### Hardened, not just functional
 
@@ -78,4 +79,4 @@ The most recent batch of work (Task #193) closed five findings a security review
 
 ## What's honestly still ahead
 
-An HTTP endpoint for freshness-routed ingestion is the one piece of the orchestration meta-layer without a client-facing route yet — it accepts client-supplied scope, so it needs a tenant role model and its own authorization review before it ships, not just an endpoint. Past that: a frontend (no framework has been chosen — the technology choice is deliberately deferred until that work actually begins, rather than named in advance for code that doesn't exist), background workers, and the Kubernetes deployment layer. None of that is hidden in the docs that describe it; where the line between built and not-yet-built matters, this project says so plainly rather than letting intent read as fact.
+Streaming is the one piece of the Unified API milestone without a shape yet: delivering an answer incrementally, rather than as the single JSON response `POST /sessions/{session_id}/answers` returns today, needs a frontend or some other real consumer to design its framing against, and none exists yet, so it stays a named gap rather than a half-built one. Past that: a frontend (no framework has been chosen — the technology choice is deliberately deferred until that work actually begins, rather than named in advance for code that doesn't exist), and the Kubernetes and production-deployment layer. None of that is hidden in the docs that describe it; where the line between built and not-yet-built matters, this project says so plainly rather than letting intent read as fact.

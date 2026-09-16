@@ -2,7 +2,7 @@ import math
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 
@@ -260,6 +260,19 @@ class IngestionResult:
     source_id: uuid.UUID
     route: IngestionRoute
     changed: bool
+
+
+class JobState(StrEnum):
+    PENDING = "pending"
+    SUCCESS = "success"
+    FAILURE = "failure"
+
+
+@dataclass(frozen=True)
+class JobStatus:
+    state: JobState
+    result: IngestionResult | None
+    error: str | None
 
 
 @dataclass(frozen=True)

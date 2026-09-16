@@ -111,6 +111,29 @@ async def _dispose_api_engine_after_each_test():
         # runs on one loop and closes them on shutdown.
         deps.get_rate_limiter.cache_clear()
         deps.get_refresh_token_store.cache_clear()
+        # get_ingestion_redis_client (Task 6) is the same kind of process-wide,
+        # functools.cache'd asyncio Redis client as the two above, for the same
+        # reason -- CeleryIngestionJobDispatcher's ownership-record writes and
+        # reads need one shared connection pool rather than one per request.
+        # Left uncleared, a client built while servicing one test's event loop
+        # would still be the cached instance handed to the very next test's
+        # dispatcher, whose own (different, function-scoped-by-default) event
+        # loop cannot use a connection opened on a now-closed loop --
+        # surfacing as "RuntimeError: Event loop is closed" deep inside
+        # redis-py, confirmed empirically once test_data_sources_endpoints.py
+        # exercised a second test against the module-scoped Celery worker.
+        deps.get_ingestion_redis_client.cache_clear()
+        # get_ingestion_job_dispatcher must be cleared too, not just the redis
+        # client it wraps: it is itself functools.cache'd, and the
+        # CeleryIngestionJobDispatcher instance it returns captured that
+        # test's (now stale) redis client by reference in its own __init__.
+        # Clearing only get_ingestion_redis_client's cache above still leaves
+        # the next test's get_ingestion_job_dispatcher() call returning this
+        # same cached instance, wrapping a Redis client bound to a closed
+        # loop -- confirmed empirically as the actual remaining cause of the
+        # "Event loop is closed" failure once clearing the client cache alone
+        # turned out not to be enough.
+        deps.get_ingestion_job_dispatcher.cache_clear()
         await deps._engine.dispose()
 
 

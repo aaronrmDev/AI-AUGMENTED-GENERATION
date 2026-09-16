@@ -31,3 +31,11 @@ class ScopeMismatch(Exception):
             f"{'with' if has_user else 'without'} a user_id"
         )
         self.source_key = source_key
+
+
+class IngestionJobNotFound(Exception):
+    """A task id doesn't exist, or belongs to another tenant or user."""
+
+    def __init__(self, task_id: str) -> None:
+        super().__init__(f"no ingestion job {task_id} is visible under the current tenant")
+        self.task_id = task_id
