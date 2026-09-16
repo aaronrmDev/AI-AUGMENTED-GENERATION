@@ -30,11 +30,18 @@ async def chat(
     response: Response,
     caller: Caller = Depends(get_caller),
 ) -> ChatResponse:
-    # Global quota checked first, per-user budget second: both write their
-    # X-RateLimit-* headers onto the same `response`, and the second call's
-    # values are what the client ends up seeing on a 200. Checking the
-    # per-user limit last keeps those headers the ones callers can act on
-    # (their own remaining budget) rather than the shared global counter's.
+    # Per-user budget checked first, global quota second: a single account
+    # already over its own limit is rejected here, before it can ever touch
+    # (and burn down) the shared global counter -- checking the other order
+    # would let one abusive account exhaust everyone else's global budget via
+    # requests that were always going to be rejected anyway.
+    await enforce_rate_limit(
+        request,
+        response,
+        limiter=get_rate_limiter(),
+        key=f"chat:{caller.user_id}",
+        limit=chat_rate_limit(),
+    )
     await enforce_rate_limit(
         request,
         response,
@@ -42,14 +49,6 @@ async def chat(
         key=GLOBAL_CHAT_KEY,
         limit=global_chat_limit(),
         window_seconds=3600,
-    )
-    # The same per-user budget answering in a session draws from, under the same key.
-    await enforce_rate_limit(
-        request,
-        response,
-        limiter=get_rate_limiter(),
-        key=f"chat:{caller.user_id}",
-        limit=chat_rate_limit(),
     )
     search = SearchDocuments(embedding_model=get_embedding_model(), vector_store=get_vector_store())
     use_case = AnswerQuestion(search_documents=search, chat_model=get_chat_model(), top_k=_TOP_K)

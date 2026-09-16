@@ -113,9 +113,17 @@ async def enforce_rate_limit(
         "X-RateLimit-Remaining": str(remaining),
         "X-RateLimit-Reset": reset_at.isoformat(),
     }
-    # Written to both places: directly on `response` covers the normal
-    # successful-response path with no extra hop through the middleware, and
-    # stashed on `request.state` is what lets RateLimitHeadersMiddleware recover
-    # these same values if the route raises a domain exception afterward.
-    response.headers.update(headers)
-    request.state.rate_limit_headers = headers
+    # A route that checks more than one limit on the same request (a per-user
+    # budget and a global quota, say) calls this twice against the same
+    # `response`/`request`. Only the *first* successful call's headers should
+    # ever reach the client -- those are the ones tied to the limit that was
+    # checked (and so could have failed) first, and the ones a caller can
+    # actually act on -- so skip writing here if an earlier call on this same
+    # request already did. Written to both places: directly on `response`
+    # covers the normal successful-response path with no extra hop through
+    # the middleware, and stashed on `request.state` is what lets
+    # RateLimitHeadersMiddleware recover these same values if the route
+    # raises a domain exception afterward.
+    if "X-RateLimit-Limit" not in response.headers:
+        response.headers.update(headers)
+        request.state.rate_limit_headers = headers
