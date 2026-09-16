@@ -9,7 +9,13 @@ from src.api.dependencies import (
     get_chat_session_repository,
     get_rate_limiter,
 )
-from src.api.rate_limit import SESSION_CREATE_LIMIT, chat_rate_limit, enforce_rate_limit
+from src.api.rate_limit import (
+    GLOBAL_CHAT_KEY,
+    SESSION_CREATE_LIMIT,
+    chat_rate_limit,
+    enforce_rate_limit,
+    global_chat_limit,
+)
 from src.api.schemas.sessions import (
     AnswerRequest,
     AnswerResponse,
@@ -68,6 +74,19 @@ async def answer(
     caller: Caller = Depends(get_caller),
     answer_in_session: AnswerInSession = Depends(get_answer_in_session),
 ) -> AnswerResponse:
+    # Global quota checked first, per-user budget second: both write their
+    # X-RateLimit-* headers onto the same `response`, and the second call's
+    # values are what the client ends up seeing on a 200. Checking the
+    # per-user limit last keeps those headers the ones callers can act on
+    # (their own remaining budget) rather than the shared global counter's.
+    await enforce_rate_limit(
+        request,
+        response,
+        limiter=get_rate_limiter(),
+        key=GLOBAL_CHAT_KEY,
+        limit=global_chat_limit(),
+        window_seconds=3600,
+    )
     await enforce_rate_limit(
         request,
         response,

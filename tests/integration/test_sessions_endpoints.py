@@ -35,6 +35,15 @@ def _default_chat_rate_limit():
 
 
 @pytest.fixture(autouse=True)
+def _default_global_chat_rate_limit():
+    previous = os.environ.pop("CHAT_RATE_LIMIT_GLOBAL_PER_HOUR", None)
+    yield
+    os.environ.pop("CHAT_RATE_LIMIT_GLOBAL_PER_HOUR", None)
+    if previous is not None:
+        os.environ["CHAT_RATE_LIMIT_GLOBAL_PER_HOUR"] = previous
+
+
+@pytest.fixture(autouse=True)
 def _clear_dependency_overrides():
     yield
     import sys
@@ -264,6 +273,36 @@ async def test_the_chat_limit_is_shared_between_answering_and_post_chat(
     assert [a.status_code for a in answers] == [200, 200, 429]
     assert answers[2].headers["X-RateLimit-Remaining"] == "0"
     assert chat.status_code == 429
+
+
+async def test_the_global_chat_quota_is_shared_across_every_account(
+    db_session, app_database_url, redis_url, qdrant_url, embedding_model
+):
+    os.environ["CHAT_RATE_LIMIT_GLOBAL_PER_HOUR"] = "2"
+    tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+    headers_a = _auth(await _user(db_session, tenant_a), tenant_a)
+    headers_b = _auth(await _user(db_session, tenant_b), tenant_b)
+    await _seed_policy(tenant_a, embedding_model)
+    await _seed_policy(tenant_b, embedding_model)
+    question = {"question": "What is the return policy?"}
+    async with await _client(app_database_url, redis_url, qdrant_url, embedding_model) as client:
+        session_a = (await client.post("/sessions", json={}, headers=headers_a)).json()["id"]
+        session_b = (await client.post("/sessions", json={}, headers=headers_b)).json()["id"]
+        # Two different accounts, well under either one's own 100/minute limit,
+        # exhaust the shared global quota of 2 between them.
+        first = await client.post(
+            f"/sessions/{session_a}/answers", json=question, headers=headers_a
+        )
+        second = await client.post(
+            f"/sessions/{session_b}/answers", json=question, headers=headers_b
+        )
+        # A third account's very first request still gets refused: the quota
+        # is global, not tied to either account that already used it.
+        third = await client.post(
+            f"/sessions/{session_b}/answers", json=question, headers=headers_b
+        )
+
+    assert [first.status_code, second.status_code, third.status_code] == [200, 200, 429]
 
 
 async def test_creating_sessions_is_limited_to_20_a_minute_per_user(

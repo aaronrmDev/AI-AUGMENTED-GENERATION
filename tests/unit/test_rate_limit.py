@@ -3,7 +3,12 @@ from datetime import UTC, datetime
 import pytest
 from fastapi import Request, Response
 
-from src.api.rate_limit import RateLimitExceeded, chat_rate_limit, enforce_rate_limit
+from src.api.rate_limit import (
+    RateLimitExceeded,
+    chat_rate_limit,
+    enforce_rate_limit,
+    global_chat_limit,
+)
 from src.identity.domain.ports import RateLimiter
 
 _RESET = datetime(2026, 1, 1, 0, 1, tzinfo=UTC)
@@ -58,3 +63,18 @@ def test_a_chat_limit_below_1_is_refused(monkeypatch):
     monkeypatch.setenv("CHAT_RATE_LIMIT_PER_MINUTE", "0")
     with pytest.raises(ValueError):
         chat_rate_limit()
+
+
+def test_the_global_chat_limit_defaults_to_1000_and_is_read_from_the_environment_per_call(
+    monkeypatch,
+):
+    monkeypatch.delenv("CHAT_RATE_LIMIT_GLOBAL_PER_HOUR", raising=False)
+    assert global_chat_limit() == 1000
+    monkeypatch.setenv("CHAT_RATE_LIMIT_GLOBAL_PER_HOUR", "2")
+    assert global_chat_limit() == 2
+
+
+def test_a_global_chat_limit_below_1_is_refused(monkeypatch):
+    monkeypatch.setenv("CHAT_RATE_LIMIT_GLOBAL_PER_HOUR", "0")
+    with pytest.raises(ValueError):
+        global_chat_limit()

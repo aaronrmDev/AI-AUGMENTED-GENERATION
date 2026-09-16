@@ -25,6 +25,26 @@ def chat_rate_limit() -> int:
     return limit
 
 
+GLOBAL_CHAT_KEY = "global:chat"  # shared by every caller, not per-user or per-tenant
+GLOBAL_CHAT_WINDOW_SECONDS = 3600
+_DEFAULT_GLOBAL_CHAT_LIMIT = 1000
+
+
+def global_chat_limit() -> int:
+    """Total requests per hour across every account, shared by POST /chat and answering
+    in a session -- the budget that actually bounds paid-model spend when an attacker
+    routes around the per-user limit by creating more accounts, since each fresh
+    account otherwise gets its own fresh per-user budget. Read per call, like
+    chat_rate_limit(), for the same reason.
+    """
+    limit = int(
+        os.environ.get("CHAT_RATE_LIMIT_GLOBAL_PER_HOUR", str(_DEFAULT_GLOBAL_CHAT_LIMIT))
+    )
+    if limit < 1:
+        raise ValueError("CHAT_RATE_LIMIT_GLOBAL_PER_HOUR must be at least 1")
+    return limit
+
+
 class RateLimitExceeded(Exception):
     def __init__(self, limit: int, remaining: int, reset_at: datetime) -> None:
         self.limit = limit
@@ -78,6 +98,14 @@ async def enforce_rate_limit(
         # new JSONResponse for the 429 and does not inherit them. Carry the
         # values on the exception itself instead, and let the handler set
         # them on the response it actually returns.
+        #
+        # Also clear any headers an *earlier* enforce_rate_limit call on this
+        # same request already stashed (e.g. a route that checks a global
+        # quota before a per-user one): left in place, RateLimitHeadersMiddleware
+        # would reapply that earlier, unrelated check's still-allowed headers
+        # over this exception handler's correct ones for the check that
+        # actually failed.
+        request.state.rate_limit_headers = None
         raise RateLimitExceeded(limit=limit, remaining=0, reset_at=reset_at)
 
     headers = {
