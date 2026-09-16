@@ -33,7 +33,7 @@ src/api/routers/data_sources.py
   │  - derives tenant_id from Caller; derives user_id from Caller only if scope == "user"
   │  - enforce_rate_limit (10/min per user)
   ▼
-IngestionJobDispatcher.dispatch(...)             <-- port, src/api/ingestion_jobs.py
+IngestionJobDispatcher.dispatch(...)             <-- port, src/orchestration/domain/ports.py
   ▼
 CeleryIngestionJobDispatcher                      <-- adapter, src/workers/celery_ingestion_dispatcher.py
   │  - records ownership: Redis "ingestion_job:{task_id}" -> "{tenant_id}:{user_id or ''}", TTL 24h
@@ -71,17 +71,14 @@ JobStatusResponse { state: "pending" | "success" | "failure", result, error }
 
 ## Components
 
-### `src/api/ingestion_jobs.py` (new)
+### `src/orchestration/domain/ports.py` (extended) and `src/orchestration/domain/entities.py` (extended)
 
-The port this feature is built around. Defines:
+The port this feature is built around, added alongside `IngestDataSource`'s existing ports (`DataSourceRepository`, `RagIndex`, `ExpiringCache`, `SessionFactWriter`) rather than in a new file, matching this codebase's one established convention: a bounded context's ports live in its own `domain/ports.py`, in one place, regardless of which layer ends up consuming any given one. `IngestDataSource` itself never takes an `IngestionJobDispatcher` — it stays exactly as unaware of Celery, HTTP, or synchronous-vs-asynchronous invocation as it is today — only `src/api/routers/data_sources.py` depends on it directly. Defines:
 
-- `class JobState(str, Enum)`: `PENDING`, `SUCCESS`, `FAILURE`.
-- `@dataclass(frozen=True) class JobStatus`: `state: JobState`, `result: IngestionResult | None`, `error: str | None`.
-- `class IngestionJobDispatcher(Protocol)`:
-  - `def dispatch(self, *, tenant_id: uuid.UUID, profile: DataSourceProfile, content: str, user_id: uuid.UUID | None) -> str` — returns a task id.
-  - `def status(self, task_id: str, *, tenant_id: uuid.UUID, user_id: uuid.UUID) -> JobStatus | None` — `None` means "not found or not yours," so the router maps it to the same 404 shape used everywhere else in this API.
-
-This lives in `src/api/`, not in `src/orchestration/domain/ports.py` alongside `IngestDataSource`'s own ports (`DataSourceRepository`, `RagIndex`, `ExpiringCache`, `SessionFactWriter`). Those exist because `IngestDataSource`'s constructor needs them; `IngestionJobDispatcher` is not one of `IngestDataSource`'s dependencies — it's how the HTTP layer chooses to invoke `IngestDataSource` at all. Mixing the two would blur a real distinction: `IngestDataSource` has no idea it's being run synchronously in a test, from the evaluation harness, or inside a Celery task, and this port is what keeps it that way.
+- `entities.py`: `class JobState(str, Enum)`: `PENDING`, `SUCCESS`, `FAILURE`. `@dataclass(frozen=True) class JobStatus`: `state: JobState`, `result: IngestionResult | None`, `error: str | None`.
+- `ports.py`: `class IngestionJobDispatcher(ABC)` (an ABC with `@abstractmethod`, matching every other port in this file — not `typing.Protocol`, which nothing here uses):
+  - `async def dispatch(self, *, tenant_id: uuid.UUID, profile: DataSourceProfile, content: str, user_id: uuid.UUID | None) -> str` — returns a task id.
+  - `async def status(self, task_id: str, *, tenant_id: uuid.UUID, user_id: uuid.UUID) -> JobStatus | None` — `None` means "not found or not yours," so the router maps it to the same 404 shape used everywhere else in this API.
 
 ### `src/api/routers/data_sources.py` (new)
 
@@ -98,6 +95,10 @@ This lives in `src/api/`, not in `src/orchestration/domain/ports.py` alongside `
 - `celery_app.py`: the Celery application instance. `broker` and `backend` both point at `REDIS_URL` (the same environment variable `src/api/dependencies.py` already reads), `task_serializer="json"`, `result_serializer="json"`, `accept_content=["json"]` — explicit rather than Celery's pickle-capable defaults, since this queue only ever needs to carry the plain JSON-shaped ingestion arguments and results.
 - `ingestion_worker.py`: `@celery_app.task(name="ingest_data_source") def ingest_data_source_task(...)`. This is the worker process's composition root — the one place that builds a fully-wired `IngestDataSource` with real `PostgresDataSourceRepository`, `ChunkedRagIndex`, `ExpiringFrozenCache`, `CacheWarmedRetrieve`, and `RecordSemanticFactWriter` adapters, the same infrastructure classes `tests/integration/freshness_env.py` already wires for the same purpose. Celery tasks are synchronous by default; the task body bridges to `IngestDataSource.execute` (an `async def`) with `asyncio.run(...)`, since a Celery worker process has no already-running event loop the way `uvicorn` does — a real, disclosed wrinkle, not an oversight.
 - `celery_ingestion_dispatcher.py`: `CeleryIngestionJobDispatcher`, the only piece of `src/workers/` the API process ever imports. `dispatch()` writes the ownership record to Redis and calls `ingest_data_source_task.delay(...)`; `status()` checks ownership first, then wraps `celery.result.AsyncResult`.
+
+### `src/orchestration/infrastructure/null_frozen_cache.py` (new)
+
+A real gap this spec's own investigation surfaced: `IngestDataSource`'s constructor requires a real `ExpiringCache` and a real `CacheWarmedRetrieve`, and `_apply_route` calls their `evict`/`forget`/`renew` methods for any source routed `CAG_WITH_RAG_BACKUP` — but `docs/architecture/OVERVIEW.md` already discloses that no warmed, GPU-resident frozen cache runs in production yet ("neither exists yet" — the API's own `unified_pipeline.py` composes MAG and RAG tiers only, for exactly this reason). Standing up a real `HFFrozenCache` (a genuine transformer model) inside a background worker, just so its constructor is satisfiable, would be undisclosed scope this milestone never asked for. `NullFrozenCache` implements `ExpiringCache` with every method a safe no-op (`lookup`/`contains` always report absent, `preload`/`preload_until`/`evict` do nothing, `renew` always returns `False`, matching that method's own documented "no live entry to renew" contract) — the worker's composition root uses it in place of a real cache until one is actually stood up, the same disclosed-gap treatment this project already gives CAG serving elsewhere rather than a silent stub pretending to work.
 
 ### `src/api/dependencies.py` (modified)
 
@@ -124,7 +125,7 @@ A new `worker` service, reusing `Dockerfile.api`'s existing image (no new Docker
 
 ## Testing plan
 
-- **Unit** (`tests/unit/`): `IngestDataSourceRequest`/`JobStatusResponse` schema validation; an `InMemoryIngestionJobDispatcher` fake (runs the given task synchronously in-process, no Celery or Redis at all) added to `tests/unit/fakes.py`, used to test the router's request-handling and scope-derivation logic in isolation; `CeleryIngestionJobDispatcher`'s ownership-record encode/decode logic against a fake Redis client.
+- **Unit** (`tests/unit/`): `IngestDataSourceRequest`/`JobStatusResponse` schema validation; a `FakeIngestionJobDispatcher` (runs the given task synchronously in-process, no Celery or Redis at all), matching this file's existing `Fake*` naming (`FakeUserRepository`, `FakeTokenIssuer`), added to `tests/unit/fakes.py`, used to test the router's request-handling and scope-derivation logic in isolation; `CeleryIngestionJobDispatcher`'s ownership-record encode/decode logic against a fake Redis client.
 - **Integration** (`tests/integration/`): a real Celery worker (via Celery's own `celery_worker`/`celery_app` pytest fixtures, consuming from the real TestContainers Redis instance the rest of this project's Redis-backed integration tests already use) running the real task against real Postgres and Qdrant — this proves the actual queue-to-worker-to-persistence path, not just that the classes compile, matching this project's stated reason for testing MAG and CAG against real infrastructure rather than mocks. A cross-tenant and a cross-user status-check denial test, the same shape as `#183`'s and `#193`'s object-level-authorization tests. A body-size-rejection test and a rate-limit test, matching `#193`'s pattern for `/documents` and the session endpoints.
 - `tests/integration/test_docker_compose_smoke.py`, if it drives the full stack today, gets the new `worker` service added to what it expects to come up healthy.
 
