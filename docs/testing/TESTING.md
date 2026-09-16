@@ -64,7 +64,7 @@ These commands run today, against the real suite described above. Where a tier d
 
 | Tier | Command | Notes |
 |---|---|---|
-| Unit | `pytest tests/unit/ --cov=src --cov-report=term-missing` | This project's literal invocation for this tier; runs today (1,171 tests, 156 files) and the coverage flags produce a real per-file report against the ≥80% target |
+| Unit | `pytest tests/unit/ --cov=src --cov-report=term-missing` | This project's literal invocation for this tier; runs today (1,189 tests, 163 files) and the coverage flags produce a real per-file report against the ≥80% target |
 | Unit (day-to-day) | `uv run pytest tests/unit -q` | The quieter form used for a fast, no-infrastructure check; needs nothing but Python, no Docker or GPU |
 | Integration | `uv run pytest tests/integration -q` | Runs today (285 tests, 65 files) against real PostgreSQL, Qdrant, Redis, and Neo4j provisioned through TestContainers — Docker has to be running first |
 | Whole suite | `uv run pytest tests/ --cov=src` | This project's general entry point for the whole suite; runs every tier under `tests/` in one pass |
