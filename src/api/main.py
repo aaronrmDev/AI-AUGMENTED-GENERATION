@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from src.api.exception_handlers import register_exception_handlers
+from src.api.middleware.max_body_size import MaxBodySizeMiddleware
 from src.api.rate_limit import RateLimitHeadersMiddleware
 from src.api.routers.auth import router as auth_router
 from src.api.routers.chat import router as chat_router
@@ -10,6 +11,11 @@ from src.api.routers.sessions import router as sessions_router
 app = FastAPI(title="Unified RAG x CAG x MAG AI System")
 register_exception_handlers(app)
 app.add_middleware(RateLimitHeadersMiddleware)
+app.add_middleware(
+    MaxBodySizeMiddleware,
+    default_max_bytes=16 * 1024,
+    path_overrides={"/documents": 11 * 1024 * 1024},
+)
 app.include_router(auth_router)
 app.include_router(documents_router)
 app.include_router(chat_router)

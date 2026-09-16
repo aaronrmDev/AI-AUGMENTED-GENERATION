@@ -383,3 +383,15 @@ async def test_invalid_requests_are_refused_with_422(
             ),
         ]
     assert [r.status_code for r in responses] == [422] * 6
+
+
+async def test_an_oversized_request_body_is_rejected_before_validation_runs(
+    app_database_url, redis_url, qdrant_url, embedding_model
+):
+    async with await _client(app_database_url, redis_url, qdrant_url, embedding_model) as client:
+        response = await client.post(
+            "/sessions", content=json.dumps({"title": "x" * 20_000}).encode(), headers={
+                "Content-Type": "application/json", "Authorization": "Bearer not-even-checked",
+            }
+        )
+    assert response.status_code == 413
