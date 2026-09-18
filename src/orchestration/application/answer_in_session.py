@@ -1,8 +1,9 @@
 import uuid
+from collections.abc import AsyncIterator
 from typing import Protocol
 
 from src.identity.domain.ports import ChatSessionRepository
-from src.orchestration.application.unified_answer_question import UnifiedAnswer
+from src.orchestration.application.unified_answer_question import UnifiedAnswer, UnifiedAnswerEvent
 from src.orchestration.domain.errors import SessionNotFound
 
 
@@ -11,15 +12,26 @@ class SessionQuestionAnswerer(Protocol):
         self, tenant_id: uuid.UUID, user_id: uuid.UUID, session_id: uuid.UUID, question: str
     ) -> UnifiedAnswer: ...
 
+    async def stream(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID, session_id: uuid.UUID, question: str
+    ) -> AsyncIterator[UnifiedAnswerEvent]: ...
+
 
 class AnswerInSession:
-    """Answers a question in one of the caller's own chat sessions.
+    """Answers a question in one of the caller's own chat sessions, either as one
+    final UnifiedAnswer (execute()) or as a stream of UnifiedAnswerEvents (stream()).
 
-    The session is looked up as the caller's before anything else happens. A session
-    that doesn't exist, belongs to another user, or lives in another tenant raises the
-    same SessionNotFound, so nothing is embedded, retrieved, or recorded for it, and
-    the caller can't tell which of the three it was. PostgresSessionBudgetRecorder's
-    own ownership check stays as a second line.
+    Both methods look the session up as the caller's before anything else happens.
+    A session that doesn't exist, belongs to another user, or lives in another
+    tenant raises the same SessionNotFound, so nothing is embedded, retrieved, or
+    recorded for it, and the caller can't tell which of the three it was.
+    PostgresSessionBudgetRecorder's own ownership check stays as a second line.
+
+    stream() is a plain coroutine (no `yield` in its own body), so this ownership
+    check runs the moment it's awaited -- not on the caller's first iteration of
+    whatever it returns. That is what keeps a cross-tenant or cross-user stream
+    request a plain SessionNotFound (a 404 with zero bytes streamed, at the router)
+    instead of a response that already opened as a stream before being denied.
     """
 
     def __init__(
@@ -34,3 +46,10 @@ class AnswerInSession:
         if await self._sessions.find_owned(tenant_id, user_id, session_id) is None:
             raise SessionNotFound(session_id)
         return await self._answerer.execute(tenant_id, user_id, session_id, question)
+
+    async def stream(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID, session_id: uuid.UUID, question: str
+    ) -> AsyncIterator[UnifiedAnswerEvent]:
+        if await self._sessions.find_owned(tenant_id, user_id, session_id) is None:
+            raise SessionNotFound(session_id)
+        return await self._answerer.stream(tenant_id, user_id, session_id, question)

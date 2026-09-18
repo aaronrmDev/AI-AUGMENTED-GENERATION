@@ -12,11 +12,21 @@ TENANT, OWNER = uuid.uuid4(), uuid.uuid4()
 class _RecordingAnswerer:
     def __init__(self) -> None:
         self.calls: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID, str]] = []
+        self.stream_calls: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID, str]] = []
         self.answer = object()
+        self.events: list[object] = []
 
     async def execute(self, tenant_id, user_id, session_id, question):
         self.calls.append((tenant_id, user_id, session_id, question))
         return self.answer
+
+    async def stream(self, tenant_id, user_id, session_id, question):
+        self.stream_calls.append((tenant_id, user_id, session_id, question))
+        return self._events()
+
+    async def _events(self):
+        for event in self.events:
+            yield event
 
 
 async def _owned_session(repository: FakeChatSessionRepository) -> uuid.UUID:
@@ -49,3 +59,33 @@ async def test_a_session_that_isnt_the_callers_is_refused_before_anything_is_ans
         await AnswerInSession(repository, answerer).execute(tenant_id, user_id, session_id, "q")
 
     assert answerer.calls == []
+
+
+async def test_streaming_a_question_in_the_callers_own_session_delegates_to_the_answerer():
+    repository, answerer = FakeChatSessionRepository(), _RecordingAnswerer()
+    answerer.events = ["event-1", "event-2"]
+    session_id = await _owned_session(repository)
+
+    stream = await AnswerInSession(repository, answerer).stream(TENANT, OWNER, session_id, "q")
+    events = [event async for event in stream]
+
+    assert events == ["event-1", "event-2"]
+    assert answerer.stream_calls == [(TENANT, OWNER, session_id, "q")]
+
+
+@pytest.mark.parametrize("caller", ["another user", "another tenant", "unknown session"])
+async def test_streaming_a_session_that_isnt_the_callers_is_refused_before_any_event(caller):
+    repository, answerer = FakeChatSessionRepository(), _RecordingAnswerer()
+    session_id = await _owned_session(repository)
+    tenant_id, user_id = TENANT, OWNER
+    if caller == "another user":
+        user_id = uuid.uuid4()
+    elif caller == "another tenant":
+        tenant_id = uuid.uuid4()
+    else:
+        session_id = uuid.uuid4()
+
+    with pytest.raises(SessionNotFound):
+        await AnswerInSession(repository, answerer).stream(tenant_id, user_id, session_id, "q")
+
+    assert answerer.stream_calls == []
