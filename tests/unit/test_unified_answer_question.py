@@ -352,6 +352,24 @@ async def test_a_chat_model_failure_ends_the_stream_with_one_error_event():
     assert not any(isinstance(event, AnswerCompleteEvent) for event in events)
 
 
+async def test_stream_reports_a_generic_error_when_the_budget_recorder_denies_ownership():
+    chat_model = FakeChatModel("should not be reached")
+    use_case = UnifiedAnswerQuestion(
+        FakeEmbeddingModel(),
+        FakeQueryClassifier(_RAG_ONLY),
+        LatencyCascade([FakeCascadeTier(RAG, _hit(RAG, "doc"))], _GENEROUS),
+        chat_model,
+        budget_recorder=FakeSessionBudgetRecorder(error=SessionNotFound(uuid.uuid4())),
+    )
+
+    events = [event async for event in await use_case.stream(*_ids(), _QUESTION)]
+
+    assert isinstance(events[-1], AnswerErrorEvent)
+    assert events[-1].message == "answer generation failed"
+    assert not any(isinstance(e, AnswerCompleteEvent) for e in events)
+    assert chat_model.last_question is None  # generation never reached
+
+
 async def test_without_a_classifier_streaming_still_answers_unrouted():
     cag = FakeCascadeTier(CAG, _hit(CAG, "cached"))
     rag = FakeCascadeTier(RAG, _hit(RAG, "fresh"))

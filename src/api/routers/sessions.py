@@ -103,7 +103,11 @@ async def answer(
     return answer_response(result)
 
 
-@router.post("/{session_id}/answers/stream")
+@router.post(
+    "/{session_id}/answers/stream",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {}}}},
+)
 async def answer_stream(
     session_id: uuid.UUID,
     payload: AnswerRequest,
@@ -136,4 +140,8 @@ async def answer_stream(
     events = await answer_in_session.stream(
         caller.tenant_id, caller.user_id, session_id, payload.question
     )
-    return StreamingResponse(encode_sse(events), media_type="text/event-stream")
+    return StreamingResponse(
+        encode_sse(events),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store"},
+    )

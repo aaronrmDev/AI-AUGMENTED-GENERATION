@@ -573,15 +573,27 @@ exactly as `test_sessions_endpoints.py` already does):
   in `pyproject.toml`, the same way `OllamaChatModel.generate()`'s existing
   comments already record having verified `ChatResponse`'s fields against
   the installed client rather than assuming them.
-- **A hung chat-model stream has no server-side timeout in this design.**
-  `execute()` has no generation timeout today either (the chat model is
-  trusted to return), so this is not a regression, but a stream that never
-  yields another chunk also never releases whatever connection/worker slot
-  it holds. Out of scope for this iteration; worth a follow-up once there
-  is a real client whose behavior under a hang can inform the right
+- **A hung chat-model stream, or a connected client that never reads, has no
+  server-side timeout or concurrency cap in this design -- and this genuinely
+  is a regression the JSON endpoint doesn't share, not merely an unaddressed
+  pre-existing gap.** `execute()`'s `generate()` call is bounded in practice by
+  the configured HTTP client's read timeout, which fires after that many
+  seconds of upstream *silence*; a stream's read timeout resets on every byte
+  received, so a chat provider trickling one token every few minutes holds the
+  connection indefinitely, past any bound the JSON path has. Separately, and
+  confirmed by live probe against a real server: a client that opens the
+  stream and simply never reads it is not cancelled by anything in this
+  stack -- only a real socket close triggers cleanup. Both cases hold a
+  worker/connection slot (including this process's shared upstream-provider
+  connection pool) for as long as the client or a slow provider chooses. Out
+  of scope for this iteration; the follow-up needs both a per-request
+  generation deadline and a per-user concurrent-stream cap, not just a
   timeout value.
-- **No test proves behavior under a genuinely dropped TCP connection**
-  mid-stream (only a clean server-side error path is tested). `httpx`'s
-  ASGI transport doesn't easily simulate a real client disconnect;
-  Starlette's own handling of that case (cancelling the body iterator) is
-  framework behavior this spec relies on rather than re-verifies.
+- **A genuinely dropped TCP connection mid-stream was verified, not merely
+  assumed.** A live probe against a real uvicorn server confirmed Starlette
+  cancels the body generator promptly (within milliseconds) on a hard socket
+  close, raising `CancelledError` into `_stream_events` -- which propagates
+  rather than being caught by the generic `except Exception` (`CancelledError`
+  inherits from `BaseException`, not `Exception`), so cleanup runs correctly.
+  This downgrades what was originally an untested assumption to a confirmed,
+  correct behavior.

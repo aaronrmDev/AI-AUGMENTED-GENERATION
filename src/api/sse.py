@@ -1,6 +1,6 @@
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, assert_never
 
 from src.orchestration.application.unified_answer_question import (
     AnswerChunkEvent,
@@ -57,8 +57,9 @@ def _wire(event: UnifiedAnswerEvent) -> tuple[str, dict[str, Any]]:
         return "chunk", {"text": event.text}
     if isinstance(event, AnswerCompleteEvent):
         return "done", {}
-    assert isinstance(event, AnswerErrorEvent)
-    return "error", {"detail": event.message}
+    if isinstance(event, AnswerErrorEvent):
+        return "error", {"detail": event.message}
+    assert_never(event)
 
 
 async def encode_sse(events: AsyncIterator[UnifiedAnswerEvent]) -> AsyncIterator[bytes]:

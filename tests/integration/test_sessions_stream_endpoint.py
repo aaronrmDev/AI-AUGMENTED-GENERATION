@@ -143,6 +143,9 @@ async def test_a_streamed_answer_reassembles_the_same_stages_and_text_the_json_e
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["cache-control"] == "no-store"
     events = _parse_sse(response.text)
     names = [name for name, _ in events]
     assert names[0] == "routing"
@@ -227,6 +230,31 @@ async def test_a_rate_limited_caller_gets_429_not_a_stream(
 
     assert [r.status_code for r in responses] == [200, 200, 429]
     assert "text/event-stream" not in responses[2].headers.get("content-type", "")
+
+
+async def test_the_rate_limit_budget_is_shared_with_the_json_endpoint(
+    db_session, app_database_url, redis_url, qdrant_url, embedding_model
+):
+    os.environ["CHAT_RATE_LIMIT_PER_MINUTE"] = "1"
+    tenant_id = uuid.uuid4()
+    headers = _auth(await _user(db_session, tenant_id), tenant_id)
+    question = {"question": "What is the return policy?"}
+    async with await _client(app_database_url, redis_url, qdrant_url, embedding_model) as client:
+        await _seed_policy(tenant_id, embedding_model)
+        session_id = (await client.post("/sessions", json={}, headers=headers)).json()["id"]
+        first = await client.post(
+            f"/sessions/{session_id}/answers", json=question, headers=headers
+        )
+        second = await _post_stream(
+            client,
+            f"/sessions/{session_id}/answers/stream",
+            json_body=question,
+            headers=headers,
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert "text/event-stream" not in second.headers.get("content-type", "")
 
 
 async def test_every_stream_route_refuses_a_request_without_a_token(

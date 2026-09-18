@@ -20,7 +20,7 @@ from src.orchestration.domain.entities import (
     TierAttempt,
     TierRequest,
 )
-from src.orchestration.domain.errors import QueryExceedsBudget
+from src.orchestration.domain.errors import QueryExceedsBudget, SessionNotFound
 from src.orchestration.domain.paradigm_router import (
     DEFAULT_SELECT_THRESHOLD,
     DEFAULT_UNCERTAINTY_MARGIN,
@@ -267,6 +267,16 @@ class UnifiedAnswerQuestion:
             async for delta in self._chat_model.stream(question=question, context=assembled.text):
                 yield AnswerChunkEvent(delta)
             yield AnswerCompleteEvent()
+        except SessionNotFound:
+            logger.warning(
+                "session ownership re-check failed while recording the budget "
+                "(tenant=%s, user=%s, session=%s) -- streamed the routing/retrieval/budget "
+                "events for a session the caller may no longer own before this was caught",
+                tenant_id,
+                user_id,
+                session_id,
+            )
+            yield AnswerErrorEvent("answer generation failed")
         except Exception:
             logger.exception("answer streaming failed")
             yield AnswerErrorEvent("answer generation failed")
