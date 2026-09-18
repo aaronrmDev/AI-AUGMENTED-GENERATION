@@ -1,5 +1,6 @@
 import threading
 import uuid
+from collections.abc import AsyncIterator
 
 from src.rag.domain.entities import Chunk, Document, SearchResult
 from src.rag.domain.ports import (
@@ -61,8 +62,16 @@ class FakeVectorStore(VectorStore):
 
 
 class FakeChatModel(ChatModel):
-    def __init__(self, response: str = "a fake answer") -> None:
+    def __init__(
+        self,
+        response: str = "a fake answer",
+        *,
+        stream_chunk_size: int = 4,
+        stream_error: Exception | None = None,
+    ) -> None:
         self._response = response
+        self._stream_chunk_size = stream_chunk_size
+        self._stream_error = stream_error
         self.last_question: str | None = None
         self.last_context: str | None = None
         self.last_prompt: str | None = None
@@ -75,6 +84,14 @@ class FakeChatModel(ChatModel):
     async def complete(self, prompt: str) -> str:
         self.last_prompt = prompt
         return self._response
+
+    async def stream(self, question: str, context: str) -> AsyncIterator[str]:
+        self.last_question = question
+        self.last_context = context
+        for start in range(0, len(self._response), self._stream_chunk_size):
+            yield self._response[start : start + self._stream_chunk_size]
+        if self._stream_error is not None:
+            raise self._stream_error
 
 
 class FakeFileStorage:

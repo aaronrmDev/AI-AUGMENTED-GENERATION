@@ -15,14 +15,43 @@ class _FakeMessage:
         self.content = [thinking_block, text_block]
 
 
+class _FakeTextStream:
+    def __init__(self, deltas: list[str]) -> None:
+        self._deltas = deltas
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        for delta in self._deltas:
+            yield delta
+
+
+class _FakeMessageStream:
+    def __init__(self, deltas: list[str]) -> None:
+        self.text_stream = _FakeTextStream(deltas)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
 class _FakeMessages:
     def __init__(self, response_text: str) -> None:
         self._response_text = response_text
         self.last_call_kwargs: dict | None = None
+        self.last_stream_kwargs: dict | None = None
+        self.stream_deltas: list[str] = []
 
     async def create(self, **kwargs):
         self.last_call_kwargs = kwargs
         return _FakeMessage(self._response_text)
+
+    def stream(self, **kwargs):
+        self.last_stream_kwargs = kwargs
+        return _FakeMessageStream(self.stream_deltas)
 
 
 class _FakeAnthropicClient:
@@ -73,3 +102,27 @@ async def test_complete_sends_no_system_prompt():
     sent = fake_client.messages.last_call_kwargs
     assert "system" not in sent
     assert sent["messages"] == [{"role": "user", "content": "some prompt"}]
+
+
+async def test_stream_yields_each_delta_in_order():
+    fake_client = _FakeAnthropicClient("irrelevant")
+    fake_client.messages.stream_deltas = ["The ", "answer ", "is 42."]
+    model = ClaudeChatModel(client=fake_client, model_id="claude-opus-5")
+
+    chunks = [chunk async for chunk in model.stream(question="q", context="c")]
+
+    assert chunks == ["The ", "answer ", "is 42."]
+
+
+async def test_stream_sends_the_same_prompt_shape_as_generate():
+    fake_client = _FakeAnthropicClient("irrelevant")
+    fake_client.messages.stream_deltas = ["x"]
+    model = ClaudeChatModel(client=fake_client, model_id="claude-opus-5")
+
+    [_ async for _ in model.stream(question="What is FastAPI?", context="FastAPI is a framework.")]
+
+    sent = fake_client.messages.last_stream_kwargs
+    assert sent["model"] == "claude-opus-5"
+    full_prompt = str(sent["messages"])
+    assert "What is FastAPI?" in full_prompt
+    assert "FastAPI is a framework." in full_prompt

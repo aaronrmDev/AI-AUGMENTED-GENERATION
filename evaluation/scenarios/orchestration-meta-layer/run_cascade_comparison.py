@@ -34,6 +34,7 @@ import os
 import sys
 import time
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -224,6 +225,12 @@ class _FreshPassageChatModel(ChatModel):
 
     async def generate(self, question: str, context: str) -> str:
         return await self.complete(question)
+
+    async def stream(self, question: str, context: str) -> AsyncIterator[str]:
+        # This harness measures classification cost, not generation streaming --
+        # a single-chunk stand-in keeps it instantiable without adding a
+        # streaming-specific measurement nothing here asks for.
+        yield await self.generate(question, context)
 
 
 class _InMemoryChunkRepository(DocumentRepository):

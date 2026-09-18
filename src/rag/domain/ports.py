@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 
 from src.rag.domain.entities import Chunk, Document, SearchResult
 
@@ -27,6 +28,12 @@ class ChatModel(ABC):
 
     @abstractmethod
     async def complete(self, prompt: str) -> str: ...
+
+    @abstractmethod
+    def stream(self, question: str, context: str) -> AsyncIterator[str]:
+        """Same contract as generate(), but yields text deltas instead of
+        returning the whole answer at once."""
+        ...
 
 
 class DocumentRepository(ABC):

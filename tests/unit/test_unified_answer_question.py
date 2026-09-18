@@ -4,7 +4,15 @@ import uuid
 import pytest
 
 from src.orchestration.application.latency_cascade import LatencyCascade, TierTimeouts
-from src.orchestration.application.unified_answer_question import UnifiedAnswerQuestion
+from src.orchestration.application.unified_answer_question import (
+    AnswerChunkEvent,
+    AnswerCompleteEvent,
+    AnswerErrorEvent,
+    BudgetStageEvent,
+    RetrievalStageEvent,
+    RoutingStageEvent,
+    UnifiedAnswerQuestion,
+)
 from src.orchestration.domain.budget_allocator import allocate
 from src.orchestration.domain.entities import ContextItem, Paradigm, TierOutcome, TierResult
 from src.orchestration.domain.errors import (
@@ -270,3 +278,108 @@ def test_a_non_positive_context_window_is_rejected():
             FakeChatModel(),
             total_context_tokens=0,
         )
+
+
+async def test_stream_yields_the_stage_events_then_the_chunks_then_done():
+    classifier = FakeQueryClassifier(_RAG_ONLY)
+    rag = FakeCascadeTier(RAG, _hit(RAG, "fresh doc"))
+    chat_model = FakeChatModel("the answer", stream_chunk_size=4)
+    recorder = FakeSessionBudgetRecorder()
+    use_case = UnifiedAnswerQuestion(
+        FakeEmbeddingModel(),
+        classifier,
+        LatencyCascade([rag], _GENEROUS),
+        chat_model,
+        budget_recorder=recorder,
+    )
+    tenant_id, user_id, session_id = _ids()
+
+    events = [
+        event async for event in await use_case.stream(tenant_id, user_id, session_id, _QUESTION)
+    ]
+
+    routing, retrieval, budget, *rest = events
+    assert isinstance(routing, RoutingStageEvent)
+    assert routing.decision is not None
+    assert routing.decision.paradigms == frozenset({RAG})
+    assert isinstance(retrieval, RetrievalStageEvent)
+    assert [attempt.paradigm for attempt in retrieval.attempts] == [RAG]
+    assert retrieval.degraded is False
+    assert isinstance(budget, BudgetStageEvent)
+    assert [source.content for source in budget.sources] == ["fresh doc"]
+    assert budget.dropped == {CAG: 0, MAG: 0, RAG: 0}
+    *chunks, done = rest
+    assert chunks and all(isinstance(c, AnswerChunkEvent) for c in chunks)
+    assert "".join(c.text for c in chunks) == "the answer"
+    assert isinstance(done, AnswerCompleteEvent)
+    assert len(recorder.records) == 1
+    recorded_tenant, recorded_user, recorded_session, _, recorded_contributing = recorder.records[0]
+    assert (recorded_tenant, recorded_user, recorded_session) == (tenant_id, user_id, session_id)
+    assert recorded_contributing == frozenset({RAG})
+
+
+async def test_stream_rejects_an_over_budget_question_before_any_event():
+    use_case = UnifiedAnswerQuestion(
+        FakeEmbeddingModel(),
+        FakeQueryClassifier(_RAG_ONLY),
+        LatencyCascade([FakeCascadeTier(RAG)], _GENEROUS),
+        FakeChatModel(),
+        total_context_tokens=100,
+    )
+
+    with pytest.raises(QueryExceedsBudget) as raised:
+        await use_case.stream(*_ids(), "word " * 50)
+
+    assert raised.value.query_slice == 10
+
+
+async def test_a_chat_model_failure_ends_the_stream_with_one_error_event():
+    chat_model = FakeChatModel(
+        "partial", stream_chunk_size=4, stream_error=RuntimeError("model exploded")
+    )
+    use_case = UnifiedAnswerQuestion(
+        FakeEmbeddingModel(),
+        FakeQueryClassifier(_RAG_ONLY),
+        LatencyCascade([FakeCascadeTier(RAG, _hit(RAG, "doc"))], _GENEROUS),
+        chat_model,
+    )
+
+    events = [event async for event in await use_case.stream(*_ids(), _QUESTION)]
+
+    assert isinstance(events[0], RoutingStageEvent)
+    assert isinstance(events[-1], AnswerErrorEvent)
+    assert events[-1].message == "answer generation failed"
+    assert not any(isinstance(event, AnswerCompleteEvent) for event in events)
+
+
+async def test_stream_reports_a_generic_error_when_the_budget_recorder_denies_ownership():
+    chat_model = FakeChatModel("should not be reached")
+    use_case = UnifiedAnswerQuestion(
+        FakeEmbeddingModel(),
+        FakeQueryClassifier(_RAG_ONLY),
+        LatencyCascade([FakeCascadeTier(RAG, _hit(RAG, "doc"))], _GENEROUS),
+        chat_model,
+        budget_recorder=FakeSessionBudgetRecorder(error=SessionNotFound(uuid.uuid4())),
+    )
+
+    events = [event async for event in await use_case.stream(*_ids(), _QUESTION)]
+
+    assert isinstance(events[-1], AnswerErrorEvent)
+    assert events[-1].message == "answer generation failed"
+    assert not any(isinstance(e, AnswerCompleteEvent) for e in events)
+    assert chat_model.last_question is None  # generation never reached
+
+
+async def test_without_a_classifier_streaming_still_answers_unrouted():
+    cag = FakeCascadeTier(CAG, _hit(CAG, "cached"))
+    rag = FakeCascadeTier(RAG, _hit(RAG, "fresh"))
+    chat_model = FakeChatModel("ok", stream_chunk_size=2)
+    use_case = UnifiedAnswerQuestion(
+        FakeEmbeddingModel(), None, LatencyCascade([cag, rag], _GENEROUS), chat_model
+    )
+
+    events = [event async for event in await use_case.stream(*_ids(), _QUESTION)]
+
+    routing = events[0]
+    assert isinstance(routing, RoutingStageEvent)
+    assert routing.decision is None

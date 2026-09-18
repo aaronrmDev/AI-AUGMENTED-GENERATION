@@ -3,22 +3,24 @@ import logging
 import math
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Literal
 
-from src.orchestration.application.assemble_context import assemble_context
+from src.orchestration.application.assemble_context import AssembledContext, assemble_context
 from src.orchestration.application.latency_cascade import LatencyCascade
 from src.orchestration.domain.budget_allocator import DEFAULT_SHARES, allocate
 from src.orchestration.domain.entities import (
     BudgetAllocation,
     BudgetShares,
+    CascadeResult,
     ContextItem,
     Paradigm,
     RoutingDecision,
     TierAttempt,
     TierRequest,
 )
-from src.orchestration.domain.errors import QueryExceedsBudget
+from src.orchestration.domain.errors import QueryExceedsBudget, SessionNotFound
 from src.orchestration.domain.paradigm_router import (
     DEFAULT_SELECT_THRESHOLD,
     DEFAULT_UNCERTAINTY_MARGIN,
@@ -68,6 +70,65 @@ class UnifiedAnswer:
     timings: StageTimings
 
 
+@dataclass(frozen=True)
+class RoutingStageEvent:
+    """The router's decision, once made -- the streaming counterpart of
+    UnifiedAnswer.decision/routing_fallback."""
+
+    decision: RoutingDecision | None
+    routing_fallback: RoutingFallback | None
+
+
+@dataclass(frozen=True)
+class RetrievalStageEvent:
+    """The cascade's result, once every attempted tier has answered or given up --
+    the streaming counterpart of UnifiedAnswer.attempts/degraded."""
+
+    attempts: list[TierAttempt]
+    degraded: bool
+
+
+@dataclass(frozen=True)
+class BudgetStageEvent:
+    """Context assembly's result -- the streaming counterpart of
+    UnifiedAnswer.sources/dropped. Never carries the raw BudgetAllocation numbers,
+    for the same reason answer_response() withholds them from the JSON endpoint
+    (spec decision 8)."""
+
+    sources: list[ContextItem]
+    dropped: dict[Paradigm, int]
+
+
+@dataclass(frozen=True)
+class AnswerChunkEvent:
+    """One text delta from the chat model's own stream()."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class AnswerCompleteEvent:
+    """The stream's normal terminal event; carries no data."""
+
+
+@dataclass(frozen=True)
+class AnswerErrorEvent:
+    """The stream's terminal event on failure. `message` is always a generic,
+    safe-to-show string -- the real exception is logged, never surfaced here."""
+
+    message: str
+
+
+UnifiedAnswerEvent = (
+    RoutingStageEvent
+    | RetrievalStageEvent
+    | BudgetStageEvent
+    | AnswerChunkEvent
+    | AnswerCompleteEvent
+    | AnswerErrorEvent
+)
+
+
 def _ms(start: float, end: float) -> float:
     return (end - start) * 1000
 
@@ -83,6 +144,14 @@ class UnifiedAnswerQuestion:
     The budget is recorded after the cascade and before generation: a
     session that doesn't exist, or isn't this user's, fails the request
     before an answer is paid for, though the retrieval work is already spent.
+
+    stream() answers the same question as execute(), sharing the same
+    _decide_route/_do_budget/_record_budget helpers, but reports progress as
+    domain events instead of returning one final UnifiedAnswer -- see
+    docs/superpowers/specs/2026-09-17-streaming-answers-design.md for why its
+    query-budget check has to stay eager (in stream() itself, not in the lazy
+    generator stream() hands back) and why a failure after streaming has
+    already started becomes an AnswerErrorEvent rather than a raised exception.
     """
 
     def __init__(
@@ -130,24 +199,19 @@ class UnifiedAnswerQuestion:
         embedding = await asyncio.to_thread(self._embedder.embed, question)
         embedded = time.perf_counter()
 
-        decision: RoutingDecision | None = None
-        routing_fallback: RoutingFallback | None = None
-        if self._classifier is not None:
-            decision, routing_fallback = await self._route(self._classifier, question, embedding)
+        decision, routing_fallback = await self._decide_route(question, embedding)
         routed = time.perf_counter()
 
         request = TierRequest(tenant_id, user_id, session_id, question, embedding)
         cascade_result = await self._cascade.run(request, decision)
         cascaded = time.perf_counter()
 
-        allocation = allocate(self._total, cascade_result.contributing, self._shares)
-        assembled = assemble_context(cascade_result.items, allocation)
+        allocation, assembled = self._do_budget(cascade_result)
         assembled_at = time.perf_counter()
 
-        if self._budget_recorder is not None:
-            await self._budget_recorder.record(
-                tenant_id, user_id, session_id, allocation, cascade_result.contributing
-            )
+        await self._record_budget(
+            tenant_id, user_id, session_id, allocation, cascade_result.contributing
+        )
         recorded = time.perf_counter()
 
         answer = await self._chat_model.generate(question=question, context=assembled.text)
@@ -171,6 +235,77 @@ class UnifiedAnswerQuestion:
                 generate_ms=_ms(recorded, generated),
             ),
         )
+
+    async def stream(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID, session_id: uuid.UUID, question: str
+    ) -> AsyncIterator[UnifiedAnswerEvent]:
+        query_slice = math.floor(self._total * self._shares.query)
+        query_tokens = count_tokens(question)
+        if query_tokens > query_slice:
+            raise QueryExceedsBudget(query_tokens, query_slice)
+        return self._stream_events(tenant_id, user_id, session_id, question)
+
+    async def _stream_events(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID, session_id: uuid.UUID, question: str
+    ) -> AsyncIterator[UnifiedAnswerEvent]:
+        try:
+            embedding = await asyncio.to_thread(self._embedder.embed, question)
+            decision, routing_fallback = await self._decide_route(question, embedding)
+            yield RoutingStageEvent(decision, routing_fallback)
+
+            request = TierRequest(tenant_id, user_id, session_id, question, embedding)
+            cascade_result = await self._cascade.run(request, decision)
+            yield RetrievalStageEvent(cascade_result.attempts, cascade_result.degraded)
+
+            allocation, assembled = self._do_budget(cascade_result)
+            yield BudgetStageEvent(assembled.included, assembled.dropped)
+
+            await self._record_budget(
+                tenant_id, user_id, session_id, allocation, cascade_result.contributing
+            )
+
+            async for delta in self._chat_model.stream(question=question, context=assembled.text):
+                yield AnswerChunkEvent(delta)
+            yield AnswerCompleteEvent()
+        except SessionNotFound:
+            logger.warning(
+                "session ownership re-check failed while recording the budget "
+                "(tenant=%s, user=%s, session=%s) -- streamed the routing/retrieval/budget "
+                "events for a session the caller may no longer own before this was caught",
+                tenant_id,
+                user_id,
+                session_id,
+            )
+            yield AnswerErrorEvent("answer generation failed")
+        except Exception:
+            logger.exception("answer streaming failed")
+            yield AnswerErrorEvent("answer generation failed")
+
+    async def _decide_route(
+        self, question: str, embedding: list[float]
+    ) -> tuple[RoutingDecision | None, RoutingFallback | None]:
+        if self._classifier is None:
+            return None, None
+        return await self._route(self._classifier, question, embedding)
+
+    def _do_budget(
+        self, cascade_result: CascadeResult
+    ) -> tuple[BudgetAllocation, AssembledContext]:
+        allocation = allocate(self._total, cascade_result.contributing, self._shares)
+        return allocation, assemble_context(cascade_result.items, allocation)
+
+    async def _record_budget(
+        self,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        session_id: uuid.UUID,
+        allocation: BudgetAllocation,
+        contributing: frozenset[Paradigm],
+    ) -> None:
+        if self._budget_recorder is not None:
+            await self._budget_recorder.record(
+                tenant_id, user_id, session_id, allocation, contributing
+            )
 
     async def _route(
         self, classifier: QueryClassifier, question: str, embedding: list[float]

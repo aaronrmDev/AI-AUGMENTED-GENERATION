@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 from src.rag.domain.ports import ChatModel
@@ -52,3 +53,18 @@ class ClaudeChatModel(ChatModel):
             if block.type == "text":
                 return cast(str, block.text)
         return ""
+
+    async def stream(self, question: str, context: str) -> AsyncIterator[str]:
+        async with self._client.messages.stream(
+            model=self._model_id,
+            max_tokens=4096,
+            system=_SYSTEM_PROMPT,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Context:\n{context}\n\nQuestion: {question}",
+                }
+            ],
+        ) as stream:
+            async for text in stream.text_stream:
+                yield text

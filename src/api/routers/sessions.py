@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi.responses import StreamingResponse
 
 from src.api.caller import Caller
 from src.api.dependencies import (
@@ -25,6 +26,7 @@ from src.api.schemas.sessions import (
     SessionResponse,
     answer_response,
 )
+from src.api.sse import encode_sse
 from src.identity.application.list_chat_sessions import MAX_SESSIONS_PER_PAGE, ListChatSessions
 from src.identity.application.start_chat_session import StartChatSession
 from src.identity.domain.ports import ChatSessionRepository
@@ -99,3 +101,47 @@ async def answer(
         caller.tenant_id, caller.user_id, session_id, payload.question
     )
     return answer_response(result)
+
+
+@router.post(
+    "/{session_id}/answers/stream",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {}}}},
+)
+async def answer_stream(
+    session_id: uuid.UUID,
+    payload: AnswerRequest,
+    request: Request,
+    response: Response,
+    caller: Caller = Depends(get_caller),
+    answer_in_session: AnswerInSession = Depends(get_answer_in_session),
+) -> StreamingResponse:
+    # Same two checks, same order, same keys and limits as answer() above --
+    # this is the same resource's budget, not a second one.
+    await enforce_rate_limit(
+        request,
+        response,
+        limiter=get_rate_limiter(),
+        key=f"chat:{caller.user_id}",
+        limit=chat_rate_limit(),
+    )
+    await enforce_rate_limit(
+        request,
+        response,
+        limiter=get_rate_limiter(),
+        key=GLOBAL_CHAT_KEY,
+        limit=global_chat_limit(),
+        window_seconds=GLOBAL_CHAT_WINDOW_SECONDS,
+    )
+    # Raises SessionNotFound/QueryExceedsBudget HERE, before StreamingResponse
+    # is ever constructed -- see AnswerInSession.stream()'s docstring for why
+    # that's what keeps a denial a plain 404/422 instead of a stream that
+    # opens and then errors.
+    events = await answer_in_session.stream(
+        caller.tenant_id, caller.user_id, session_id, payload.question
+    )
+    return StreamingResponse(
+        encode_sse(events),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store"},
+    )
