@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from typing import Any
 
 from src.rag.domain.ports import ChatModel
@@ -67,3 +68,17 @@ class OllamaChatModel(ChatModel):
         )
         self._record_token_counts(response)
         return response.message.content or ""
+
+    async def stream(self, question: str, context: str) -> AsyncIterator[str]:
+        stream = await self._client.chat(
+            model=self._model_id,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"},
+            ],
+            stream=True,
+        )
+        async for chunk in stream:
+            content = chunk.message.content
+            if content:
+                yield content

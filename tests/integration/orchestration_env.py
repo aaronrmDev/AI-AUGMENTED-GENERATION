@@ -4,6 +4,7 @@ embeddings, and a real distilgpt2 HFFrozenCache for CAG that holds a
 SUPERSEDED copy of the return policy while Qdrant holds the current one.
 Not collected by pytest (no test_ prefix)."""
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -88,6 +89,16 @@ class ContextEchoChatModel(ChatModel):
 
     async def complete(self, prompt: str) -> str:
         return prompt
+
+    async def stream(self, question: str, context: str) -> AsyncIterator[str]:
+        # Two chunks (never one), unless there's nothing to say -- a real
+        # integration test reassembling multiple chunks exercises real
+        # reassembly, not a degenerate single-chunk case.
+        if not context:
+            return
+        midpoint = max(1, len(context) // 2)
+        yield context[:midpoint]
+        yield context[midpoint:]
 
 
 @dataclass

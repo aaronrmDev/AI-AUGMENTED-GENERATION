@@ -22,16 +22,27 @@ class _FakeChatResponse:
 
 class _FakeOllamaClient:
     def __init__(
-        self, response_text: str, prompt_eval_count: int = 0, eval_count: int = 0
+        self,
+        response_text: str,
+        prompt_eval_count: int = 0,
+        eval_count: int = 0,
+        stream_chunks: list[str | None] | None = None,
     ) -> None:
         self._response_text = response_text
         self._prompt_eval_count = prompt_eval_count
         self._eval_count = eval_count
+        self._stream_chunks = stream_chunks or []
         self.last_call_kwargs: dict | None = None
 
     async def chat(self, **kwargs):
         self.last_call_kwargs = kwargs
+        if kwargs.get("stream"):
+            return self._stream_response()
         return _FakeChatResponse(self._response_text, self._prompt_eval_count, self._eval_count)
+
+    async def _stream_response(self):
+        for text in self._stream_chunks:
+            yield _FakeChatResponse(text if text is not None else "")
 
 
 async def test_generate_returns_the_response_text():
@@ -135,3 +146,37 @@ async def test_last_token_counts_reflect_only_the_most_recent_call():
 
     assert model.last_input_tokens == 5
     assert model.last_output_tokens == 2
+
+
+async def test_stream_yields_each_chunks_content_in_order():
+    fake_client = _FakeOllamaClient("irrelevant", stream_chunks=["Hel", "lo, ", "world."])
+    model = OllamaChatModel(client=fake_client, model_id="qwen3.5")
+
+    chunks = [chunk async for chunk in model.stream(question="q", context="c")]
+
+    assert chunks == ["Hel", "lo, ", "world."]
+
+
+async def test_stream_skips_a_chunk_with_no_content():
+    # ollama's real streaming carries a final chunk whose content is empty --
+    # skipping falsy content keeps that chunk from becoming a spurious "" delta.
+    fake_client = _FakeOllamaClient("irrelevant", stream_chunks=["first", None, "last"])
+    model = OllamaChatModel(client=fake_client, model_id="qwen3.5")
+
+    chunks = [chunk async for chunk in model.stream(question="q", context="c")]
+
+    assert chunks == ["first", "last"]
+
+
+async def test_stream_sends_stream_true_and_the_same_prompt_shape_as_generate():
+    fake_client = _FakeOllamaClient("irrelevant", stream_chunks=["x"])
+    model = OllamaChatModel(client=fake_client, model_id="qwen3.5")
+
+    [_ async for _ in model.stream(question="What is FastAPI?", context="FastAPI is a framework.")]
+
+    sent = fake_client.last_call_kwargs
+    assert sent["model"] == "qwen3.5"
+    assert sent["stream"] is True
+    full_prompt = str(sent["messages"])
+    assert "What is FastAPI?" in full_prompt
+    assert "FastAPI is a framework." in full_prompt
