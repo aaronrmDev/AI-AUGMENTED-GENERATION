@@ -54,7 +54,7 @@ That's 186 closed issues across eleven milestones, tracked the same way from the
 
 ### The proof, in numbers
 
-- **1,189 unit tests** across 160 files, and **290 integration tests** across 66 files run against real PostgreSQL, Qdrant, Redis, and Neo4j via TestContainers — not mocks standing in for the parts that are actually hard to get right.
+- **1,226 unit tests** across 164 files, and **309 integration tests** across 70 files run against real PostgreSQL, Qdrant, Redis, and Neo4j via TestContainers — not mocks standing in for the parts that are actually hard to get right.
 - **52 narrative evaluation reports** under [evaluation/reports/](evaluation/reports/), each one a real baseline-versus-treatment comparison against a live judge model, not a unit test dressed up as a benchmark.
 - Every cross-paradigm synthesis technique — Cache-Warmed RAG, State-Aware RAG, and the three tiering/sync boundaries between all three paradigms — is measured against real infrastructure, including a genuine GPU-served vLLM instance for the CAG-side measurements.
 - The Unified API's session-scoped endpoint (`POST /sessions`, `GET /sessions`, `POST /sessions/{session_id}/answers`) serves the full per-query orchestration path over HTTP, with object-level authorization enforced on every session lookup.
