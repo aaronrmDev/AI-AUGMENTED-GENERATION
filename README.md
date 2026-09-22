@@ -48,9 +48,9 @@ Every batch of work below shipped through the same discipline: a design spec, an
 | RAG+MAG: Cross-Paradigm Synergy | State-Aware RAG and the RAG↔MAG warm/cold tiering boundary | 8 |
 | CAG+MAG: Cross-Paradigm Synergy | The CAG↔MAG hot/warm tiering boundary and its own sync tiebreak | 6 |
 | Orchestration: Meta-Layer | All five meta-layer components above, built and live-measured | 31 |
-| Unified API | HTTP access to the meta-layer: session-scoped answers (shipped), hardening against abuse (shipped), freshness-routed ingestion (shipped) | 12 closed, 0 open |
+| Unified API | HTTP access to the meta-layer: session-scoped answers (shipped), hardening against abuse (shipped), freshness-routed ingestion (shipped), streaming answers (shipped) | 13 closed, 0 open |
 
-That's 186 closed issues across eleven milestones, tracked the same way from the first line of code to the latest release.
+That's 187 closed issues across eleven milestones, tracked the same way from the first line of code to the latest release.
 
 ### The proof, in numbers
 
@@ -59,6 +59,7 @@ That's 186 closed issues across eleven milestones, tracked the same way from the
 - Every cross-paradigm synthesis technique — Cache-Warmed RAG, State-Aware RAG, and the three tiering/sync boundaries between all three paradigms — is measured against real infrastructure, including a genuine GPU-served vLLM instance for the CAG-side measurements.
 - The Unified API's session-scoped endpoint (`POST /sessions`, `GET /sessions`, `POST /sessions/{session_id}/answers`) serves the full per-query orchestration path over HTTP, with object-level authorization enforced on every session lookup.
 - Freshness-routed ingestion is served the same way: `POST /data-sources` hands a tenant- or user-scoped source to this project's first background-worker subsystem, Celery against a Redis broker under `src/workers/`, and `GET /data-sources/jobs/{task_id}` polls the result, denying a caller who isn't the job's own tenant or user the same 404 a missing task id gets.
+- The per-query path streams, too: `POST /sessions/{session_id}/answers/stream` reports routing, retrieval, and budget progress as Server-Sent Events before streaming the generated answer token-by-token, sharing the same object-level authorization and the same `chat:{user_id}`/global quota as the JSON endpoint it sits beside.
 
 ### Hardened, not just functional
 
@@ -71,7 +72,9 @@ The most recent batch of work (Task #193) closed five findings a security review
 | `v1.0.0` | 2026-09-03 | The first tagged release: a full RAG pipeline, a full MAG memory system, three of CAG's nine techniques, and all three cross-paradigm synthesis pairings |
 | `v1.0.1`–`v1.0.5` | 2026-09-03 – 2026-09-06 | Five documentation-accuracy hotfixes |
 | `v1.1.0` | 2026-09-15 | CAG's remaining six techniques, the full orchestration meta-layer, and the Unified API's session-scoped per-query endpoint |
-| `v1.2.0` | 2026-09-16 | The Unified API hardening batch above, plus a documentation pass that stopped naming an unbuilt frontend stack as if it were a decision this project had made |
+| `v1.2.0` | 2026-09-15 | The Unified API hardening batch above, plus a documentation pass that stopped naming an unbuilt frontend stack as if it were a decision this project had made |
+| `v1.2.1` | 2026-09-15 | Rewrote this README as a top-down project narrative |
+| `v1.3.0` | 2026-09-16 | Freshness-routed ingestion (`POST /data-sources`, `GET /data-sources/jobs/{task_id}`), served through this project's first background-worker subsystem |
 
 ## Where to go next
 
@@ -79,4 +82,4 @@ The most recent batch of work (Task #193) closed five findings a security review
 
 ## What's honestly still ahead
 
-Streaming is the one piece of the Unified API milestone without a shape yet: delivering an answer incrementally, rather than as the single JSON response `POST /sessions/{session_id}/answers` returns today, needs a frontend or some other real consumer to design its framing against, and none exists yet, so it stays a named gap rather than a half-built one. Past that: a frontend (no framework has been chosen — the technology choice is deliberately deferred until that work actually begins, rather than named in advance for code that doesn't exist), and the Kubernetes and production-deployment layer. None of that is hidden in the docs that describe it; where the line between built and not-yet-built matters, this project says so plainly rather than letting intent read as fact.
+The Unified API milestone is now fully built: session-scoped answers, abuse hardening, freshness-routed ingestion, and streaming answers all ship as HTTP endpoints, proven against real infrastructure and a real httpx streaming client rather than a frontend that doesn't exist yet. What's left is a frontend (no framework has been chosen — the technology choice is deliberately deferred until that work actually begins, rather than named in advance for code that doesn't exist) and the Kubernetes and production-deployment layer. None of that is hidden in the docs that describe it; where the line between built and not-yet-built matters, this project says so plainly rather than letting intent read as fact.
