@@ -43,7 +43,53 @@ DEFAULT_CONTEXT_TOKENS = 128_000
 # cascade, so a request-path classifier has to be a millisecond-scale one.
 DEFAULT_CLASSIFIER_TIMEOUT = 2.0
 
+# Seconds. An overall wall-clock deadline on the chat model's stream(), not a
+# per-chunk idle timeout: the HTTP client's own read timeout (10 minutes by
+# default in the anthropic SDK, unconfigured anywhere in this codebase) resets
+# on every byte received, so a provider trickling one token every few minutes
+# never trips it. This is a reasoned engineering default -- generous against
+# any answer this project has actually measured completing, but not derived
+# from a live p95 generation-latency measurement, which this project doesn't
+# have yet -- chosen to sit far inside the SDK's 10-minute ceiling while
+# bounding the worst case docs/superpowers/specs/2026-09-17-streaming-answers-design.md's
+# security review flagged. Disclose it as reasoned, not measured, anywhere
+# this shows up in docs.
+DEFAULT_STREAM_DEADLINE = 90.0
+
 RoutingFallback = Literal["classifier_timeout", "classifier_error"]
+
+
+async def _with_deadline(chunks: AsyncIterator[str], deadline: float) -> AsyncIterator[str]:
+    """Bounds the *total* time spent draining `chunks`, not the gap between any
+    two chunks: each asyncio.wait_for call below waits only for whatever's left
+    of the deadline, so a provider that's fast at first and only hangs later
+    still gets caught at the deadline itself, not handed a fresh window per
+    chunk the way the HTTP client's own read timeout would be. Always closes
+    `chunks` on the way out (normal completion, deadline, or the caller being
+    cancelled), matching LatencyCascade's discipline of explicitly cancelling
+    rather than abandoning a timed-out attempt.
+    """
+    loop = asyncio.get_running_loop()
+    deadline_at = loop.time() + deadline
+    iterator = chunks.__aiter__()
+    try:
+        while True:
+            remaining = deadline_at - loop.time()
+            if remaining <= 0:
+                raise TimeoutError
+            try:
+                item = await asyncio.wait_for(iterator.__anext__(), remaining)
+            except StopAsyncIteration:
+                return
+            yield item
+    finally:
+        # ChatModel.stream() is typed as the more permissive AsyncIterator[str]
+        # at the port, not AsyncGenerator, so aclose() is looked up rather than
+        # assumed -- every real and fake implementation is in fact an async
+        # generator and so does have it.
+        aclose = getattr(iterator, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 @dataclass(frozen=True)
@@ -167,11 +213,14 @@ class UnifiedAnswerQuestion:
         uncertainty_margin: float = DEFAULT_UNCERTAINTY_MARGIN,
         classifier_timeout: float = DEFAULT_CLASSIFIER_TIMEOUT,
         budget_recorder: SessionBudgetRecorder | None = None,
+        stream_deadline: float = DEFAULT_STREAM_DEADLINE,
     ) -> None:
         if total_context_tokens <= 0:
             raise ValueError("total_context_tokens must be positive")
         if classifier_timeout <= 0.0:
             raise ValueError("classifier_timeout must be positive")
+        if stream_deadline <= 0.0:
+            raise ValueError("stream_deadline must be positive")
         self._embedder = embedding_model
         self._classifier = classifier
         self._cascade = cascade
@@ -182,6 +231,7 @@ class UnifiedAnswerQuestion:
         self._uncertainty_margin = uncertainty_margin
         self._classifier_timeout = classifier_timeout
         self._budget_recorder = budget_recorder
+        self._stream_deadline = stream_deadline
 
     async def execute(
         self, tenant_id: uuid.UUID, user_id: uuid.UUID, session_id: uuid.UUID, question: str
@@ -264,7 +314,10 @@ class UnifiedAnswerQuestion:
                 tenant_id, user_id, session_id, allocation, cascade_result.contributing
             )
 
-            async for delta in self._chat_model.stream(question=question, context=assembled.text):
+            async for delta in _with_deadline(
+                self._chat_model.stream(question=question, context=assembled.text),
+                self._stream_deadline,
+            ):
                 yield AnswerChunkEvent(delta)
             yield AnswerCompleteEvent()
         except SessionNotFound:
@@ -272,6 +325,16 @@ class UnifiedAnswerQuestion:
                 "session ownership re-check failed while recording the budget "
                 "(tenant=%s, user=%s, session=%s) -- streamed the routing/retrieval/budget "
                 "events for a session the caller may no longer own before this was caught",
+                tenant_id,
+                user_id,
+                session_id,
+            )
+            yield AnswerErrorEvent("answer generation failed")
+        except TimeoutError:
+            logger.warning(
+                "answer streaming exceeded its generation deadline (limit %.1fs) "
+                "(tenant=%s, user=%s, session=%s); ending the stream",
+                self._stream_deadline,
                 tenant_id,
                 user_id,
                 session_id,

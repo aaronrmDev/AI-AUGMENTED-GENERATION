@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import uuid
 from collections.abc import AsyncIterator
@@ -68,13 +69,18 @@ class FakeChatModel(ChatModel):
         *,
         stream_chunk_size: int = 4,
         stream_error: Exception | None = None,
+        stream_delay_seconds: float = 0.0,
+        stream_hangs: bool = False,
     ) -> None:
         self._response = response
         self._stream_chunk_size = stream_chunk_size
         self._stream_error = stream_error
+        self._stream_delay = stream_delay_seconds
+        self._stream_hangs = stream_hangs
         self.last_question: str | None = None
         self.last_context: str | None = None
         self.last_prompt: str | None = None
+        self.cancelled = False
 
     async def generate(self, question: str, context: str) -> str:
         self.last_question = question
@@ -88,10 +94,18 @@ class FakeChatModel(ChatModel):
     async def stream(self, question: str, context: str) -> AsyncIterator[str]:
         self.last_question = question
         self.last_context = context
-        for start in range(0, len(self._response), self._stream_chunk_size):
-            yield self._response[start : start + self._stream_chunk_size]
-        if self._stream_error is not None:
-            raise self._stream_error
+        try:
+            if self._stream_hangs:
+                await asyncio.Event().wait()
+            for start in range(0, len(self._response), self._stream_chunk_size):
+                if self._stream_delay:
+                    await asyncio.sleep(self._stream_delay)
+                yield self._response[start : start + self._stream_chunk_size]
+            if self._stream_error is not None:
+                raise self._stream_error
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
 
 
 class FakeFileStorage:
