@@ -3,6 +3,7 @@ integration tests: Postgres with RLS for MAG, Qdrant for RAG, real MiniLM
 embeddings, and a real distilgpt2 HFFrozenCache for CAG that holds a
 SUPERSEDED copy of the return policy while Qdrant holds the current one.
 Not collected by pytest (no test_ prefix)."""
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -84,6 +85,12 @@ class FixedScoresClassifier(QueryClassifier):
 
 
 class ContextEchoChatModel(ChatModel):
+    def __init__(self, stream_delay_seconds: float = 0.0) -> None:
+        # Lets a concurrency-cap test hold a stream open long enough to issue
+        # a competing request against it -- every other user of this fixture
+        # keeps the default 0.0 and streams at its normal near-instant speed.
+        self._stream_delay = stream_delay_seconds
+
     async def generate(self, question: str, context: str) -> str:
         return context
 
@@ -97,7 +104,11 @@ class ContextEchoChatModel(ChatModel):
         if not context:
             return
         midpoint = max(1, len(context) // 2)
+        if self._stream_delay:
+            await asyncio.sleep(self._stream_delay)
         yield context[:midpoint]
+        if self._stream_delay:
+            await asyncio.sleep(self._stream_delay)
         yield context[midpoint:]
 
 

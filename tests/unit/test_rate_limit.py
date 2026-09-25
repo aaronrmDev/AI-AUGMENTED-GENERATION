@@ -8,8 +8,12 @@ from src.api.rate_limit import (
     chat_rate_limit,
     enforce_rate_limit,
     global_chat_limit,
+    stream_concurrency_limit,
+    stream_deadline_seconds,
+    stream_slot_ttl_seconds,
 )
 from src.identity.domain.ports import RateLimiter
+from src.orchestration.application.unified_answer_question import DEFAULT_STREAM_DEADLINE
 
 _RESET = datetime(2026, 1, 1, 0, 1, tzinfo=UTC)
 
@@ -78,3 +82,38 @@ def test_a_global_chat_limit_below_1_is_refused(monkeypatch):
     monkeypatch.setenv("CHAT_RATE_LIMIT_GLOBAL_PER_HOUR", "0")
     with pytest.raises(ValueError):
         global_chat_limit()
+
+
+def test_the_stream_concurrency_limit_defaults_to_5_and_is_read_from_the_environment_per_call(
+    monkeypatch,
+):
+    monkeypatch.delenv("STREAM_CONCURRENCY_LIMIT_PER_USER", raising=False)
+    assert stream_concurrency_limit() == 5
+    monkeypatch.setenv("STREAM_CONCURRENCY_LIMIT_PER_USER", "2")
+    assert stream_concurrency_limit() == 2
+
+
+def test_a_stream_concurrency_limit_below_1_is_refused(monkeypatch):
+    monkeypatch.setenv("STREAM_CONCURRENCY_LIMIT_PER_USER", "0")
+    with pytest.raises(ValueError):
+        stream_concurrency_limit()
+
+
+def test_the_stream_deadline_defaults_to_the_use_cases_own_constant_and_is_read_per_call(
+    monkeypatch,
+):
+    monkeypatch.delenv("STREAM_DEADLINE_SECONDS", raising=False)
+    assert stream_deadline_seconds() == DEFAULT_STREAM_DEADLINE
+    monkeypatch.setenv("STREAM_DEADLINE_SECONDS", "30")
+    assert stream_deadline_seconds() == 30.0
+
+
+def test_a_non_positive_stream_deadline_is_refused(monkeypatch):
+    monkeypatch.setenv("STREAM_DEADLINE_SECONDS", "0")
+    with pytest.raises(ValueError):
+        stream_deadline_seconds()
+
+
+def test_the_stream_slot_ttl_tracks_the_deadline_plus_its_own_buffer(monkeypatch):
+    monkeypatch.setenv("STREAM_DEADLINE_SECONDS", "30")
+    assert stream_slot_ttl_seconds() == 40.0

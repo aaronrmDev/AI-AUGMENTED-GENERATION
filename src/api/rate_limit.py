@@ -6,6 +6,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.identity.domain.ports import RateLimiter
+from src.orchestration.application.unified_answer_question import DEFAULT_STREAM_DEADLINE
 
 WINDOW_SECONDS = 60
 AUTH_LIMIT = 5  # per client IP per window, on /auth/register and /auth/login
@@ -51,6 +52,49 @@ class RateLimitExceeded(Exception):
         self.limit = limit
         self.remaining = remaining
         self.reset_at = reset_at
+        self.key = key
+
+
+_DEFAULT_STREAM_CONCURRENCY_LIMIT = 5
+
+
+def stream_concurrency_limit() -> int:
+    """Concurrently open streams per user, shared across every session -- a
+    different axis from chat_rate_limit()'s per-minute request count: this
+    bounds how many can be open *at once*, which is what actually exhausts the
+    shared upstream connection pool regardless of how slowly each one is read.
+    """
+    limit = int(
+        os.environ.get(
+            "STREAM_CONCURRENCY_LIMIT_PER_USER", str(_DEFAULT_STREAM_CONCURRENCY_LIMIT)
+        )
+    )
+    if limit < 1:
+        raise ValueError("STREAM_CONCURRENCY_LIMIT_PER_USER must be at least 1")
+    return limit
+
+
+def stream_deadline_seconds() -> float:
+    value = float(os.environ.get("STREAM_DEADLINE_SECONDS", str(DEFAULT_STREAM_DEADLINE)))
+    if value <= 0.0:
+        raise ValueError("STREAM_DEADLINE_SECONDS must be positive")
+    return value
+
+
+_STREAM_SLOT_TTL_BUFFER_SECONDS = 10.0
+
+
+def stream_slot_ttl_seconds() -> float:
+    # Deliberately derived from stream_deadline_seconds(), not a separate
+    # constant: a concurrency slot must outlive the longest a stream is
+    # actually allowed to run, so if the deadline is ever reconfigured this
+    # follows it automatically instead of silently drifting out of sync.
+    return stream_deadline_seconds() + _STREAM_SLOT_TTL_BUFFER_SECONDS
+
+
+class StreamConcurrencyLimitExceeded(Exception):
+    def __init__(self, limit: int, key: str) -> None:
+        self.limit = limit
         self.key = key
 
 

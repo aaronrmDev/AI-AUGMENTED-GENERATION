@@ -134,6 +134,11 @@ async def _dispose_api_engine_after_each_test():
         # "Event loop is closed" failure once clearing the client cache alone
         # turned out not to be enough.
         deps.get_ingestion_job_dispatcher.cache_clear()
+        # Same event-loop-binding hazard as the three clients above, for the
+        # per-user stream concurrency limiter (#196) -- left uncleared, a
+        # loop_scope="module" test's cached client would still be handed to
+        # the very next test's (different-loop) request.
+        deps.get_stream_concurrency_limiter.cache_clear()
         await deps._engine.dispose()
 
 
