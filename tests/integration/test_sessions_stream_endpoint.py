@@ -126,12 +126,9 @@ async def test_a_streamed_answer_reassembles_the_same_stages_and_text_the_json_e
     user_id = await _user(db_session, tenant_id)
     headers = _auth(user_id, tenant_id)
     async with await _client(app_database_url, redis_url, qdrant_url, embedding_model) as client:
-        # After _client(), never before it: _client() is what sets
-        # APP_DATABASE_URL/QDRANT_URL and imports src.api.dependencies, whose
-        # module-level engine construction reads those env vars at import
-        # time. _seed_policy() imports that same module -- calling it first
-        # (as this test would were it the very first test to run in the
-        # process) hits a bare KeyError on APP_DATABASE_URL.
+        # _seed_policy() doesn't need to run after _client() anymore --
+        # _default_app_database_url_env in conftest.py covers it regardless
+        # of order.
         await _seed_policy(tenant_id, embedding_model)
         session_id = (await client.post("/sessions", json={}, headers=headers)).json()["id"]
         response = await _post_stream(
@@ -165,8 +162,6 @@ async def test_streaming_another_users_session_in_the_same_tenant_returns_a_plai
     tenant_id = uuid.uuid4()
     owner, intruder = await _user(db_session, tenant_id), await _user(db_session, tenant_id)
     async with await _client(app_database_url, redis_url, qdrant_url, embedding_model) as client:
-        # See the comment in the happy-path test above: this must run after
-        # _client(), not before it.
         await _seed_policy(tenant_id, embedding_model)
         session_id = (
             await client.post("/sessions", json={}, headers=_auth(owner, tenant_id))
@@ -189,8 +184,6 @@ async def test_streaming_another_tenants_session_returns_a_plain_404_with_no_str
     owner = await _user(db_session, owner_tenant)
     intruder = await _user(db_session, intruder_tenant)
     async with await _client(app_database_url, redis_url, qdrant_url, embedding_model) as client:
-        # See the comment in the happy-path test above: this must run after
-        # _client(), not before it.
         await _seed_policy(owner_tenant, embedding_model)
         session_id = (
             await client.post("/sessions", json={}, headers=_auth(owner, owner_tenant))
@@ -214,8 +207,6 @@ async def test_a_rate_limited_caller_gets_429_not_a_stream(
     headers = _auth(await _user(db_session, tenant_id), tenant_id)
     question = {"question": "What is the return policy?"}
     async with await _client(app_database_url, redis_url, qdrant_url, embedding_model) as client:
-        # See the comment in the happy-path test above: this must run after
-        # _client(), not before it.
         await _seed_policy(tenant_id, embedding_model)
         session_id = (await client.post("/sessions", json={}, headers=headers)).json()["id"]
         responses = [
