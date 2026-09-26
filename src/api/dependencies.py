@@ -19,6 +19,9 @@ from src.identity.infrastructure.postgres_chat_session_repository import (
 from src.identity.infrastructure.postgres_user_repository import PostgresUserRepository
 from src.identity.infrastructure.redis_rate_limiter import RedisRateLimiter
 from src.identity.infrastructure.redis_refresh_token_store import RedisRefreshTokenStore
+from src.identity.infrastructure.redis_stream_concurrency_limiter import (
+    RedisStreamConcurrencyLimiter,
+)
 from src.orchestration.application.answer_in_session import AnswerInSession
 from src.orchestration.domain.ports import IngestionJobDispatcher
 from src.rag.domain.ports import ChatModel
@@ -49,6 +52,11 @@ def get_refresh_token_store() -> RedisRefreshTokenStore:
 @functools.cache
 def get_rate_limiter() -> RedisRateLimiter:
     return RedisRateLimiter(os.environ["REDIS_URL"])
+
+
+@functools.cache
+def get_stream_concurrency_limiter() -> RedisStreamConcurrencyLimiter:
+    return RedisStreamConcurrencyLimiter(os.environ["REDIS_URL"])
 
 
 @functools.cache
@@ -90,20 +98,26 @@ async def close_redis_clients() -> None:
     """Close the process's shared Redis clients, so the next call builds fresh ones.
 
     An asyncio Redis connection belongs to the event loop that opened it, so the app calls
-    this on shutdown, on the loop that served its requests. Both clients are forgotten
-    before either is closed, so a close that fails can't leave a dead client cached for
-    the next call. Both are attempted, and the first failure is raised afterwards.
+    this on shutdown, on the loop that served its requests. Every client is forgotten
+    before any of them is closed, so a close that fails can't leave a dead client cached
+    for the next call. Closing every one is attempted regardless of an earlier failure,
+    and the first failure is raised afterwards.
     """
-    clients: list[RedisRateLimiter | RedisRefreshTokenStore | redis.Redis] = []
+    clients: list[
+        RedisRateLimiter | RedisRefreshTokenStore | RedisStreamConcurrencyLimiter | redis.Redis
+    ] = []
     if get_rate_limiter.cache_info().currsize:
         clients.append(get_rate_limiter())
     if get_refresh_token_store.cache_info().currsize:
         clients.append(get_refresh_token_store())
     if get_ingestion_redis_client.cache_info().currsize:
         clients.append(get_ingestion_redis_client())
+    if get_stream_concurrency_limiter.cache_info().currsize:
+        clients.append(get_stream_concurrency_limiter())
     get_rate_limiter.cache_clear()
     get_refresh_token_store.cache_clear()
     get_ingestion_redis_client.cache_clear()
+    get_stream_concurrency_limiter.cache_clear()
 
     failures: list[Exception] = []
     for client in clients:

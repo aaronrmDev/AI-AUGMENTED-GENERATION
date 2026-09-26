@@ -69,6 +69,19 @@ class RateLimiter(ABC):
         ...
 
 
+class StreamConcurrencyLimiter(ABC):
+    @abstractmethod
+    async def acquire(self, key: str, limit: int, ttl_seconds: float) -> str | None:
+        """Returns a slot token if `key` holds fewer than `limit` concurrent slots
+        right now, or None if it's already at `limit`. Every acquired slot expires
+        on its own after ttl_seconds even if release() is never called, so a
+        process that dies mid-stream can't leak a slot forever."""
+        ...
+
+    @abstractmethod
+    async def release(self, key: str, slot_token: str) -> None: ...
+
+
 class ChatSessionRepository(ABC):
     """Every method is scoped to one tenant and one owning user: a session another user
     owns is simply not found, exactly like a session that doesn't exist."""

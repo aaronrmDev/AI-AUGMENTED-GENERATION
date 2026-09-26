@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import uuid
@@ -37,6 +38,15 @@ def _default_global_chat_rate_limit():
 
 
 @pytest.fixture(autouse=True)
+def _default_stream_concurrency_limit():
+    previous = os.environ.pop("STREAM_CONCURRENCY_LIMIT_PER_USER", None)
+    yield
+    os.environ.pop("STREAM_CONCURRENCY_LIMIT_PER_USER", None)
+    if previous is not None:
+        os.environ["STREAM_CONCURRENCY_LIMIT_PER_USER"] = previous
+
+
+@pytest.fixture(autouse=True)
 def _clear_dependency_overrides():
     yield
     import sys
@@ -46,7 +56,9 @@ def _clear_dependency_overrides():
         main.app.dependency_overrides.clear()
 
 
-async def _client(app_database_url, redis_url, qdrant_url, embedding_model):
+async def _client(
+    app_database_url, redis_url, qdrant_url, embedding_model, *, stream_delay_seconds: float = 0.0
+):
     os.environ["APP_DATABASE_URL"] = app_database_url
     os.environ["REDIS_URL"] = redis_url
     os.environ["QDRANT_URL"] = qdrant_url
@@ -61,7 +73,7 @@ async def _client(app_database_url, redis_url, qdrant_url, embedding_model):
         sessions=dependencies.get_chat_session_repository(),
         embedding_model=embedding_model,
         vector_store=dependencies.get_vector_store(),
-        chat_model=ContextEchoChatModel(),
+        chat_model=ContextEchoChatModel(stream_delay_seconds=stream_delay_seconds),
     )
     app.dependency_overrides[dependencies.get_answer_in_session] = (
         lambda: pipeline.answer_in_session
@@ -270,3 +282,76 @@ async def test_every_stream_route_refuses_a_request_without_a_token(
 
     assert response.status_code == 401
     assert "text/event-stream" not in response.headers.get("content-type", "")
+
+
+async def test_a_third_concurrent_stream_for_the_same_user_is_rejected_until_a_slot_frees_up(
+    db_session, app_database_url, redis_url, qdrant_url, embedding_model, monkeypatch
+):
+    monkeypatch.setenv("STREAM_CONCURRENCY_LIMIT_PER_USER", "2")
+    tenant_id = uuid.uuid4()
+    user_id = await _user(db_session, tenant_id)
+    headers = _auth(user_id, tenant_id)
+    question = {"question": "What is the return policy?"}
+    # A real per-chunk delay, not zero: this is what keeps the first two
+    # streams' generators (and so their concurrency slots) genuinely open for
+    # the duration of this test. httpx's ASGITransport runs the whole ASGI
+    # app to completion before handing back a Response at all -- even for
+    # client.stream(...) -- so there's no way to observe a request "mid-flight"
+    # by awaiting it directly; the first two requests below have to run as
+    # background tasks instead, so this test can issue a third one while they
+    # are still holding their slots.
+    async with await _client(
+        app_database_url, redis_url, qdrant_url, embedding_model, stream_delay_seconds=2.0
+    ) as client:
+        await _seed_policy(tenant_id, embedding_model)
+        session_id = (await client.post("/sessions", json={}, headers=headers)).json()["id"]
+        url = f"/sessions/{session_id}/answers/stream"
+
+        first_task = asyncio.create_task(
+            _post_stream(client, url, json_body=question, headers=headers)
+        )
+        second_task = asyncio.create_task(
+            _post_stream(client, url, json_body=question, headers=headers)
+        )
+        # Long enough for both to acquire their concurrency slot (one fast
+        # Redis round trip apiece, plus the real routing/retrieval/budget
+        # stages) and reach the chat model's first stream_delay_seconds
+        # sleep; far short of the 2s-per-chunk delay that keeps their slots
+        # held for several seconds more.
+        await asyncio.sleep(1.0)
+
+        third = await _post_stream(client, url, json_body=question, headers=headers)
+        assert third.status_code == 429
+        assert json.loads(third.text) == {"detail": "Too many concurrent streams"}
+        assert third.headers["x-stream-concurrency-limit"] == "2"
+        assert "text/event-stream" not in third.headers.get("content-type", "")
+
+        first_response, second_response = await asyncio.gather(first_task, second_task)
+        assert (first_response.status_code, second_response.status_code) == (200, 200)
+
+        # Both slots are released now that the two streams above have fully
+        # finished, so the same request that was just rejected now succeeds.
+        fourth = await _post_stream(client, url, json_body=question, headers=headers)
+        assert fourth.status_code == 200
+
+
+async def test_a_single_stream_under_the_concurrency_limit_still_works_end_to_end(
+    db_session, app_database_url, redis_url, qdrant_url, embedding_model, monkeypatch
+):
+    monkeypatch.setenv("STREAM_CONCURRENCY_LIMIT_PER_USER", "2")
+    tenant_id = uuid.uuid4()
+    headers = _auth(await _user(db_session, tenant_id), tenant_id)
+    async with await _client(app_database_url, redis_url, qdrant_url, embedding_model) as client:
+        await _seed_policy(tenant_id, embedding_model)
+        session_id = (await client.post("/sessions", json={}, headers=headers)).json()["id"]
+        response = await _post_stream(
+            client,
+            f"/sessions/{session_id}/answers/stream",
+            json_body={"question": "What is the return policy for unopened items?"},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    assert events[0][0] == "routing"
+    assert events[-1][0] == "done"

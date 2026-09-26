@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from src.api.rate_limit import RateLimitExceeded
+from src.api.rate_limit import RateLimitExceeded, StreamConcurrencyLimitExceeded
 from src.api.security_logging import security_logger
 from src.identity.domain.errors import (
     EmailAlreadyRegistered,
@@ -59,6 +59,21 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
     return response
 
 
+async def stream_concurrency_limit_exceeded_handler(
+    request: Request, exc: StreamConcurrencyLimitExceeded
+) -> JSONResponse:
+    security_logger.info(
+        "stream_concurrency_limit_exceeded",
+        key=exc.key,
+        limit=exc.limit,
+        path=request.url.path,
+        method=request.method,
+    )
+    response = JSONResponse(status_code=429, content={"detail": "Too many concurrent streams"})
+    response.headers["X-Stream-Concurrency-Limit"] = str(exc.limit)
+    return response
+
+
 async def session_not_found_handler(request: Request, exc: SessionNotFound) -> JSONResponse:
     caller = getattr(request.state, "caller", None)
     security_logger.info(
@@ -100,6 +115,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(TokenAlreadyUsed, token_already_used_handler)  # type: ignore[arg-type]
     app.add_exception_handler(UnsupportedFileType, unsupported_file_type_handler)  # type: ignore[arg-type]
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(StreamConcurrencyLimitExceeded, stream_concurrency_limit_exceeded_handler)  # type: ignore[arg-type]  # noqa: E501
     app.add_exception_handler(SessionNotFound, session_not_found_handler)  # type: ignore[arg-type]
     app.add_exception_handler(QueryExceedsBudget, query_exceeds_budget_handler)  # type: ignore[arg-type]
     app.add_exception_handler(IngestionJobNotFound, ingestion_job_not_found_handler)  # type: ignore[arg-type]

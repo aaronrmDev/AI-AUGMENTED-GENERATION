@@ -269,6 +269,17 @@ def test_a_non_positive_classifier_timeout_is_rejected():
         )
 
 
+def test_a_non_positive_stream_deadline_is_rejected():
+    with pytest.raises(ValueError):
+        UnifiedAnswerQuestion(
+            FakeEmbeddingModel(),
+            None,
+            LatencyCascade([FakeCascadeTier(RAG)]),
+            FakeChatModel(),
+            stream_deadline=0.0,
+        )
+
+
 def test_a_non_positive_context_window_is_rejected():
     with pytest.raises(ValueError):
         UnifiedAnswerQuestion(
@@ -350,6 +361,25 @@ async def test_a_chat_model_failure_ends_the_stream_with_one_error_event():
     assert isinstance(events[-1], AnswerErrorEvent)
     assert events[-1].message == "answer generation failed"
     assert not any(isinstance(event, AnswerCompleteEvent) for event in events)
+
+
+async def test_a_hung_chat_model_ends_the_stream_with_one_error_event_after_the_deadline():
+    chat_model = FakeChatModel(stream_hangs=True)
+    use_case = UnifiedAnswerQuestion(
+        FakeEmbeddingModel(),
+        FakeQueryClassifier(_RAG_ONLY),
+        LatencyCascade([FakeCascadeTier(RAG, _hit(RAG, "doc"))], _GENEROUS),
+        chat_model,
+        stream_deadline=0.05,
+    )
+
+    events = [event async for event in await use_case.stream(*_ids(), _QUESTION)]
+
+    assert isinstance(events[0], RoutingStageEvent)
+    assert isinstance(events[-1], AnswerErrorEvent)
+    assert events[-1].message == "answer generation failed"
+    assert not any(isinstance(event, AnswerCompleteEvent) for event in events)
+    assert chat_model.cancelled is True
 
 
 async def test_stream_reports_a_generic_error_when_the_budget_recorder_denies_ownership():

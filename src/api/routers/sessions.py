@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
@@ -9,14 +10,18 @@ from src.api.dependencies import (
     get_caller,
     get_chat_session_repository,
     get_rate_limiter,
+    get_stream_concurrency_limiter,
 )
 from src.api.rate_limit import (
     GLOBAL_CHAT_KEY,
     GLOBAL_CHAT_WINDOW_SECONDS,
     SESSION_CREATE_LIMIT,
+    StreamConcurrencyLimitExceeded,
     chat_rate_limit,
     enforce_rate_limit,
     global_chat_limit,
+    stream_concurrency_limit,
+    stream_slot_ttl_seconds,
 )
 from src.api.schemas.sessions import (
     AnswerRequest,
@@ -31,6 +36,7 @@ from src.identity.application.list_chat_sessions import MAX_SESSIONS_PER_PAGE, L
 from src.identity.application.start_chat_session import StartChatSession
 from src.identity.domain.ports import ChatSessionRepository
 from src.orchestration.application.answer_in_session import AnswerInSession
+from src.orchestration.application.unified_answer_question import UnifiedAnswerEvent
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -140,8 +146,30 @@ async def answer_stream(
     events = await answer_in_session.stream(
         caller.tenant_id, caller.user_id, session_id, payload.question
     )
+
+    # Acquired only now that generation is actually about to start, never
+    # earlier: every rejection above (rate limit, SessionNotFound,
+    # QueryExceedsBudget) has to stay a plain, cheap failure that never so
+    # much as touches a concurrency slot.
+    limiter = get_stream_concurrency_limiter()
+    slot_key = f"stream:{caller.user_id}"
+    slot_token = await limiter.acquire(
+        key=slot_key, limit=stream_concurrency_limit(), ttl_seconds=stream_slot_ttl_seconds()
+    )
+    if slot_token is None:
+        raise StreamConcurrencyLimitExceeded(limit=stream_concurrency_limit(), key=slot_key)
+
+    async def _release_slot_when_done(
+        events: AsyncIterator[UnifiedAnswerEvent],
+    ) -> AsyncIterator[UnifiedAnswerEvent]:
+        try:
+            async for event in events:
+                yield event
+        finally:
+            await limiter.release(key=slot_key, slot_token=slot_token)
+
     return StreamingResponse(
-        encode_sse(events),
+        encode_sse(_release_slot_when_done(events)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store"},
     )
