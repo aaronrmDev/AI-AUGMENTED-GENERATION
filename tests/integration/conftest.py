@@ -253,3 +253,16 @@ def _default_qdrant_url_env(qdrant_url: str):
     # assignment, so a test that deliberately sets a different QDRANT_URL
     # value in its own _client() helper still wins.
     os.environ.setdefault("QDRANT_URL", qdrant_url)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _default_app_database_url_env(app_database_url: str):
+    # Mirrors _default_qdrant_url_env above: src/api/dependencies.py reads
+    # os.environ["APP_DATABASE_URL"] at *import* time (module-level engine
+    # construction), so importing it before a test has set that env var hits
+    # a bare KeyError -- but only when that test file happens to run first,
+    # standalone, in a fresh pytest process; sys.modules caching masks it for
+    # every later test in the same run otherwise. setdefault, not a plain
+    # assignment, so a test's own _client() helper that sets a different
+    # APP_DATABASE_URL value still wins.
+    os.environ.setdefault("APP_DATABASE_URL", app_database_url)
